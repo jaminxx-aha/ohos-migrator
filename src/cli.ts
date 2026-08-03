@@ -1,0 +1,120 @@
+#!/usr/bin/env node
+/**
+ * harmony-deprecate CLI
+ *
+ *   index   --sdk <path>            build/refresh the deprecation map cache
+ *   scan    --project <path> [--sdk <path>] [--since N]
+ *   rewrite --project <path> [--write] [--since N]
+ */
+
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { resolve } from "node:path";
+import { Command } from "commander";
+import { buildDeprecationMap } from "./indexer/sdk-indexer.js";
+import { scanProject } from "./scanner/scanner.js";
+import { scanProjectMembers } from "./scanner/member-scanner.js";
+import { rewriteProject } from "./rewriter/rewriter.js";
+import { printScanSummary, printRewriteSummary } from "./report.js";
+import {
+  cacheFile,
+  cacheDir,
+  readApiVersion,
+  resolveSdkApiDir,
+} from "./config.js";
+import { walkFiles } from "./walk.js";
+import type { DeprecationMap } from "./rules/types.js";
+
+const program = new Command();
+
+program
+  .name("harmony-deprecate")
+  .description("Scan a HarmonyOS project for deprecated @ohos APIs and replace them.");
+
+program
+  .command("index")
+  .description("Build/refresh the deprecation map cache from the SDK .d.ts files.")
+  .option("--sdk <path>", "SDK ets/api directory (auto-detected if omitted)")
+  .action((opts) => {
+    const sdkApiDir = resolveSdkApiDir(opts.sdk);
+    const apiVersion = readApiVersion(sdkApiDir);
+    console.log(`Indexing SDK at ${sdkApiDir} (apiVersion ${apiVersion}) ...`);
+    const map = buildDeprecationMap({ sdkApiDir, apiVersion });
+    mkdirSync(cacheDir(), { recursive: true });
+    const out = cacheFile(apiVersion);
+    writeFileSync(out, JSON.stringify(map, null, 2), "utf8");
+    const moves = Object.entries(map.kitIndex).filter(([, v]) => v.newKit).length;
+    const manual = Object.values(map.kitIndex).filter((v) => v.manual).length;
+    console.log(
+      `  entries: ${map.entries.length}  |  kits: ${Object.keys(map.kitIndex).length}  |  module-moves: ${moves}  |  manual kits: ${manual}`,
+    );
+    console.log(`  cache: ${out}`);
+  });
+
+program
+  .command("scan")
+  .description("Scan a project for deprecated SDK usages.")
+  .requiredOption("--project <path>", "project root directory")
+  .option("--sdk <path>", "SDK ets/api directory (to build map if missing)")
+  .option("--since <n>", "only report deprecations with since <= N", (v) => Number(v), 0)
+  .action((opts) => {
+    const map = loadMap(opts.sdk);
+    const projectRoot = resolve(opts.project);
+    const mod = scanProject({ projectRoot, map, since: opts.since || 0 });
+    const mem = scanProjectMembers({ projectRoot, map, since: opts.since || 0 });
+    const findings = [...mod.findings, ...mem.findings];
+    console.log(
+      printScanSummary(
+        { findings, filesScanned: Math.max(mod.filesScanned, mem.filesScanned) },
+      ),
+    );
+  });
+
+program
+  .command("rewrite")
+  .description("Apply safe import rewrites (dry-run unless --write).")
+  .requiredOption("--project <path>", "project root directory")
+  .option("--sdk <path>", "SDK ets/api directory (to build map if missing)")
+  .option("--since <n>", "only rewrite deprecations with since <= N", (v) => Number(v), 0)
+  .option("--write", "write changes to disk (default: dry-run)")
+  .action((opts) => {
+    const map = loadMap(opts.sdk);
+    const projectRoot = resolve(opts.project);
+    const { findings } = scanProject({ projectRoot, map, since: opts.since || 0 });
+    const result = rewriteProject(projectRoot, findings, { write: !!opts.write });
+    console.log(printRewriteSummary(result, !!opts.write));
+  });
+
+function loadMap(sdk?: string): DeprecationMap {
+  // Try cache for the resolved apiVersion first.
+  let apiVersion: number;
+  try {
+    apiVersion = readApiVersion(resolveSdkApiDir(sdk));
+  } catch {
+    // Fall back to any single cached map.
+    const dir = cacheDir();
+    if (existsSync(dir)) {
+      const files = walkFiles(dir, { extensions: [".json"] });
+      if (files.length > 0) return readJSON(files[0]) as DeprecationMap;
+    }
+    throw new Error(
+      "No deprecation map found. Run `harmony-deprecate index --sdk <path>` first.",
+    );
+  }
+  const cache = cacheFile(apiVersion);
+  if (existsSync(cache)) return readJSON(cache) as DeprecationMap;
+  // Build on demand if SDK is available.
+  const sdkApiDir = resolveSdkApiDir(sdk);
+  const map = buildDeprecationMap({ sdkApiDir, apiVersion });
+  mkdirSync(cacheDir(), { recursive: true });
+  writeFileSync(cache, JSON.stringify(map, null, 2), "utf8");
+  return map;
+}
+
+function readJSON(p: string): unknown {
+  return JSON.parse(readFileSync(p, "utf8"));
+}
+
+program.parseAsync(process.argv).catch((err) => {
+  console.error(`error: ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+});
