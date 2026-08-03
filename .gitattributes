@@ -1,0 +1,15 @@
+# Normalize all text files to LF in the repo, regardless of OS checkout.
+* text=auto eol=lf
+
+# Source files — always LF.
+*.ts text eol=lf
+*.js text eol=lf
+*.ets text eol=lf
+*.json text eol=lf
+*.jsonc text eol=lf
+*.md text eol=lf
+
+# Binary files — never normalize.
+*.png binary
+*.jpg binary
+*.ico binary
