@@ -23,22 +23,27 @@ export interface ImportInfo {
   bindings: { local: string; imported: string }[];
 }
 
-const FROM_RE = /from\s*(['"])([^'"]+)\1/g;
+// `import <clause> from 'spec'` — clause captured so bindings can be parsed.
+const IMPORT_FROM_RE = /import\s+(?:type\s+)?([\s\S]*?)\s+from\s*(['"])([^'"]+)\2/g;
 const REQUIRE_RE = /require\s*\(\s*(['"])([^'"]+)\1\s*\)/g;
+const IMPORT_DYNAMIC_RE = /import\s*\(\s*(['"])([^'"]+)\1\s*\)/g;
 
 /** Extract all imports from file content. */
 export function extractImports(content: string): ImportInfo[] {
   const out: ImportInfo[] = [];
-  for (const m of content.matchAll(FROM_RE)) {
-    pushImport(out, m, content, 1, 2);
+  for (const m of content.matchAll(IMPORT_FROM_RE)) {
+    pushImport(out, m, content, m[1], 2, 3);
   }
   for (const m of content.matchAll(REQUIRE_RE)) {
-    pushImport(out, m, content, 1, 2);
+    pushImport(out, m, content, null, 1, 2);
+  }
+  for (const m of content.matchAll(IMPORT_DYNAMIC_RE)) {
+    pushDynamicImport(out, m, content, 1, 2);
   }
   return out;
 }
 
-function pushImport(
+function pushDynamicImport(
   out: ImportInfo[],
   m: RegExpMatchArray,
   content: string,
@@ -53,19 +58,35 @@ function pushImport(
     specifier,
     line: lineAt(content, quoteStart),
     specStart: quoteStart,
-    specEnd: quoteStart + specifier.length + 2, // open + close quote
-    bindings: extractBindings(m, content),
+    specEnd: quoteStart + specifier.length + 2,
+    bindings: [], // dynamic import() has no bindings
   });
 }
 
-/** Extract `{a, b as c}` / default / `* as ns` bindings from the match region. */
-function extractBindings(m: RegExpMatchArray, content: string): ImportInfo["bindings"] {
-  // Match spans from `import` to the specifier; parse the clause in between.
-  const start = m.index ?? 0;
-  const specIdx = start + m[0].lastIndexOf(m[2]!);
-  const clause = content.slice(start, specIdx);
-  const bindings: ImportInfo["bindings"] = [];
+function pushImport(
+  out: ImportInfo[],
+  m: RegExpMatchArray,
+  content: string,
+  clause: string | null,
+  quoteGroup: number,
+  specGroup: number,
+): void {
+  if (m.index === undefined) return;
+  const quoteChar = m[quoteGroup];
+  const specifier = m[specGroup];
+  const quoteStart = m.index + m[0].indexOf(quoteChar + specifier);
+  out.push({
+    specifier,
+    line: lineAt(content, quoteStart),
+    specStart: quoteStart,
+    specEnd: quoteStart + specifier.length + 2, // open + close quote
+    bindings: clause ? parseBindings(clause) : [],
+  });
+}
 
+/** Parse `{a, b as c}` / default / `* as ns` bindings from an import clause. */
+function parseBindings(clause: string): ImportInfo["bindings"] {
+  const bindings: ImportInfo["bindings"] = [];
   const brace = clause.match(/\{([^}]*)\}/);
   if (brace) {
     for (const raw of brace[1].split(",")) {
@@ -77,10 +98,10 @@ function extractBindings(m: RegExpMatchArray, content: string): ImportInfo["bind
     }
     return bindings;
   }
-  const def = clause.match(/import\s+([A-Za-z_$][\w$]*)\s+from/);
-  if (def) bindings.push({ imported: "default", local: def[1] });
-  const ns = clause.match(/import\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from/);
-  if (ns) bindings.push({ imported: "*", local: ns[1] });
+  const ns = clause.match(/\*\s+as\s+([A-Za-z_$][\w$]*)/);
+  if (ns) return [{ imported: "*", local: ns[1] }];
+  const def = clause.match(/^([A-Za-z_$][\w$]*)$/);
+  if (def) return [{ imported: "default", local: def[1] }];
   return bindings;
 }
 

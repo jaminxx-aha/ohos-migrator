@@ -91,9 +91,14 @@ function renderDiff(
 ): string {
   const lines: string[] = [];
   for (const e of edits) {
-    lines.push(`  line ${e.line}: '${e.oldSpecifier}' -> '${e.newSpecifier}'`);
+    lines.push(`  line ${e.line}:`);
+    lines.push(`  - ${lineText(before, e.line)}`);
+    lines.push(`  + ${lineText(after, e.line)}`);
   }
-  void before;
-  void after;
   return lines.join("\n");
+}
+
+/** Return the trimmed text of a 1-based line number. */
+function lineText(content: string, line1: number): string {
+  return content.split("\n")[line1 - 1]?.trim() ?? "";
 }

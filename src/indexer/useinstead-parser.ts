@@ -69,6 +69,15 @@ export function parseUseinstead(
     }
   } else if (rest.startsWith("#") || rest === "") {
     // `Type#member` or bare member: handled below.
+  } else {
+    // Bare-identifier short form (no ohos. prefix, no leading / . #).
+    // The leading identifier up to the first `.`/`#` is the export name;
+    // a lone bare member with no separator stays a member.
+    const stop = rest.search(/[.#]/);
+    if (stop !== -1) {
+      exportName = rest.slice(0, stop);
+      rest = rest.slice(stop); // now starts with `.` or `#`
+    }
   }
 
   const members: string[] = [];

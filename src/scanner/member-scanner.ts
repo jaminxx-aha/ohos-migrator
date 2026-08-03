@@ -115,7 +115,7 @@ function memberFinding(
   };
 }
 
-function describeMemberReplacement(
+export function describeMemberReplacement(
   binding: string,
   repl: ReplSymbol | null,
 ): { newSymbol: string | null; rule: Finding["rule"]; note: string } {
@@ -140,7 +140,7 @@ function describeMemberReplacement(
 }
 
 /** Build local-binding -> kit map, handling default / namespace / named imports. */
-function extractBindingMap(content: string): BindingMap {
+export function extractBindingMap(content: string): BindingMap {
   const map: BindingMap = new Map();
   const re =
     /import\s+(?:type\s+)?(?:(\*\s+as\s+([A-Za-z_$][\w$]*))|(\{[^}]*\})|([A-Za-z_$][\w$]*))\s+from\s+['"]([^'"]+)['"]/g;

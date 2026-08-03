@@ -35,9 +35,7 @@ export function printRewriteSummary(result: RewriteResult, write: boolean): stri
   lines.push(write ? "Applied rewrites:" : "Dry-run — would apply rewrites:");
   for (const cf of result.changedFiles) {
     lines.push(`  ${cf.file}`);
-    for (const e of cf.edits) {
-      lines.push(`    line ${e.line}: '${e.oldSpecifier}' -> '${e.newSpecifier}'`);
-    }
+    if (cf.diff) lines.push(cf.diff);
   }
   lines.push(`${result.changedFiles.length} file(s) ${write ? "changed" : "would change"}.`);
   lines.push(`${result.skippedManual} manual finding(s) left untouched (need human review).`);

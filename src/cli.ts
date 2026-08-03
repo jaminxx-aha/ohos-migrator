@@ -8,7 +8,7 @@
  */
 
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { resolve, basename } from "node:path";
 import { Command } from "commander";
 import { buildDeprecationMap } from "./indexer/sdk-indexer.js";
 import { scanProject } from "./scanner/scanner.js";
@@ -90,12 +90,9 @@ function loadMap(sdk?: string): DeprecationMap {
   try {
     apiVersion = readApiVersion(resolveSdkApiDir(sdk));
   } catch {
-    // Fall back to any single cached map.
-    const dir = cacheDir();
-    if (existsSync(dir)) {
-      const files = walkFiles(dir, { extensions: [".json"] });
-      if (files.length > 0) return readJSON(files[0]) as DeprecationMap;
-    }
+    // SDK unavailable: fall back to the highest-version cached map.
+    const cached = pickHighestVersionCache();
+    if (cached) return readJSON(cached.path) as DeprecationMap;
     throw new Error(
       "No deprecation map found. Run `harmony-deprecate index --sdk <path>` first.",
     );
@@ -112,6 +109,21 @@ function loadMap(sdk?: string): DeprecationMap {
 
 function readJSON(p: string): unknown {
   return JSON.parse(readFileSync(p, "utf8"));
+}
+
+/** Pick the cached map with the highest apiVersion; null if none. */
+function pickHighestVersionCache(): { path: string; version: number } | null {
+  const dir = cacheDir();
+  if (!existsSync(dir)) return null;
+  const files = walkFiles(dir, { extensions: [".json"] });
+  let best: { path: string; version: number } | null = null;
+  for (const f of files) {
+    const m = basename(f).match(/deprecation-map\.(\d+)\.json$/);
+    if (!m) continue;
+    const version = Number(m[1]);
+    if (!best || version > best.version) best = { path: f, version };
+  }
+  return best;
 }
 
 program.parseAsync(process.argv).catch((err) => {

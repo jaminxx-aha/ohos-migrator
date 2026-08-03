@@ -6,12 +6,13 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
-/** Default SDK probe roots (Windows-centric; extendable). */
+/** Default SDK probe roots (Windows + macOS standard installs). */
 const SDK_PROBE_ROOTS = [
-  // DevEco Studio install (discovered on this machine)
-  "E:\\DevEco Studio\\sdk\\default\\openharmony\\ets\\api",
+  // Windows
   "C:\\Program Files\\Huawei\\DevEco Studio\\sdk\\default\\openharmony\\ets\\api",
   "C:\\Program Files (x86)\\Huawei\\DevEco Studio\\sdk\\default\\openharmony\\ets\\api",
+  // macOS
+  "/Applications/DevEco-Studio.app/Contents/sdk/default/openharmony/ets/api",
 ];
 
 /** Resolve an SDK api directory from --sdk or environment, else probe defaults. */
