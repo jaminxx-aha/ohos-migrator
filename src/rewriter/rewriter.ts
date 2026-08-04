@@ -1,11 +1,16 @@
 /**
- * Rewriter: apply safe `rewrite-import` fixes.
+ * Rewriter: apply safe auto-fixes.
  *
- * For each rewrite-import finding we replace the quoted import specifier
- * (old kit -> new kit) at the exact offsets returned by the import extractor,
- * leaving bindings and call sites untouched. Files are processed one at a
- * time; edits within a file are applied from the bottom up so earlier offsets
- * stay valid. `manual` findings are never auto-written.
+ * Two kinds of edits:
+ *   - `rewrite-import`: replace the quoted import specifier (old kit -> new kit)
+ *     at exact offsets from the import extractor. Bindings/call sites untouched.
+ *   - `override`: replace a matched member symbol `<binding>.<member>` at its
+ *     match offsets with a data-driven replacement (e.g. router.pushUrl ->
+ *     this.getUIContext().getRouter().pushUrl).
+ *
+ * Edits within a file are applied bottom-up so earlier offsets stay valid.
+ * `manual` findings are never auto-written. Default is dry-run; `--write`
+ * persists.
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
@@ -14,16 +19,13 @@ import { extractImports } from "../scanner/import-extractor.js";
 import type { Finding } from "../rules/types.js";
 
 export interface RewriteResult {
-  /** Files changed (when --write) or that would change (dry-run). */
   changedFiles: ChangedFile[];
   skippedManual: number;
 }
 
 export interface ChangedFile {
   file: string;
-  /** Per-edit details. */
-  edits: { line: number; oldSpecifier: string; newSpecifier: string }[];
-  /** Unified-diff-ish preview (old vs new around each edit). */
+  edits: { line: number; from: string; to: string }[];
   diff: string;
 }
 
@@ -32,12 +34,17 @@ export function rewriteProject(
   findings: Finding[],
   options: { write: boolean },
 ): RewriteResult {
-  const rewriteFindings = findings.filter((f) => f.rule === "rewrite-import" && f.newSymbol);
+  const importFindings = findings.filter(
+    (f) => f.rule === "rewrite-import" && f.newSymbol,
+  );
+  const memberFindings = findings.filter(
+    (f) => f.rule === "override" && f.replacement && f.matchStart != null && f.matchEnd != null,
+  );
   const skippedManual = findings.filter((f) => f.needsManual).length;
 
-  // Group by file.
+  // Group all auto-fixable findings by file.
   const byFile = new Map<string, Finding[]>();
-  for (const f of rewriteFindings) {
+  for (const f of [...importFindings, ...memberFindings]) {
     const arr = byFile.get(f.file) ?? [];
     arr.push(f);
     byFile.set(f.file, arr);
@@ -49,34 +56,45 @@ export function rewriteProject(
     const content = readFileSync(absPath, "utf8");
     const imports = extractImports(content);
 
-    // Match findings to import offsets by (line, oldSpecifier).
-    const edits: { start: number; end: number; newLiteral: string; line: number; oldSpecifier: string; newSpecifier: string }[] = [];
+    type Edit = { start: number; end: number; text: string; line: number; from: string; to: string };
+    const edits: Edit[] = [];
+
     for (const f of fileFindings) {
-      const imp = imports.find((i) => i.line === f.line && i.specifier === f.oldSymbol);
-      if (!imp) continue; // stale finding; skip
-      const quote = content[imp.specStart];
-      edits.push({
-        start: imp.specStart,
-        end: imp.specEnd,
-        newLiteral: `${quote}${f.newSymbol}${quote}`,
-        line: f.line,
-        oldSpecifier: f.oldSymbol,
-        newSpecifier: f.newSymbol!,
-      });
+      if (f.rule === "rewrite-import") {
+        const imp = imports.find((i) => i.line === f.line && i.specifier === f.oldSymbol);
+        if (!imp) continue;
+        const quote = content[imp.specStart];
+        edits.push({
+          start: imp.specStart,
+          end: imp.specEnd,
+          text: `${quote}${f.newSymbol}${quote}`,
+          line: f.line,
+          from: f.oldSymbol,
+          to: f.newSymbol!,
+        });
+      } else if (f.rule === "override") {
+        edits.push({
+          start: f.matchStart!,
+          end: f.matchEnd!,
+          text: f.replacement!,
+          line: f.line,
+          from: f.oldSymbol,
+          to: f.replacement!,
+        });
+      }
     }
     if (edits.length === 0) continue;
 
-    // Apply bottom-up.
     edits.sort((a, b) => b.start - a.start);
     let next = content;
     for (const e of edits) {
-      next = next.slice(0, e.start) + e.newLiteral + next.slice(e.end);
+      next = next.slice(0, e.start) + e.text + next.slice(e.end);
     }
 
     if (options.write) writeFileSync(absPath, next, "utf8");
     changedFiles.push({
       file: relFile,
-      edits: edits.map((e) => ({ line: e.line, oldSpecifier: e.oldSpecifier, newSpecifier: e.newSpecifier })),
+      edits: edits.map((e) => ({ line: e.line, from: e.from, to: e.to })),
       diff: renderDiff(content, next, edits),
     });
   }
@@ -87,7 +105,7 @@ export function rewriteProject(
 function renderDiff(
   before: string,
   after: string,
-  edits: { line: number; oldSpecifier: string; newSpecifier: string }[],
+  edits: { line: number; from: string; to: string }[],
 ): string {
   const lines: string[] = [];
   for (const e of edits) {

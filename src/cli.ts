@@ -71,15 +71,23 @@ program
 
 program
   .command("rewrite")
-  .description("Apply safe import rewrites (dry-run unless --write).")
+  .description("Apply safe rewrites (dry-run unless --write).")
   .requiredOption("--project <path>", "project root directory")
   .option("--sdk <path>", "SDK ets/api directory (to build map if missing)")
   .option("--since <n>", "only rewrite deprecations with since <= N", (v) => Number(v), 0)
+  .option("--ui-context <expr>", "UIContext expression for cross-kit overrides", "this.getUIContext()")
   .option("--write", "write changes to disk (default: dry-run)")
   .action((opts) => {
     const map = loadMap(opts.sdk);
     const projectRoot = resolve(opts.project);
-    const { findings } = scanProject({ projectRoot, map, since: opts.since || 0 });
+    const mod = scanProject({ projectRoot, map, since: opts.since || 0 });
+    const mem = scanProjectMembers({
+      projectRoot,
+      map,
+      since: opts.since || 0,
+      uiContextExpr: opts.uiContext,
+    });
+    const findings = [...mod.findings, ...mem.findings];
     const result = rewriteProject(projectRoot, findings, { write: !!opts.write });
     console.log(printRewriteSummary(result, !!opts.write));
   });

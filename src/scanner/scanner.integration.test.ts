@@ -73,7 +73,7 @@ test("rewriteProject dry-run rewrites only safe imports", () => {
   const cf = result.changedFiles[0];
   assert.ok(cf.file.endsWith("page.ets"));
   assert.equal(cf.edits.length, 1);
-  assert.equal(cf.edits[0].newSpecifier, "@ohos.ability.dataUriUtils");
+  assert.equal(cf.edits[0].to, "@ohos.ability.dataUriUtils");
   // The dry-run diff shows the old vs new import line.
   assert.ok(cf.diff.includes("-"));
   assert.ok(cf.diff.includes("+"));

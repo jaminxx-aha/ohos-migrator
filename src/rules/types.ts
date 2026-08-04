@@ -50,7 +50,12 @@ export interface DeprecationMap {
 }
 
 /** Rule kind the rewriter may apply. */
-export type RuleKind = "rewrite-import" | "rename-member" | "signature-change" | "manual";
+export type RuleKind =
+  | "rewrite-import"
+  | "rename-member"
+  | "override"
+  | "signature-change"
+  | "manual";
 
 /** A single scan finding. */
 export interface Finding {
@@ -66,4 +71,10 @@ export interface Finding {
   needsManual: boolean;
   /** Human-readable note shown in reports. */
   note: string;
+  /** Absolute char offset of the matched text (member-level overrides). */
+  matchStart?: number;
+  /** Char offset just past the matched text. */
+  matchEnd?: number;
+  /** Exact replacement text to splice at matchStart..matchEnd (when auto-fixable). */
+  replacement?: string;
 }

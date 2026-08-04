@@ -18,6 +18,7 @@
 import { readFileSync } from "node:fs";
 import { relative, sep } from "node:path";
 import { walkFiles } from "../walk.js";
+import { findMemberOverride } from "../rewriter/overrides.js";
 import type { DeprecationEntry, DeprecationMap, Finding, ReplSymbol } from "../rules/types.js";
 
 /** Binding -> the kit specifier it was imported from. */
@@ -27,6 +28,8 @@ export interface MemberScanOptions {
   projectRoot: string;
   map: DeprecationMap;
   since?: number;
+  /** Runtime expression yielding a UIContext, for cross-kit overrides. */
+  uiContextExpr?: string;
 }
 
 /** Per-kit index of deprecated members (entries that have a member chain). */
@@ -51,6 +54,7 @@ export interface MemberScanResult {
 export function scanProjectMembers(opts: MemberScanOptions): MemberScanResult {
   const { projectRoot, map } = opts;
   const since = opts.since ?? 0;
+  const uiContextExpr = opts.uiContextExpr ?? "this.getUIContext()";
   const memberIndex = buildMemberIndex(map);
   const files = walkFiles(projectRoot, { extensions: [".ts", ".ets"] });
   const findings: Finding[] = [];
@@ -78,7 +82,10 @@ export function scanProjectMembers(opts: MemberScanOptions): MemberScanResult {
         const re = new RegExp(`\\b${pattern}\\b`, "g");
         for (const m of content.matchAll(re)) {
           if (m.index === undefined) continue;
-          const f = memberFinding(file, projectRoot, m.index, content, binding, members, e);
+          const matchEnd = m.index + m[0].length;
+          const f = memberFinding(
+            file, projectRoot, m.index, matchEnd, content, binding, members, e, uiContextExpr,
+          );
           const key = `${f.file}:${f.line}:${f.oldSymbol}`;
           const prev = dedupe.get(key);
           if (!prev || (prev.needsManual && !f.needsManual)) dedupe.set(key, f);
@@ -94,16 +101,21 @@ function memberFinding(
   file: string,
   projectRoot: string,
   offset: number,
+  matchEnd: number,
   content: string,
   binding: string,
   members: string[],
   e: DeprecationEntry,
+  uiContextExpr: string,
 ): Finding {
   const fileRel = relative(projectRoot, file).split(sep).join("/");
   const oldSymbol = `${binding}.${members.join(".")}`;
-  const { newSymbol, rule, note } = describeMemberReplacement(binding, e.repl);
+  const ov = findMemberOverride(e.dep.kit, members, e.repl, uiContextExpr);
+  const { newSymbol, rule, note } = ov
+    ? { newSymbol: ov.replacement as string, rule: "override" as const, note: ov.note }
+    : describeMemberReplacement(binding, e.repl);
   const needsManual = rule === "manual";
-  return {
+  const finding: Finding = {
     file: fileRel,
     line: lineAt(content, offset),
     oldSymbol,
@@ -113,6 +125,12 @@ function memberFinding(
     needsManual,
     note,
   };
+  if (ov) {
+    finding.matchStart = offset;
+    finding.matchEnd = matchEnd;
+    finding.replacement = ov.replacement;
+  }
+  return finding;
 }
 
 export function describeMemberReplacement(
