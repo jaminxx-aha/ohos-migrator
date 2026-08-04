@@ -3,8 +3,12 @@
  */
 
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// dist/ -> project root. Anchored to the tool's own location so the cache
+// lands under this project regardless of where the CLI is invoked from.
+const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Default SDK probe roots (Windows + macOS standard installs). */
 const SDK_PROBE_ROOTS = [
@@ -35,9 +39,9 @@ export function resolveSdkApiDir(explicit?: string): string {
   );
 }
 
-/** Directory for cached deprecation maps. */
+/** Directory for cached deprecation maps (under this project). */
 export function cacheDir(): string {
-  return join(homedir(), ".harmony-deprecate");
+  return join(PROJECT_ROOT, ".harmony-deprecate");
 }
 
 /** Cache file for a given apiVersion. */

@@ -46,10 +46,11 @@ annotated with `@deprecated since N` and their `@useinstead` replacement tokens.
 The result is cached to:
 
 ```
-~/.harmony-deprecate/deprecation-map.<apiVersion>.json
+<project>/.harmony-deprecate/deprecation-map.<apiVersion>.json
 ```
 
-The `apiVersion` is read from the SDK's sibling `oh-uni-package.json`, so caches
+The cache lives under this tool's project root (not the user home dir), so it
+travels with the tool. The `apiVersion` is read from the SDK's sibling `oh-uni-package.json`, so caches
 are version-pinned and the right one is selected automatically.
 
 ### `scan` — report deprecated usages
