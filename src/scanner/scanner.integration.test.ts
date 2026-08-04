@@ -65,19 +65,24 @@ test("scanProjectMembers finds member-level deprecations", () => {
   assert.equal(pub.rule, "manual");
 });
 
-test("rewriteProject dry-run rewrites only safe imports", () => {
-  const { findings } = scanProject({ projectRoot: FIXTURES, map });
+test("rewriteProject dry-run applies import + member rewrites", () => {
+  const mod = scanProject({ projectRoot: FIXTURES, map });
+  const mem = scanProjectMembers({ projectRoot: FIXTURES, map });
+  const findings = [...mod.findings, ...mem.findings];
   const result = rewriteProject(FIXTURES, findings, { write: false });
-  // Only the dataUriUtils rewrite-import finding is auto-fixable.
+  // page.ets carries both the dataUriUtils import move and the router.pushUrl
+  // -> router.pushPath same-kit member rename; both are auto-fixable.
   assert.equal(result.changedFiles.length, 1);
   const cf = result.changedFiles[0];
   assert.ok(cf.file.endsWith("page.ets"));
-  assert.equal(cf.edits.length, 1);
-  assert.equal(cf.edits[0].to, "@ohos.ability.dataUriUtils");
-  // The dry-run diff shows the old vs new import line.
+  assert.equal(cf.edits.length, 2);
+  const tos = cf.edits.map((e) => e.to).sort();
+  assert.deepEqual(tos, ["@ohos.ability.dataUriUtils", "router.pushPath"]);
+  // The dry-run diff shows the old vs new lines.
   assert.ok(cf.diff.includes("-"));
   assert.ok(cf.diff.includes("+"));
   assert.ok(cf.diff.includes("@ohos.ability.dataUriUtils"));
+  assert.ok(cf.diff.includes("router.pushPath"));
   // The manual reminderAgent finding is left untouched.
   assert.ok(result.skippedManual >= 1);
 });

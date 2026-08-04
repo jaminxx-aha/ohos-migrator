@@ -107,9 +107,13 @@ never auto-written — they're reported for human review. Default is dry-run; pa
 - **Member-level detection is heuristic, not type-checked.** Binding resolution
   from imports keeps false positives low, but shadowing can still occur. Treat
   scan output as a review report, not an authoritative linter verdict.
-- **Only import specifiers are auto-rewritten.** Same-kit member renames
-  (`rename-member`) are reported but not yet auto-applied; cross-kit
-  replacements are always manual (they require wiring changes).
+- **What is auto-rewritten.** The rewriter applies three rule kinds: import
+  specifiers (`rewrite-import`), same-kit member renames (`rename-member`, e.g.
+  `Window.create` -> `Window.createWindow`), and the data-driven
+  `@ohos.arkui.UIContext.Router` override. Cross-kit replacements are always
+  manual — they require wiring changes (e.g. obtaining a runtime `UIContext`).
+  A replacement chain whose kit prefix could not be resolved is also left
+  manual, to avoid producing a wrong same-kit rewrite.
 
 ## Development
 

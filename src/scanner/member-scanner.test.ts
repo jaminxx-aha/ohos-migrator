@@ -41,14 +41,37 @@ import { x, y as z } from '@ohos.c';
   assert.equal(m.get("z"), "@ohos.c");
 });
 
-test("describeMemberReplacement: same-kit rename is auto-fixable", () => {
-  const r = describeMemberReplacement("router", { members: ["pushPath"] });
+test("describeMemberReplacement: bare same-kit rename is auto-fixable", () => {
+  const r = describeMemberReplacement("router", "@ohos.router", ["pushUrl"], {
+    members: ["pushPath"],
+  });
   assert.equal(r.rule, "rename-member");
   assert.equal(r.newSymbol, "router.pushPath");
+  assert.equal(r.replacement, "router.pushPath");
+});
+
+test("describeMemberReplacement: same-kit rename with kit set is auto-fixable", () => {
+  // repl.kit === dep.kit: legitimate same-kit rename, not cross-kit manual.
+  const r = describeMemberReplacement("display", "@ohos.display", ["getDefaultDisplay"], {
+    kit: "@ohos.display",
+    members: ["getDefaultDisplaySync"],
+  });
+  assert.equal(r.rule, "rename-member");
+  assert.equal(r.newSymbol, "display.getDefaultDisplaySync");
+  assert.equal(r.replacement, "display.getDefaultDisplaySync");
+});
+
+test("describeMemberReplacement: multi-segment replacement without a kit is manual", () => {
+  // Parse artifact: kit prefix not resolved -> must not be auto-applied.
+  const r = describeMemberReplacement("dataStorage", "@ohos.data.storage", ["getStorage"], {
+    members: ["preferences", "preferences", "getPreferences"],
+  });
+  assert.equal(r.rule, "manual");
+  assert.equal(r.replacement, undefined);
 });
 
 test("describeMemberReplacement: cross-kit replacement is manual", () => {
-  const r = describeMemberReplacement("router", {
+  const r = describeMemberReplacement("router", "@ohos.router", ["pushUrl"], {
     kit: "@ohos.uiContext",
     members: ["Router.pushUrl"],
   });
@@ -58,7 +81,7 @@ test("describeMemberReplacement: cross-kit replacement is manual", () => {
 });
 
 test("describeMemberReplacement: no replacement is manual", () => {
-  const r = describeMemberReplacement("router", null);
+  const r = describeMemberReplacement("router", "@ohos.router", ["pushUrl"], null);
   assert.equal(r.rule, "manual");
   assert.equal(r.newSymbol, null);
 });

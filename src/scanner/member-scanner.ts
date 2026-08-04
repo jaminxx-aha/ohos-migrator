@@ -111,49 +111,83 @@ function memberFinding(
   const fileRel = relative(projectRoot, file).split(sep).join("/");
   const oldSymbol = `${binding}.${members.join(".")}`;
   const ov = findMemberOverride(e.dep.kit, members, e.repl, uiContextExpr);
-  const { newSymbol, rule, note } = ov
-    ? { newSymbol: ov.replacement as string, rule: "override" as const, note: ov.note }
-    : describeMemberReplacement(binding, e.repl);
-  const needsManual = rule === "manual";
+  const desc: MemberReplacement = ov
+    ? { newSymbol: ov.replacement, rule: "override", note: ov.note, replacement: ov.replacement }
+    : describeMemberReplacement(binding, e.dep.kit, members, e.repl);
+  const needsManual = desc.rule === "manual";
   const finding: Finding = {
     file: fileRel,
     line: lineAt(content, offset),
     oldSymbol,
-    newSymbol,
+    newSymbol: desc.newSymbol,
     since: e.since,
-    rule,
+    rule: desc.rule,
     needsManual,
-    note,
+    note: desc.note,
   };
-  if (ov) {
+  // Override and rename-member both splice replacement text at the match offsets.
+  if (desc.replacement) {
     finding.matchStart = offset;
     finding.matchEnd = matchEnd;
-    finding.replacement = ov.replacement;
+    finding.replacement = desc.replacement;
   }
   return finding;
 }
 
+export interface MemberReplacement {
+  newSymbol: string | null;
+  rule: Finding["rule"];
+  note: string;
+  /** Exact text to splice at matchStart..matchEnd, when auto-fixable. */
+  replacement?: string;
+}
+
+/**
+ * Classify a deprecated member's replacement.
+ *
+ * - Same-kit rename (repl.kit absent, or repl.kit === dep.kit) on a flat
+ *   single-segment member is auto-fixable: the matched `binding.<member>` only
+ *   needs its leaf changed -> `rename-member`.
+ * - Any other cross-kit target is `manual` (requires wiring changes). A
+ *   multi-segment replacement chain with no resolved kit is a parse artifact
+ *   (the kit prefix wasn't recognised) and is treated as `manual` rather than
+ *   silently producing a wrong same-kit rewrite.
+ */
 export function describeMemberReplacement(
   binding: string,
+  depKit: string,
+  depMembers: string[],
   repl: ReplSymbol | null,
-): { newSymbol: string | null; rule: Finding["rule"]; note: string } {
+): MemberReplacement {
   if (!repl || !repl.members || repl.members.length === 0) {
     return { newSymbol: null, rule: "manual", note: "no @useinstead replacement" };
   }
   const leaf = repl.members[repl.members.length - 1];
+  const sameKit = !repl.kit || repl.kit === depKit;
+  const flat = depMembers.length === 1;
+  // A bare @useinstead with no resolved kit is only trustworthy as a single
+  // segment; a multi-segment chain without a kit is a parse artifact.
+  const trustworthy = repl.kit ? true : repl.members.length === 1;
+  if (sameKit && flat && trustworthy) {
+    const replacement = `${binding}.${leaf}`;
+    return {
+      newSymbol: replacement,
+      rule: "rename-member",
+      note: `rename member -> ${leaf}`,
+      replacement,
+    };
+  }
   if (repl.kit) {
-    // Cross-kit: architectural change (e.g. router.pushUrl -> UIContext.Router.pushUrl).
     return {
       newSymbol: `${repl.kit}/${repl.members.join(".")}`,
       rule: "manual",
-      note: `cross-kit replacement -> ${repl.kit} (requires UIContext wiring)`,
+      note: `cross-kit replacement -> ${repl.kit} (requires wiring changes)`,
     };
   }
-  // Same-kit member rename: auto-fixable later (rename property access).
   return {
-    newSymbol: `${binding}.${leaf}`,
-    rule: "rename-member",
-    note: `rename member -> ${leaf}`,
+    newSymbol: repl.members.join("."),
+    rule: "manual",
+    note: "unresolved replacement chain (kit not resolved)",
   };
 }
 

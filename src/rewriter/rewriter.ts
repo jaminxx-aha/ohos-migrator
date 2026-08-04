@@ -7,6 +7,9 @@
  *   - `override`: replace a matched member symbol `<binding>.<member>` at its
  *     match offsets with a data-driven replacement (e.g. router.pushUrl ->
  *     this.getUIContext().getRouter().pushUrl).
+ *   - `rename-member`: same-kit member rename (e.g. router.push ->
+ *     router.pushUrl, Window.create -> Window.createWindow) — splice the new
+ *     member chain at the match offsets.
  *
  * Edits within a file are applied bottom-up so earlier offsets stay valid.
  * `manual` findings are never auto-written. Default is dry-run; `--write`
@@ -38,7 +41,11 @@ export function rewriteProject(
     (f) => f.rule === "rewrite-import" && f.newSymbol,
   );
   const memberFindings = findings.filter(
-    (f) => f.rule === "override" && f.replacement && f.matchStart != null && f.matchEnd != null,
+    (f) =>
+      (f.rule === "override" || f.rule === "rename-member") &&
+      f.replacement != null &&
+      f.matchStart != null &&
+      f.matchEnd != null,
   );
   const skippedManual = findings.filter((f) => f.needsManual).length;
 
@@ -72,7 +79,7 @@ export function rewriteProject(
           from: f.oldSymbol,
           to: f.newSymbol!,
         });
-      } else if (f.rule === "override") {
+      } else if (f.rule === "override" || f.rule === "rename-member") {
         edits.push({
           start: f.matchStart!,
           end: f.matchEnd!,
