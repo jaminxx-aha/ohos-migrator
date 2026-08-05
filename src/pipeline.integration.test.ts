@@ -407,6 +407,96 @@ test("scan: multi-segment replacement without kit is manual", () => {
   }
 });
 
+/* kit-move alignment: cross-kit members whose repl.kit lines up with the
+ * deprecated kit's indexed module move. After rewrite-import re-points the
+ * binding, the member is reached on the same binding. */
+
+function alignedProject(): string {
+  return makeTree({
+    "page.ets": `
+import bt from '@ohos.bluetooth';
+import dutil from '@ohos.ability.dataUriUtils';
+bt.getProfileConnState(1);   // aligned leaf-rename -> rename-member
+dutil.getId('x');           // aligned no-op (chain identical) -> suppressed
+bt.unrelatedDeep();         // aligned but prefix differs -> manual
+`,
+  });
+}
+
+function alignedMap(): DeprecationMap {
+  const kitIndex: DeprecationMap["kitIndex"] = {
+    "@ohos.bluetooth": { since: 9, newKit: "@ohos.bluetoothManager" },
+    "@ohos.ability.dataUriUtils": { since: 9, newKit: "@ohos.app.ability.dataUriUtils" },
+  };
+  return mapOf(
+    [
+      // aligned leaf-rename: only the leaf changes on the re-pointed binding
+      entry("@ohos.bluetooth", ["getProfileConnState"], { kit: "@ohos.bluetoothManager", members: ["getProfileConnectionState"] }, 9),
+      // aligned no-op: chain identical -> covered by the kit move (rewrite-import)
+      entry("@ohos.ability.dataUriUtils", ["getId"], { kit: "@ohos.app.ability.dataUriUtils", members: ["getId"] }, 9),
+      // aligned but prefix differs -> still manual
+      entry("@ohos.bluetooth", ["unrelatedDeep"], { kit: "@ohos.bluetoothManager", members: ["other", "deep"] }, 9),
+    ],
+    kitIndex,
+  );
+}
+
+test("scan: aligned leaf-rename is rename-member on the re-pointed binding", () => {
+  const root = alignedProject();
+  try {
+    const { findings } = scanProjectMembers({ projectRoot: root, map: alignedMap() });
+    const f = bySymbol(findings, "bt.getProfileConnState");
+    assert.equal(f?.rule, "rename-member");
+    assert.equal(f?.replacement, "bt.getProfileConnectionState");
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("scan: aligned no-op (chain identical) is suppressed", () => {
+  const root = alignedProject();
+  try {
+    const { findings } = scanProjectMembers({ projectRoot: root, map: alignedMap() });
+    // rewrite-import re-points the binding; the member works unchanged, so no
+    // member finding should be emitted for `dutil.getId`.
+    assert.equal(bySymbol(findings, "dutil.getId"), undefined);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("scan: aligned prefix-diff stays manual", () => {
+  const root = alignedProject();
+  try {
+    const { findings } = scanProjectMembers({ projectRoot: root, map: alignedMap() });
+    const f = bySymbol(findings, "bt.unrelatedDeep");
+    assert.equal(f?.rule, "manual");
+    assert.equal(f?.replacement, undefined);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("rewrite: aligned kit move + member rename both apply", () => {
+  const root = alignedProject();
+  try {
+    const mod = scanProject({ projectRoot: root, map: alignedMap() });
+    const mem = scanProjectMembers({ projectRoot: root, map: alignedMap() });
+    const findings = [...mod.findings, ...mem.findings];
+    const res = rewriteProject(root, findings, { write: false });
+    // bt import rewritten + member leaf renamed; the suppressed dutil.getId
+    // contributes no member edit (only its import is rewritten).
+    const bt = res.changedFiles.find((c) => c.file === "page.ets");
+    assert.ok(bt, "page.ets changed");
+    assert.ok(bt.diff.includes("@ohos.bluetoothManager"), "import rewritten");
+    assert.ok(bt.diff.includes("getProfileConnectionState"), "member renamed");
+    // The aligned no-op member must NOT produce a splice (getId stays).
+    assert.ok(!bt.diff.includes("getId"), "aligned no-op member not spliced");
+  } finally {
+    cleanup(root);
+  }
+});
+
 /* module-level */
 
 function moduleProject(): string {

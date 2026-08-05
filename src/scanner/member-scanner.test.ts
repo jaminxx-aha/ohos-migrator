@@ -97,3 +97,60 @@ test("describeMemberReplacement: no-op rename (same leaf) is manual", () => {
   assert.equal(r.replacement, undefined);
   assert.ok(r.note.includes("identical"));
 });
+
+// --- kit-move alignment -------------------------------------------------
+// A cross-kit replacement whose kit equals the deprecated kit's indexed move
+// target is "effectively same-kit": rewrite-import re-points the binding.
+
+test("describeMemberReplacement: aligned no-op (chain identical) is suppressed", () => {
+  // `@ohos.ability.dataUriUtils` -> `@ohos.app.ability.dataUriUtils` (kit move);
+  // member `dataUriUtils.getId` lives unchanged on the re-pointed binding.
+  const kitMove = (k: string) => (k === "@ohos.ability.dataUriUtils" ? "@ohos.app.ability.dataUriUtils" : undefined);
+  const r = describeMemberReplacement(
+    "dataUriUtils", "@ohos.ability.dataUriUtils", ["getId"],
+    { kit: "@ohos.app.ability.dataUriUtils", members: ["getId"] },
+    kitMove,
+  );
+  assert.equal(r.suppressed, true);
+  assert.ok(r.note.includes("kit move"));
+});
+
+test("describeMemberReplacement: aligned leaf-rename is rename-member", () => {
+  // `@ohos.bluetooth` -> `@ohos.bluetoothManager` (kit move); the member leaf
+  // changes on the re-pointed binding: `getProfileConnState` -> `getProfileConnectionState`.
+  const kitMove = (k: string) => (k === "@ohos.bluetooth" ? "@ohos.bluetoothManager" : undefined);
+  const r = describeMemberReplacement(
+    "bluetooth", "@ohos.bluetooth", ["getProfileConnState"],
+    { kit: "@ohos.bluetoothManager", members: ["getProfileConnectionState"] },
+    kitMove,
+  );
+  assert.equal(r.rule, "rename-member");
+  assert.equal(r.newSymbol, "bluetooth.getProfileConnectionState");
+  assert.equal(r.replacement, "bluetooth.getProfileConnectionState");
+  assert.ok(r.note.includes("kit move"));
+});
+
+test("describeMemberReplacement: aligned prefix-diff stays manual", () => {
+  // Kit moves but the member chain's prefix also changes — not a simple leaf
+  // rename on the re-pointed binding, so it stays manual.
+  const kitMove = (k: string) => (k === "@ohos.a" ? "@ohos.b" : undefined);
+  const r = describeMemberReplacement(
+    "a", "@ohos.a", ["Flags", "X"],
+    { kit: "@ohos.b", members: ["Y", "X"] },
+    kitMove,
+  );
+  assert.equal(r.rule, "manual");
+  assert.equal(r.suppressed, undefined);
+});
+
+test("describeMemberReplacement: cross-kit without alignment is manual", () => {
+  // repl.kit set but does NOT match any kit move -> genuine cross-kit, manual.
+  const kitMove = (k: string) => (k === "@ohos.a" ? "@ohos.b" : undefined);
+  const r = describeMemberReplacement(
+    "a", "@ohos.a", ["foo"],
+    { kit: "@ohos.unrelated", members: ["foo"] },
+    kitMove,
+  );
+  assert.equal(r.rule, "manual");
+  assert.ok(r.note.includes("@ohos.unrelated"));
+});

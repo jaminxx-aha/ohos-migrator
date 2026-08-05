@@ -63,6 +63,11 @@ export function scanProjectMembers(opts: MemberScanOptions): MemberScanResult {
     windowStageExpr: opts.windowStageExpr ?? "this.windowStage",
     windowExpr: opts.windowExpr ?? "this.window",
   };
+  // Resolve a deprecated kit's indexed module move. A cross-kit member whose
+  // replacement kit lines up with this move is "effectively same-kit": the
+  // rewrite-import step re-points the binding, so the member is reached on the
+  // same binding (no member-level splice needed when the chain is unchanged).
+  const kitMove: KitMoveResolver = (k) => map.kitIndex[k]?.newKit;
   const memberIndex = buildMemberIndex(map);
   const files = walkFiles(projectRoot, { extensions: [".ts", ".ets"] });
   const findings: Finding[] = [];
@@ -98,8 +103,11 @@ export function scanProjectMembers(opts: MemberScanOptions): MemberScanResult {
           if (m.index === undefined) continue;
           const matchEnd = m.index + m[0].length;
           const f = memberFinding(
-            file, projectRoot, m.index, matchEnd, content, binding, members, e, ctx,
+            file, projectRoot, m.index, matchEnd, content, binding, members, e, ctx, kitMove,
           );
+          // Suppressed members are covered by another rule (e.g. an aligned
+          // kit move) — emit no finding for them.
+          if (!f) continue;
           const key = `${f.file}:${f.line}:${f.oldSymbol}`;
           const prev = dedupe.get(key);
           if (!prev || (prev.needsManual && !f.needsManual)) dedupe.set(key, f);
@@ -121,13 +129,17 @@ function memberFinding(
   members: string[],
   e: DeprecationEntry,
   ctx: { uiContextExpr: string; windowStageExpr: string; windowExpr: string },
-): Finding {
+  kitMove: KitMoveResolver,
+): Finding | null {
   const fileRel = relative(projectRoot, file).split(sep).join("/");
   const oldSymbol = `${binding}.${members.join(".")}`;
   const ov = findMemberOverride(e.dep.kit, members, e.repl, ctx);
   const desc: MemberReplacement = ov
     ? { newSymbol: ov.replacement, rule: "override", note: ov.note, replacement: ov.replacement }
-    : describeMemberReplacement(binding, e.dep.kit, members, e.repl);
+    : describeMemberReplacement(binding, e.dep.kit, members, e.repl, kitMove);
+  // Suppressed: the call site is covered by another rule (e.g. an aligned kit
+  // move via rewrite-import). Emit no finding.
+  if (desc.suppressed) return null;
   const needsManual = desc.rule === "manual";
   const finding: Finding = {
     file: fileRel,
@@ -154,14 +166,38 @@ export interface MemberReplacement {
   note: string;
   /** Exact text to splice at matchStart..matchEnd, when auto-fixable. */
   replacement?: string;
+  /**
+   * True when the member call site is already covered by another rule and
+   * should NOT yield a finding. Set when the member's replacement kit equals
+   * the deprecated kit's indexed move target AND the member chain is unchanged
+   * — `rewrite-import` re-points the binding to the new kit, so
+   * `binding.<chain>` resolves on the new kit without a member-level splice.
+   */
+  suppressed?: boolean;
 }
+
+/**
+ * Optional resolver: returns the new kit for a deprecated kit that has a safe
+ * module-level move (`kitIndex[dep.kit].newKit`), or undefined. Threading this
+ * in lets `describeMemberReplacement` treat a cross-kit replacement whose kit
+ * matches the deprecated kit's move target as "effectively same-kit": once
+ * `rewrite-import` re-points the binding, the member lives on the same binding.
+ */
+export type KitMoveResolver = (depKit: string) => string | undefined;
 
 /**
  * Classify a deprecated member's replacement.
  *
- * - Same-kit rename (repl.kit absent, or repl.kit === dep.kit) on a flat
- *   single-segment member is auto-fixable: the matched `binding.<member>` only
- *   needs its leaf changed -> `rename-member`.
+ * - Same-kit rename (repl.kit absent, or repl.kit === dep.kit) on a matching
+ *   prefix is auto-fixable: only the leaf (or deeper chain) changes ->
+ *   `rename-member`. When the prefix AND leaf are identical the replacement is
+ *   a no-op (parse artifact / self-referential) and is flagged for review.
+ * - A cross-kit replacement whose `repl.kit` equals the deprecated kit's
+ *   indexed move target (`kitMove(dep.kit) === repl.kit`) is treated as
+ *   same-kit too: `rewrite-import` re-points the binding to `repl.kit`, so the
+ *   member is reached on the same binding. If the chain is unchanged there the
+ *   member finding is *suppressed* (redundant with the import rewrite); if only
+ *   the leaf changes it is a `rename-member` on the re-pointed binding.
  * - Any other cross-kit target is `manual` (requires wiring changes). A
  *   multi-segment replacement chain with no resolved kit is a parse artifact
  *   (the kit prefix wasn't recognised) and is treated as `manual` rather than
@@ -172,24 +208,41 @@ export function describeMemberReplacement(
   depKit: string,
   depMembers: string[],
   repl: ReplSymbol | null,
+  kitMove?: KitMoveResolver,
 ): MemberReplacement {
   if (!repl || !repl.members || repl.members.length === 0) {
     return { newSymbol: null, rule: "manual", note: "no @useinstead replacement" };
   }
   const rMembers = repl.members;
   const leaf = rMembers[rMembers.length - 1];
-  const sameKit = !repl.kit || repl.kit === depKit;
+  // A cross-kit target that lines up with the deprecated kit's indexed module
+  // move is "effectively same-kit": the import rewrite re-points the binding.
+  const aligned = !!(repl.kit && kitMove && kitMove(depKit) === repl.kit);
+  const sameKit = !repl.kit || repl.kit === depKit || aligned;
   // A bare @useinstead with no resolved kit is only trustworthy as a single
   // segment; a multi-segment chain without a kit is a parse artifact.
   const trustworthy = repl.kit ? true : rMembers.length === 1;
   // No-op: the full replacement chain equals the deprecated chain (same prefix
-  // AND same leaf). Splicing identical text would be a confusing no-op diff.
+  // AND same leaf) AND the kit is unchanged (or aligned with a kit move). When
+  // the kit genuinely differs, an identical chain is a cross-kit drop-in, not a
+  // self-referential no-op — so it must fall through to the cross-kit branch.
   const prefixSame =
     depMembers.length > 0 &&
     depMembers.length === rMembers.length &&
     depMembers.slice(0, -1).every((x, i) => x === rMembers[i]);
-  const isNoOp = prefixSame && leaf === depMembers[depMembers.length - 1];
+  const isNoOp = sameKit && prefixSame && leaf === depMembers[depMembers.length - 1];
   if (isNoOp) {
+    // If the chain is unchanged AND the kit is moved to exactly this
+    // replacement kit, `rewrite-import` already migrates every call site of
+    // this binding — the member finding is redundant. Suppress it.
+    if (aligned) {
+      return {
+        newSymbol: `${binding}.${rMembers.join(".")}`,
+        rule: "manual",
+        note: "covered by kit move (rewrite-import re-points the binding)",
+        suppressed: true,
+      };
+    }
     return {
       newSymbol: `${binding}.${rMembers.join(".")}`,
       rule: "manual",
@@ -200,14 +253,16 @@ export function describeMemberReplacement(
   // `abilityAccessCtrl.AtManager.verifyAccessToken` ->
   // `abilityAccessCtrl.AtManager.checkAccessToken`): the container chain is
   // unchanged, only the leaf moves. Requires a resolved kit (trustworthy) for
-  // multi-segment chains to avoid parse artifacts.
+  // multi-segment chains to avoid parse artifacts. Also covers an aligned
+  // cross-kit move where only the leaf differs on the re-pointed binding.
   if (sameKit && trustworthy && prefixSame && depMembers.length > 0) {
     const chain = rMembers.join(".");
     const replacement = `${binding}.${chain}`;
     return {
       newSymbol: replacement,
       rule: "rename-member",
-      note: `rename member -> ${chain}`,
+      note: `rename member -> ${chain}` +
+        (aligned ? " (after kit move re-points the binding)" : ""),
       replacement,
     };
   }

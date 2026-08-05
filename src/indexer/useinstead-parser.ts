@@ -35,17 +35,24 @@ export interface ParsedUseinstead {
  *                    used to bound the kit prefix in dot-path forms
  * @param fallbackKit the current file's kit in `@ohos.x.y` form, used to
  *                    resolve short forms that omit the `ohos.` prefix
+ * @param kitLookup   optional map from lowercased `ohos.x.y` -> real-case kit,
+ *                    enabling case-insensitive kit-prefix resolution. The SDK
+ *                    occasionally uses wrong-cased kit qualifiers (e.g.
+ *                    `@useinstead ohos.uitest.Component` for `@ohos.UiTest`);
+ *                    without this, such targets resolve to no kit and the
+ *                    replacement is misclassified as an unresolved manual.
  */
 export function parseUseinstead(
   token: string,
   knownKits: Set<string>,
   fallbackKit?: string,
+  kitLookup?: Map<string, string>,
 ): ParsedUseinstead {
   let rest = token;
   let kit: string | undefined;
 
   if (rest.startsWith("ohos.")) {
-    kit = longestKitPrefix(rest, knownKits);
+    kit = longestKitPrefix(rest, knownKits, kitLookup);
     if (kit) rest = rest.slice(kit.length); // kit stored without `@`; rest is the remainder
   } else if (fallbackKit) {
     kit = fallbackKit.startsWith("@") ? fallbackKit.slice(1) : fallbackKit;
@@ -72,14 +79,15 @@ export function parseUseinstead(
   } else {
     // Bare-identifier short form (no ohos. prefix, no leading / . #).
     // If the leading identifier (up to the first `.`/`#`) matches a known
-    // kit (`ohos.<head>`), treat it as the kit — e.g.
-    // `reminderAgentManager.publishReminder` -> @ohos.reminderAgentManager.
-    // Otherwise the leading identifier is the export name; a lone bare
-    // member with no separator stays a member.
+    // kit (`ohos.<head>`, case-insensitively when kitLookup is supplied),
+    // treat it as the kit — e.g. `reminderAgentManager.publishReminder` ->
+    // @ohos.reminderAgentManager. Otherwise the leading identifier is the
+    // export name; a lone bare member with no separator stays a member.
     const stop = rest.search(/[.#]/);
     const head = stop === -1 ? rest : rest.slice(0, stop);
-    if (head && knownKits.has("ohos." + head)) {
-      kit = "ohos." + head;
+    const real = resolveKit("ohos." + head, knownKits, kitLookup);
+    if (head && real) {
+      kit = real;
       rest = stop === -1 ? "" : rest.slice(stop);
     } else if (stop !== -1) {
       exportName = head;
@@ -112,7 +120,11 @@ export function parseUseinstead(
 }
 
 /** Return the longest `ohos.x.y` prefix of `rest` that is a known kit. */
-function longestKitPrefix(rest: string, knownKits: Set<string>): string | undefined {
+function longestKitPrefix(
+  rest: string,
+  knownKits: Set<string>,
+  kitLookup?: Map<string, string>,
+): string | undefined {
   // Greedy by segments: try the whole `ohos.x.y...` run, then peel segments.
   const runMatch = rest.match(/^ohos\.[a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)*/);
   if (!runMatch) return undefined;
@@ -121,9 +133,24 @@ function longestKitPrefix(rest: string, knownKits: Set<string>): string | undefi
   let best: string | undefined;
   for (let i = 2; i <= segments.length; i++) {
     const candidate = segments.slice(0, i).join(".");
-    if (knownKits.has(candidate)) best = candidate;
+    const real = resolveKit(candidate, knownKits, kitLookup);
+    if (real) best = real;
   }
   return best;
+}
+
+/**
+ * Resolve a candidate `ohos.x.y` (no leading `@`) to a known kit, exact-case
+ * first, then case-insensitively via `kitLookup` when supplied. Returns the
+ * real-case kit name (no `@`) or undefined.
+ */
+function resolveKit(
+  candidate: string,
+  knownKits: Set<string>,
+  kitLookup?: Map<string, string>,
+): string | undefined {
+  if (knownKits.has(candidate)) return candidate;
+  return kitLookup?.get(candidate.toLowerCase());
 }
 
 /** Best-effort human-readable rendering of a replacement symbol. */

@@ -54,6 +54,28 @@ test("bare identifier matching a known kit resolves as kit", () => {
   assert.deepEqual(r.members, ["publishReminder"]);
 });
 
+test("case-insensitive kit prefix resolves wrong-cased qualifier (kitLookup)", () => {
+  // The SDK occasionally uses a wrong-cased kit, e.g.
+  // `@useinstead ohos.uitest.Component` for `@ohos.UiTest`. With a kitLookup
+  // (lowercased -> real), the kit must resolve to the real-cased kit so the
+  // target is not misclassified as an unresolved manual.
+  const kits = new Set(["ohos.UiTest"]);
+  const lookup = new Map([["ohos.uitest", "ohos.UiTest"]]);
+  const r = parseUseinstead("ohos.uitest.Component", kits, undefined, lookup);
+  assert.equal(r.kit, "@ohos.UiTest");
+  assert.deepEqual(r.members, ["Component"]);
+});
+
+test("case-insensitive bare-identifier kit resolves via kitLookup", () => {
+  // Bare short form `uitest.Component` (no ohos. prefix) on a file whose kit is
+  // `@ohos.UiTest`: the wrong-cased head resolves via the lookup, not fallback.
+  const kits = new Set(["ohos.UiTest"]);
+  const lookup = new Map([["ohos.uitest", "ohos.UiTest"]]);
+  const r = parseUseinstead("uitest.Component", kits, "@ohos.UiTest", lookup);
+  assert.equal(r.kit, "@ohos.UiTest");
+  assert.deepEqual(r.members, ["Component"]);
+});
+
 test("toReplSymbol normalizes kit with leading @", () => {
   const r = toReplSymbol(parseUseinstead("ohos.router/Router.pushUrl", KITS));
   assert.equal(r.kit, "@ohos.router");

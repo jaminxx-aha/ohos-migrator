@@ -85,6 +85,10 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
       topLevelFiles.push(f);
     }
   }
+  // Case-insensitive lookup (lowercased -> real-case) so wrong-cased
+  // @useinstead kit qualifiers (e.g. `ohos.uitest.Component`) still resolve.
+  const kitLookup = new Map<string, string>();
+  for (const k of knownKits) kitLookup.set(k.toLowerCase(), k);
 
   // Resolve nested-file -> owning kit via re-export tracing from top-level files.
   const nsImportKits = new Map<string, string>(); // nestedFile -> kit
@@ -125,7 +129,7 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
 
       const { dep, isNamespaceLevel } = computeIdentity(node, ownKit);
       const repl = useToken
-        ? toReplSymbol(parseUseinstead(useToken, knownKits, ownKit))
+        ? toReplSymbol(parseUseinstead(useToken, knownKits, ownKit, kitLookup))
         : null;
 
       // Only top-level kits can drive import-level module moves; nested files
