@@ -177,27 +177,36 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
       // Same-kit export-name rename (e.g. @ohos.UiTest `By` -> `On`): a
       // memberless declaration whose @useinstead resolves to a single new
       // name within the same kit. These drive the rename-export scanner rule.
-      if (isTopLevel(filePath) && !isNamespaceLevel && !dep.members?.length && dep.exportName && repl?.members?.length === 1) {
-        const newName = repl.members[0];
-        const sameKit = !repl.kit || repl.kit === ownKit;
-        if (sameKit && newName !== dep.exportName) {
-          exportIndex[`${ownKit}\0${dep.exportName}`] = newName;
-        }
-        // Cross-kit same-name drop-in (e.g. @system.router.RouterOptions ->
-        // @ohos.router.RouterOptions): the export moved to another kit under
-        // the same name. A named-import clause rewrites its specifier when
-        // every binding drops to the same target kit. Skip kits that already
-        // have a module-level move (rewrite-import handles them wholesale).
-        if (repl.kit && repl.kit !== ownKit && newName === dep.exportName && !kitIndex[ownKit]?.newKit) {
-          crossKitDropin[`${ownKit}\0${dep.exportName}`] = repl.kit;
-        }
-        // Cross-kit different-name move (e.g. @ohos.fileio.fstat ->
-        // @ohos.file.fs.stat): the export moved to another kit under a new
-        // name. A named-import clause rewrites its specifier AND aliases each
-        // such binding (`stat as fstat`) when every binding moves to the same
-        // target kit. Same skip for module-level moves.
-        if (repl.kit && repl.kit !== ownKit && newName !== dep.exportName && !kitIndex[ownKit]?.newKit) {
-          crossKitRenameExport[`${ownKit}\0${dep.exportName}`] = `${repl.kit}\0${newName}`;
+      // The replacement name comes from either a member-chain repl
+      // (`@useinstead ohos.x/Y`) or a whole-export repl
+      // (`@useinstead ohos.x.x/Y` -> repl.exportName, no members).
+      if (isTopLevel(filePath) && !isNamespaceLevel && !dep.members?.length && dep.exportName && repl) {
+        const newName = repl.members?.length === 1
+          ? repl.members[0]
+          : repl.exportName;
+        if (!newName) {
+          // no-op below
+        } else {
+          const sameKit = !repl.kit || repl.kit === ownKit;
+          if (sameKit && newName !== dep.exportName) {
+            exportIndex[`${ownKit}\0${dep.exportName}`] = newName;
+          }
+          // Cross-kit same-name drop-in (e.g. @system.router.RouterOptions ->
+          // @ohos.router.RouterOptions): the export moved to another kit under
+          // the same name. A named-import clause rewrites its specifier when
+          // every binding drops to the same target kit. Skip kits that already
+          // have a module-level move (rewrite-import handles them wholesale).
+          if (repl.kit && repl.kit !== ownKit && newName === dep.exportName && !kitIndex[ownKit]?.newKit) {
+            crossKitDropin[`${ownKit}\0${dep.exportName}`] = repl.kit;
+          }
+          // Cross-kit different-name move (e.g. @ohos.fileio.fstat ->
+          // @ohos.file.fs.stat): the export moved to another kit under a new
+          // name. A named-import clause rewrites its specifier AND aliases each
+          // such binding (`stat as fstat`) when every binding moves to the same
+          // target kit. Same skip for module-level moves.
+          if (repl.kit && repl.kit !== ownKit && newName !== dep.exportName && !kitIndex[ownKit]?.newKit) {
+            crossKitRenameExport[`${ownKit}\0${dep.exportName}`] = `${repl.kit}\0${newName}`;
+          }
         }
       }
     });

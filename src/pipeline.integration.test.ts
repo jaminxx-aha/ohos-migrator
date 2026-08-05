@@ -215,6 +215,16 @@ declare namespace fakeKit {
   }
 }
 `,
+  // Module-style file (no `declare namespace`) whose named export is deprecated
+  // with a whole-export @useinstead (`ohos.X/Y` -> repl.exportName, no members).
+  // Must surface as a cross-kit same-name drop-in for the named-import scanner.
+  "@ohos.application.Configuration.d.ts": `
+/** @since 8 @deprecated since 9 @useinstead ohos.app.ability.Configuration/Configuration */
+export interface Configuration { lang: string }
+`,
+  "@ohos.app.ability.Configuration.d.ts": `
+declare namespace Configuration {}
+`,
 };
 
 test("indexer: top-level entries + module-move + bare-kit useinstead", () => {
@@ -251,6 +261,25 @@ test("indexer: nested namespace @useinstead does not register a false kit move",
     assert.ok(sub, "nested Sub namespace indexed as a member");
     const bar = map.entries.find((e) => e.dep.kit === "@ohos.fakeKit" && e.dep.members?.includes("bar"));
     assert.ok(bar, "nested Sub.bar indexed as a member");
+  } finally {
+    cleanup(sdk);
+  }
+});
+
+test("indexer: whole-export @useinstead (repl.exportName) surfaces as cross-kit drop-in", () => {
+  // A module-style file `@ohos.application.Configuration` with
+  // `export interface Configuration` deprecated via
+  // `@useinstead ohos.app.ability.Configuration/Configuration` (repl has
+  // exportName, NO members) must be captured as a same-name cross-kit
+  // drop-in, not lost as an unresolved manual.
+  const sdk = makeTree(SDK_FILES);
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    assert.equal(
+      map.crossKitDropin?.["@ohos.application.Configuration\0Configuration"],
+      "@ohos.app.ability.Configuration",
+      "whole-export move indexed as cross-kit same-name drop-in",
+    );
   } finally {
     cleanup(sdk);
   }
