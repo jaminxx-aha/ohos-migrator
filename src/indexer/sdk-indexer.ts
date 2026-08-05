@@ -29,6 +29,7 @@ import type {
   DepSymbol,
   ExportIndex,
   CrossKitDropin,
+  CrossKitRenameExport,
   ReplSymbol,
   KitDepInfo,
 } from "../rules/types.js";
@@ -101,6 +102,7 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
   const kitIndex: Record<string, KitDepInfo> = {};
   const exportIndex: ExportIndex = {};
   const crossKitDropin: CrossKitDropin = {};
+  const crossKitRenameExport: CrossKitRenameExport = {};
   const fileKit: Record<string, string> = {};
 
   for (const filePath of files) {
@@ -189,6 +191,14 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
         if (repl.kit && repl.kit !== ownKit && newName === dep.exportName && !kitIndex[ownKit]?.newKit) {
           crossKitDropin[`${ownKit}\0${dep.exportName}`] = repl.kit;
         }
+        // Cross-kit different-name move (e.g. @ohos.fileio.fstat ->
+        // @ohos.file.fs.stat): the export moved to another kit under a new
+        // name. A named-import clause rewrites its specifier AND aliases each
+        // such binding (`stat as fstat`) when every binding moves to the same
+        // target kit. Same skip for module-level moves.
+        if (repl.kit && repl.kit !== ownKit && newName !== dep.exportName && !kitIndex[ownKit]?.newKit) {
+          crossKitRenameExport[`${ownKit}\0${dep.exportName}`] = `${repl.kit}\0${newName}`;
+        }
       }
     });
   }
@@ -201,6 +211,7 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
     kitIndex,
     exportIndex,
     crossKitDropin,
+    crossKitRenameExport,
     fileKit,
   };
 }

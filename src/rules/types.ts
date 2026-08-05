@@ -60,6 +60,19 @@ export type ExportIndex = Record<string, string>;
  */
 export type CrossKitDropin = Record<string, string>;
 
+/**
+ * Cross-kit export *rename*: `${oldKit}\0${exportName}` -> `${newKit}\0${newName}`,
+ * for exports whose `@useinstead` moves them to another kit *under a different
+ * name* (e.g. `@ohos.fileio.fstat` -> `@ohos.file.fs.stat`). A named import
+ * `import { fstat } from '@ohos.fileio'` rewrites to
+ * `import { stat as fstat } from '@ohos.file.fs'` — the specifier moves AND the
+ * binding is aliased to the new name under the old local name, so call sites
+ * (`fstat(...)`) need no body rewrite. Per-clause: every binding in the clause
+ * must move to the same target kit (same- or different-name) or the clause is
+ * left untouched so a mixed clause never breaks.
+ */
+export type CrossKitRenameExport = Record<string, string>;
+
 /** The deprecation map, persisted as JSON. */
 export interface DeprecationMap {
   apiVersion: number;
@@ -72,6 +85,8 @@ export interface DeprecationMap {
   exportIndex?: ExportIndex;
   /** Cross-kit same-name export moves (per-clause named-import drop-in). */
   crossKitDropin?: CrossKitDropin;
+  /** Cross-kit different-name export moves (per-clause named-import rename+alias). */
+  crossKitRenameExport?: CrossKitRenameExport;
   /**
    * Declaration-file -> kit attribution (path relative to sdkPath, forward
    * slashes, keyed by the SDK `api/` tree path). Built by the indexer's

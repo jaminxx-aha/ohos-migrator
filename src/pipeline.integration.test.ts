@@ -70,8 +70,9 @@ function mapOf(
   kitIndex: DeprecationMap["kitIndex"] = {},
   exportIndex: DeprecationMap["exportIndex"] = {},
   crossKitDropin: DeprecationMap["crossKitDropin"] = {},
+  crossKitRenameExport: DeprecationMap["crossKitRenameExport"] = {},
 ): DeprecationMap {
-  return { apiVersion: 12, sdkPath: "", generatedAt: "", entries, kitIndex, exportIndex, crossKitDropin };
+  return { apiVersion: 12, sdkPath: "", generatedAt: "", entries, kitIndex, exportIndex, crossKitDropin, crossKitRenameExport };
 }
 
 const UI = "@ohos.arkui.UIContext";
@@ -1161,6 +1162,104 @@ import { access, hash } from '@ohos.fileio';
     // Mixed clause must be untouched.
     assert.ok(out.includes("import { access, hash } from '@ohos.fileio'"), "mixed clause untouched");
     assert.equal(res.skippedManual, 0);
+  } finally {
+    cleanup(root);
+  }
+});
+
+/* 6b. cross-kit rename-export (named import moves to another kit under a
+ * different name, e.g. `import { fstat } from '@ohos.fileio'` ->
+ * `import { stat as fstat } from '@ohos.file.fs'`). The local binding is
+ * aliased to the new name so call sites (`fstat(...)`) need no body rewrite. */
+/* ------------------------------------------------------------------ */
+
+function renameMap(): DeprecationMap {
+  // `@ohos.fileio.fstat` -> `@ohos.file.fs.stat` (different name, same kit as
+  // `access`/`open` which are same-name drop-ins). A mixed clause of
+  // same-name + different-name to the SAME kit rewrites the specifier once
+  // and aliases only the different-name binding.
+  const dropin: DeprecationMap["crossKitDropin"] = {
+    "@ohos.fileio\0access": "@ohos.file.fs",
+  };
+  const rename: DeprecationMap["crossKitRenameExport"] = {
+    "@ohos.fileio\0fstat": "@ohos.file.fs\0stat",
+    "@ohos.fileio\0opendir": "@ohos.file.fs\0listFile",
+  };
+  const e = (kit: string, name: string, tKit: string, tName: string, since: number): DeprecationEntry => ({
+    dep: { kit, exportName: name, members: [] },
+    since,
+    repl: { kit: tKit, members: [tName] },
+    kind: "member",
+    source: { file: "", line: 0 },
+  });
+  return mapOf(
+    [
+      e("@ohos.fileio", "access", "@ohos.file.fs", "access", 9),
+      e("@ohos.fileio", "fstat", "@ohos.file.fs", "stat", 9),
+      e("@ohos.fileio", "opendir", "@ohos.file.fs", "listFile", 9),
+    ],
+    {},
+    {},
+    dropin,
+    rename,
+  );
+}
+
+test("scan: cross-kit rename aliases binding + rewrites specifier", () => {
+  const root = makeTree({ "p.ts": `import { fstat } from '@ohos.fileio';` });
+  try {
+    const { findings } = scanProjectCrossKitDropin({ projectRoot: root, map: renameMap() });
+    const spec = bySymbol(findings, "@ohos.fileio");
+    assert.equal(spec?.rule, "rewrite-import");
+    assert.equal(spec?.newSymbol, "@ohos.file.fs");
+    const b = bySymbol(findings, "fstat");
+    assert.equal(b?.rule, "rename-export");
+    assert.equal(b?.newSymbol, "stat");
+    assert.equal(b?.replacement, "stat as fstat");
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("scan: mixed same-name + rename clause to one kit rewrites + aliases only the rename", () => {
+  // `access` (same-name drop-in) + `fstat` (rename) both -> @ohos.file.fs.
+  const root = makeTree({ "p.ts": `import { access, fstat } from '@ohos.fileio';` });
+  try {
+    const { findings } = scanProjectCrossKitDropin({ projectRoot: root, map: renameMap() });
+    const spec = bySymbol(findings, "@ohos.fileio");
+    assert.equal(spec?.newSymbol, "@ohos.file.fs");
+    const b = bySymbol(findings, "fstat");
+    assert.equal(b?.replacement, "stat as fstat");
+    // `access` keeps its name -> no rename-export finding for it.
+    assert.equal(bySymbol(findings, "access"), undefined);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("rewrite: cross-kit rename produces `stat as fstat` + new specifier", () => {
+  const root = makeTree({ "p.ts": `import { fstat } from '@ohos.fileio';\nfstat(3);` });
+  try {
+    const { findings } = scanProjectCrossKitDropin({ projectRoot: root, map: renameMap() });
+    const res = rewriteProject(root, findings, { write: true });
+    const out = readFileSync(join(root, "p.ts"), "utf8");
+    assert.ok(out.includes("import { stat as fstat } from '@ohos.file.fs';"), "specifier + alias applied");
+    assert.ok(out.includes("fstat(3);"), "call site unchanged (local binding preserved)");
+    assert.equal(res.skippedManual, 0);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("scan: mixed-target rename clause is NOT rewritten", () => {
+  // `fstat` -> @ohos.file.fs, but `hash` -> @ohos.file.hash (different kit).
+  const root = makeTree({ "p.ts": `import { fstat, hash } from '@ohos.fileio';` });
+  try {
+    const map = renameMap();
+    // add a hash -> file.hash to make targets mixed
+    map.crossKitRenameExport!["@ohos.fileio\0hash"] = "@ohos.file.hash\0hashify";
+    const { findings } = scanProjectCrossKitDropin({ projectRoot: root, map });
+    assert.equal(findings.length, 0, "mixed target kits -> no rewrite");
   } finally {
     cleanup(root);
   }

@@ -128,6 +128,17 @@ never auto-written — they're reported for human review. Default is dry-run; pa
     `import { RouterOptions } from '@system.router'` ->
     `from '@ohos.router'`). The per-clause check leaves mixed-target or
     removed-export clauses untouched so nothing breaks.
+  - `rename-export` — export renames applied as a *safe alias* that preserves
+    the local binding. Same-kit: `import { By }` -> `import { On as By }`
+    (e.g. `@ohos.UiTest` `By`->`On`, `UiComponent`->`Component`,
+    `@ohos.worker` `EventListener`->`WorkerEventListener`). Cross-kit,
+    different name: the export moved to another kit under a new name, so the
+    specifier is rewritten AND the binding aliased —
+    `import { fstat } from '@ohos.fileio'` ->
+    `import { stat as fstat } from '@ohos.file.fs'` — leaving call sites
+    (`fstat(...)`) untouched. Per-clause: every binding in the clause must move
+    to the same target kit (same- or different-name) or the clause is left
+    alone so a mixed clause never breaks.
   - `rename-member` — same-kit (or kit-move-aligned) chain renames where the
     replacement chain has the **same length** as the deprecated one. The
     matched `binding.<old chain>` is spliced to `binding.<new chain>`. This
@@ -136,11 +147,6 @@ never auto-written — they're reported for human review. Default is dry-run; pa
     `rpc.MessageSequence.create`), or both (`media.MediaErrorCode.MSERR_OK` ->
     `media.AVErrorCode.AVERR_OK`). When the chain length differs the call shape
     changed and the finding stays manual.
-  - `rename-export` — same-kit export/class renames, applied as a *safe alias*
-    that preserves the local binding: `import { By }` ->
-    `import { On as By }` so every `By.text` / `new By()` reference resolves to
-    `On` with no body rewrite (e.g. `@ohos.UiTest` `By`->`On`,
-    `UiComponent`->`Component`, `@ohos.worker` `EventListener`->`WorkerEventListener`).
   - `override` — the data-driven `@ohos.arkui.UIContext` and `@ohos.window`
     recipes. The UIContext recipe rewrites any deprecated member whose
     `@useinstead` points at a UIContext sub-object — `Router`, `PromptAction`,

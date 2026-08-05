@@ -189,19 +189,42 @@ export function scanProjectCrossKitDropin(opts: ScanOptions): ScanResult {
   const { projectRoot, map } = opts;
   const since = opts.since ?? 0;
   const dropin = map.crossKitDropin ?? {};
+  const rename = map.crossKitRenameExport ?? {};
   const files = collectSourceFiles(projectRoot);
   const findings: Finding[] = [];
 
   // `kit\0export` -> since (min over entries), for the --since filter.
   const sinceFor: Record<string, number> = {};
   for (const e of map.entries) {
-    if (!e.dep.members?.length && e.dep.exportName) {
+    if (!e.dep.members?.length && e.dep.exportName && e.repl?.kit) {
       const key = `${e.dep.kit}\0${e.dep.exportName}`;
-      if (dropin[key] === e.repl?.kit && e.repl?.members?.[0] === e.dep.exportName) {
+      const nm = e.repl.members?.[0];
+      // Same-name drop-in OR different-name cross-kit rename.
+      const sameName = nm === e.dep.exportName && dropin[key] === e.repl.kit;
+      const diffName = nm && nm !== e.dep.exportName && rename[key] === `${e.repl.kit}\0${nm}`;
+      if (sameName || diffName) {
         sinceFor[key] = Math.min(sinceFor[key] ?? Infinity, e.since);
       }
     }
   }
+
+  /**
+   * Resolve a binding to its cross-kit move, if any: returns
+   * `{ kit, newName }` where `newName` is the export's name on the target kit
+   * (equals the local imported name for a same-name drop-in). `undefined` when
+   * the binding did not move cross-kit.
+   */
+  const resolve = (specifier: string, imported: string): { kit: string; newName: string } | undefined => {
+    const key = `${specifier}\0${imported}`;
+    const same = dropin[key];
+    if (same) return { kit: same, newName: imported };
+    const diff = rename[key];
+    if (diff) {
+      const i = diff.indexOf("\0");
+      if (i > 0) return { kit: diff.slice(0, i), newName: diff.slice(i + 1) };
+    }
+    return undefined;
+  };
 
   for (const file of files) {
     let content: string;
@@ -217,14 +240,16 @@ export function scanProjectCrossKitDropin(opts: ScanOptions): ScanResult {
       let target: string | undefined;
       let depSince = 0;
       let ok = true;
+      const moves: { binding: (typeof named)[number]; kit: string; newName: string }[] = [];
       for (const b of named) {
-        const t = dropin[`${imp.specifier}\0${b.imported}`];
-        if (!t) { ok = false; break; }
+        const m = resolve(imp.specifier, b.imported);
+        if (!m) { ok = false; break; }
         const s = sinceFor[`${imp.specifier}\0${b.imported}`] ?? 0;
         if (since && s > since) { ok = false; break; }
-        if (target && t !== target) { ok = false; break; } // mixed targets
-        target = t;
+        if (target && m.kit !== target) { ok = false; break; } // mixed target kits
+        target = m.kit;
         depSince = Math.max(depSince, s);
+        moves.push({ binding: b, ...m });
       }
       if (!ok || !target || target === imp.specifier) continue;
       findings.push({
@@ -237,6 +262,29 @@ export function scanProjectCrossKitDropin(opts: ScanOptions): ScanResult {
         needsManual: false,
         note: `cross-kit drop-in -> rewrite specifier to ${target} (${named.length} binding${named.length > 1 ? "s" : ""})`,
       });
+      // Alias any binding whose export moved under a DIFFERENT name on the
+      // target kit: `import { fstat }` -> `import { stat as fstat }`. The local
+      // binding is preserved, so no body rewrite is needed. Same-name bindings
+      // keep their name (no alias). Only aliased bindings get a finding; the
+      // specifier rewrite above is emitted once per clause.
+      for (const { binding: b, newName } of moves) {
+        if (newName === b.imported) continue;
+        if (b.nameStart == null || b.nameEnd == null) continue;
+        const replacement = b.local === b.imported ? `${newName} as ${b.local}` : newName;
+        findings.push({
+          file: fileRel,
+          line: lineAtOffset(content, b.nameStart),
+          oldSymbol: b.imported,
+          newSymbol: newName,
+          since: depSince,
+          rule: "rename-export",
+          needsManual: false,
+          note: `cross-kit rename export ${b.imported} -> ${newName} (aliased to preserve local binding)`,
+          matchStart: b.nameStart,
+          matchEnd: b.nameEnd,
+          replacement,
+        });
+      }
     }
   }
 
