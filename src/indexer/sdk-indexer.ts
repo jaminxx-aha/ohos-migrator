@@ -27,6 +27,7 @@ import type {
   DeprecationEntry,
   DeprecationMap,
   DepSymbol,
+  ExportIndex,
   KitDepInfo,
 } from "../rules/types.js";
 
@@ -92,6 +93,7 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
 
   const entries: DeprecationEntry[] = [];
   const kitIndex: Record<string, KitDepInfo> = {};
+  const exportIndex: ExportIndex = {};
 
   for (const filePath of files) {
     let content: string;
@@ -149,6 +151,17 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
         kind: isModuleMove ? "module-move" : "member",
         source: { file: filePath, line: sourceLine },
       });
+
+      // Same-kit export-name rename (e.g. @ohos.UiTest `By` -> `On`): a
+      // memberless declaration whose @useinstead resolves to a single new
+      // name within the same kit. These drive the rename-export scanner rule.
+      if (isTopLevel(filePath) && !isNamespaceLevel && !dep.members?.length && dep.exportName && repl?.members?.length === 1) {
+        const newName = repl.members[0];
+        const sameKit = !repl.kit || repl.kit === ownKit;
+        if (sameKit && newName !== dep.exportName) {
+          exportIndex[`${ownKit}\0${dep.exportName}`] = newName;
+        }
+      }
     });
   }
 
@@ -158,6 +171,7 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
     generatedAt: opts.generatedAt ?? new Date().toISOString(),
     entries,
     kitIndex,
+    exportIndex,
   };
 }
 

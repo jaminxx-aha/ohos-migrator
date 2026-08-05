@@ -24,7 +24,7 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 
 import { buildDeprecationMap } from "./indexer/sdk-indexer.js";
-import { scanProject } from "./scanner/scanner.js";
+import { scanProject, scanProjectExportRenames } from "./scanner/scanner.js";
 import { scanProjectMembers } from "./scanner/member-scanner.js";
 import { rewriteProject } from "./rewriter/rewriter.js";
 import type { DeprecationMap, DeprecationEntry, ReplSymbol } from "./rules/types.js";
@@ -65,8 +65,12 @@ function entry(
 }
 
 /** A flat synthetic map (no real SDK needed) for scan/rewrite tests. */
-function mapOf(entries: DeprecationEntry[], kitIndex: DeprecationMap["kitIndex"] = {}): DeprecationMap {
-  return { apiVersion: 12, sdkPath: "", generatedAt: "", entries, kitIndex };
+function mapOf(
+  entries: DeprecationEntry[],
+  kitIndex: DeprecationMap["kitIndex"] = {},
+  exportIndex: DeprecationMap["exportIndex"] = {},
+): DeprecationMap {
+  return { apiVersion: 12, sdkPath: "", generatedAt: "", entries, kitIndex, exportIndex };
 }
 
 const UI = "@ohos.arkui.UIContext";
@@ -659,9 +663,10 @@ context.setWakeUpScreen(false);
   }
 });
 
-test("scan: same-kit window method rename is NOT overridden (manual)", () => {
+test("scan: same-kit window method rename is auto-fixable (rename-member), not override", () => {
   // window.Window.show -> window.Window.showWindow is same-kit; the window
-  // recipe must not fire (would splice a wrong `this.window.showWindow`).
+  // recipe must not fire (would splice a wrong `this.window.showWindow`), but
+  // the multi-segment leaf rename IS auto-fixable as rename-member.
   const root = makeTree({
     "w.ets": `
 import window from '@ohos.window';
@@ -675,8 +680,114 @@ window.Window.show();
     ]);
     const { findings } = scanProjectMembers({ projectRoot: root, map });
     const f = bySymbol(findings, "window.Window.show");
-    assert.equal(f?.rule, "manual", "same-kit multi-segment -> manual, not override");
-    assert.equal(f?.replacement, undefined);
+    assert.equal(f?.rule, "rename-member", "multi-seg leaf rename is auto-fixable");
+    assert.equal(f?.replacement, "window.Window.showWindow");
+  } finally {
+    cleanup(root);
+  }
+});
+
+/* ------------------------------------------------------------------ */
+/* 5. rename-export (same-kit export rename, e.g. By -> On)          */
+/* ------------------------------------------------------------------ */
+
+function exportMap(): DeprecationMap {
+  // @ohos.UiTest export `By` is renamed to `On` (same kit). The memberless
+  // entry (exportName=By, no members) carries the `since` for the --since
+  // filter; the member-level entry (By.text -> On.text) is covered by the
+  // export rename (aliased `By` resolves to `On`), so it is NOT also
+  // auto-spliced in the body.
+  const memberless: DeprecationEntry = {
+    dep: { kit: "@ohos.UiTest", exportName: "By", members: [] },
+    since: 9,
+    repl: { kit: "@ohos.UiTest", members: ["On"] },
+    kind: "member",
+    source: { file: "", line: 0 },
+  };
+  return mapOf(
+    [memberless, entry("@ohos.UiTest", ["text"], { kit: "@ohos.UiTest", members: ["On", "text"] }, 9)],
+    {},
+    { "@ohos.UiTest\0By": "On" },
+  );
+}
+
+test("scan+rewrite: rename-export aliases a no-alias import to preserve the local binding", () => {
+  const root = makeTree({
+    "uitest.ets": `
+import { By } from '@ohos.UiTest';
+const x = By.text('hello');
+const y = new By();
+`,
+  });
+  try {
+    const map = exportMap();
+    const { findings } = scanProjectExportRenames({ projectRoot: root, map });
+    const f = findings.find((x) => x.oldSymbol === "By");
+    assert.equal(f?.rule, "rename-export");
+    assert.equal(f?.replacement, "On as By", "no-alias -> alias to preserve local `By`");
+    assert.equal(f?.newSymbol, "On");
+
+    rewriteProject(root, findings, { write: true });
+    const out = readFileSync(join(root, "uitest.ets"), "utf8");
+    assert.ok(out.includes("import { On as By } from '@ohos.UiTest';"), "import aliased");
+    // Body references are untouched (the alias keeps `By` valid -> resolves to On).
+    assert.ok(out.includes("const x = By.text('hello');"));
+    assert.ok(out.includes("const y = new By();"));
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("scan+rewrite: rename-export keeps an existing alias (`By as B` -> `On as B`)", () => {
+  const root = makeTree({
+    "uitest.ets": `
+import { By as B } from '@ohos.UiTest';
+const x = B.text('hello');
+`,
+  });
+  try {
+    const map = exportMap();
+    const { findings } = scanProjectExportRenames({ projectRoot: root, map });
+    const f = findings.find((x) => x.oldSymbol === "By");
+    assert.equal(f?.replacement, "On", "aliased -> just swap the imported name");
+
+    rewriteProject(root, findings, { write: true });
+    const out = readFileSync(join(root, "uitest.ets"), "utf8");
+    assert.ok(out.includes("import { On as B } from '@ohos.UiTest';"));
+    assert.ok(out.includes("const x = B.text('hello');"), "local alias B unchanged");
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("scan: rename-export respects --since filter", () => {
+  const root = makeTree({
+    "uitest.ets": `
+import { By } from '@ohos.UiTest';
+`,
+  });
+  try {
+    const map = exportMap();
+    const kept = scanProjectExportRenames({ projectRoot: root, map, since: 9 }).findings;
+    const filtered = scanProjectExportRenames({ projectRoot: root, map, since: 8 }).findings;
+    assert.equal(kept.length, 1, "since 9 (deprecation since 9) is kept");
+    assert.equal(filtered.length, 0, "since 8 excludes a since-9 deprecation");
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("scan: non-deprecated named imports yield no rename-export finding", () => {
+  const root = makeTree({
+    "fresh.ets": `
+import { Fresh } from '@ohos.UiTest';
+Fresh.foo();
+`,
+  });
+  try {
+    const map = exportMap();
+    const { findings } = scanProjectExportRenames({ projectRoot: root, map });
+    assert.equal(findings.length, 0);
   } finally {
     cleanup(root);
   }

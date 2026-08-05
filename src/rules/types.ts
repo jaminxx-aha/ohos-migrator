@@ -39,6 +39,9 @@ export interface KitDepInfo {
   manual?: boolean;
 }
 
+/** Same-kit export rename: `${kit}\0${oldExport}` -> newExport. */
+export type ExportIndex = Record<string, string>;
+
 /** The deprecation map, persisted as JSON. */
 export interface DeprecationMap {
   apiVersion: number;
@@ -47,12 +50,15 @@ export interface DeprecationMap {
   entries: DeprecationEntry[];
   /** Quick import-level lookup: oldKit -> summary. */
   kitIndex: Record<string, KitDepInfo>;
+  /** Same-kit export-name renames (e.g. `@ohos.UiTest` `By` -> `On`). */
+  exportIndex?: ExportIndex;
 }
 
 /** Rule kind the rewriter may apply. */
 export type RuleKind =
   | "rewrite-import"
   | "rename-member"
+  | "rename-export"
   | "override"
   | "signature-change"
   | "manual";

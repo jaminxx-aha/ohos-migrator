@@ -12,6 +12,7 @@ import { resolve, basename } from "node:path";
 import { Command } from "commander";
 import { buildDeprecationMap } from "./indexer/sdk-indexer.js";
 import { scanProject } from "./scanner/scanner.js";
+import { scanProjectExportRenames } from "./scanner/scanner.js";
 import { scanProjectMembers } from "./scanner/member-scanner.js";
 import { rewriteProject } from "./rewriter/rewriter.js";
 import { printScanSummary, printRewriteSummary } from "./report.js";
@@ -61,10 +62,11 @@ program
     const projectRoot = resolve(opts.project);
     const mod = scanProject({ projectRoot, map, since: opts.since || 0 });
     const mem = scanProjectMembers({ projectRoot, map, since: opts.since || 0 });
-    const findings = [...mod.findings, ...mem.findings];
+    const exp = scanProjectExportRenames({ projectRoot, map, since: opts.since || 0 });
+    const findings = [...mod.findings, ...mem.findings, ...exp.findings];
     console.log(
       printScanSummary(
-        { findings, filesScanned: Math.max(mod.filesScanned, mem.filesScanned) },
+        { findings, filesScanned: Math.max(mod.filesScanned, mem.filesScanned, exp.filesScanned) },
       ),
     );
   });
@@ -91,7 +93,8 @@ program
       windowStageExpr: opts.windowStageExpr,
       windowExpr: opts.windowExpr,
     });
-    const findings = [...mod.findings, ...mem.findings];
+    const exp = scanProjectExportRenames({ projectRoot, map, since: opts.since || 0 });
+    const findings = [...mod.findings, ...mem.findings, ...exp.findings];
     const result = rewriteProject(projectRoot, findings, { write: !!opts.write });
     console.log(printRewriteSummary(result, !!opts.write));
   });

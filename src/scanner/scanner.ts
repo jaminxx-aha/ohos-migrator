@@ -98,3 +98,78 @@ function collectSourceFiles(projectRoot: string): string[] {
     ignoreDirs: IGNORE_DIRS,
   });
 }
+
+/**
+ * Export-rename scanner: finds named imports of a deprecated same-kit export
+ * whose name moved (e.g. `import { By } from '@ohos.UiTest'` where `By` -> `On`).
+ *
+ * Each finding rewrites the imported-name token in the import clause. To keep
+ * the local binding valid without touching every reference, a no-alias import
+ * `{ By }` becomes `{ On as By }` (import the new name, alias to the old local
+ * so `By.text`, `new By()`, and `x: By` all resolve to `On`); an aliased
+ * `import { By as B }` becomes `import { On as B }` (the `as B` stays).
+ *
+ * No body rewrite is needed — the alias preserves the local binding.
+ */
+export function scanProjectExportRenames(opts: ScanOptions): ScanResult {
+  const { projectRoot, map } = opts;
+  const since = opts.since ?? 0;
+  const exportIndex = map.exportIndex ?? {};
+  const files = collectSourceFiles(projectRoot);
+  const findings: Finding[] = [];
+  const sinceForExport: Record<string, number> = {}; // kit\0old -> since
+
+  for (const e of map.entries) {
+    if (!e.dep.members?.length && e.dep.exportName && !e.dep.members?.length) {
+      const key = `${e.dep.kit}\0${e.dep.exportName}`;
+      if (exportIndex[key] === e.repl?.members?.[0]) {
+        sinceForExport[key] = Math.min(sinceForExport[key] ?? Infinity, e.since);
+      }
+    }
+  }
+
+  for (const file of files) {
+    let content: string;
+    try {
+      content = readFileSync(file, "utf8");
+    } catch {
+      continue;
+    }
+    const fileRel = relative(projectRoot, file).split(sep).join("/");
+    for (const imp of extractImports(content)) {
+      for (const b of imp.bindings) {
+        if (b.nameStart == null || b.nameEnd == null) continue; // not a named import
+        const key = `${imp.specifier}\0${b.imported}`;
+        const newExport = exportIndex[key];
+        if (!newExport || newExport === b.imported) continue;
+        const depSince = sinceForExport[key] ?? 0;
+        if (since && depSince > since) continue;
+        // Preserve the local binding: no-alias -> `New as Local`; aliased -> `New`.
+        const replacement =
+          b.local === b.imported ? `${newExport} as ${b.local}` : newExport;
+        findings.push({
+          file: fileRel,
+          line: lineAtOffset(content, b.nameStart),
+          oldSymbol: b.imported,
+          newSymbol: newExport,
+          since: depSince,
+          rule: "rename-export",
+          needsManual: false,
+          note: `rename export ${b.imported} -> ${newExport}` +
+            (b.local === b.imported ? " (aliased to preserve local binding)" : ""),
+          matchStart: b.nameStart,
+          matchEnd: b.nameEnd,
+          replacement,
+        });
+      }
+    }
+  }
+
+  return { findings, filesScanned: files.length };
+}
+
+function lineAtOffset(content: string, offset: number): number {
+  let line = 1;
+  for (let i = 0; i < offset; i++) if (content.charCodeAt(i) === 10) line++;
+  return line;
+}

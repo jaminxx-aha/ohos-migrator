@@ -20,7 +20,7 @@ export interface ImportInfo {
   /** End character offset just past the closing quote. */
   specEnd: number;
   /** Local bindings introduced, for phase-2 member resolution. */
-  bindings: { local: string; imported: string }[];
+  bindings: { local: string; imported: string; nameStart?: number; nameEnd?: number }[];
 }
 
 // `import <clause> from 'spec'` — clause captured so bindings can be parsed.
@@ -75,26 +75,37 @@ function pushImport(
   const quoteChar = m[quoteGroup];
   const specifier = m[specGroup];
   const quoteStart = m.index + m[0].indexOf(quoteChar + specifier);
+  // Absolute offset of the clause within the file (for binding-token offsets).
+  const clauseStart = clause != null ? m.index + m[0].indexOf(clause) : 0;
   out.push({
     specifier,
     line: lineAt(content, quoteStart),
     specStart: quoteStart,
     specEnd: quoteStart + specifier.length + 2, // open + close quote
-    bindings: clause ? parseBindings(clause) : [],
+    bindings: clause ? parseBindings(clause, clauseStart) : [],
   });
 }
 
-/** Parse `{a, b as c}` / default / `* as ns` bindings from an import clause. */
-function parseBindings(clause: string): ImportInfo["bindings"] {
+/** Parse `{a, b as c}` / default / `* as ns` bindings from an import clause.
+ * `clauseStart` is the char offset of `clause` within the file content, used
+ * to attach absolute offsets to each imported-name token (for rename-export).
+ */
+function parseBindings(
+  clause: string,
+  clauseStart: number,
+): ImportInfo["bindings"] {
   const bindings: ImportInfo["bindings"] = [];
   const brace = clause.match(/\{([^}]*)\}/);
-  if (brace) {
-    for (const raw of brace[1].split(",")) {
-      const t = raw.trim();
-      if (!t) continue;
-      const asM = t.match(/^(\w+)\s+as\s+(\w+)$/);
-      if (asM) bindings.push({ imported: asM[1], local: asM[2] });
-      else if (/^\w+$/.test(t)) bindings.push({ imported: t, local: t });
+  if (brace && brace.index !== undefined) {
+    const inner = brace[1];
+    const contentStart = clauseStart + brace.index + 1; // first char inside `{`
+    const re = /([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(inner)) !== null) {
+      const imported = m[1];
+      const local = m[2] ?? m[1];
+      const nameStart = contentStart + m.index;
+      bindings.push({ imported, local, nameStart, nameEnd: nameStart + imported.length });
     }
     return bindings;
   }

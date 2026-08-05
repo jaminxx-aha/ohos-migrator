@@ -80,11 +80,17 @@ export function scanProjectMembers(opts: MemberScanOptions): MemberScanResult {
       continue;
     }
     const bindings = extractBindingMap(content);
+    const exportIndex = map.exportIndex ?? {};
     for (const [binding, kit] of bindings) {
       const entries = memberIndex[kit];
       if (!entries) continue;
       for (const e of entries) {
         if (since && e.since > since) continue;
+        // If this member's enclosing export is itself same-kit renamed
+        // (e.g. `By.text` where `By` -> `On`), the rename-export rule already
+        // aliases the import so `By.text` resolves to `On.text`. Skip the
+        // redundant member finding to avoid double-reporting / a wrong splice.
+        if (e.dep.exportName && exportIndex[`${kit}\0${e.dep.exportName}`]) continue;
         const members = e.dep.members!;
         const pattern = binding + "\\." + members.map(escapeRe).join("\\.");
         const re = new RegExp(`\\b${pattern}\\b`, "g");
@@ -170,29 +176,38 @@ export function describeMemberReplacement(
   if (!repl || !repl.members || repl.members.length === 0) {
     return { newSymbol: null, rule: "manual", note: "no @useinstead replacement" };
   }
-  const leaf = repl.members[repl.members.length - 1];
+  const rMembers = repl.members;
+  const leaf = rMembers[rMembers.length - 1];
   const sameKit = !repl.kit || repl.kit === depKit;
-  const flat = depMembers.length === 1;
   // A bare @useinstead with no resolved kit is only trustworthy as a single
   // segment; a multi-segment chain without a kit is a parse artifact.
-  const trustworthy = repl.kit ? true : repl.members.length === 1;
-  // No-op: the replacement leaf matches the deprecated leaf (e.g. an API kept
-  // under the same name but flagged for removal). Splicing an identical symbol
-  // would be a confusing no-op diff; report it for review instead.
-  const isNoOp = flat && leaf === depMembers[depMembers.length - 1];
+  const trustworthy = repl.kit ? true : rMembers.length === 1;
+  // No-op: the full replacement chain equals the deprecated chain (same prefix
+  // AND same leaf). Splicing identical text would be a confusing no-op diff.
+  const prefixSame =
+    depMembers.length > 0 &&
+    depMembers.length === rMembers.length &&
+    depMembers.slice(0, -1).every((x, i) => x === rMembers[i]);
+  const isNoOp = prefixSame && leaf === depMembers[depMembers.length - 1];
   if (isNoOp) {
     return {
-      newSymbol: `${binding}.${leaf}`,
+      newSymbol: `${binding}.${rMembers.join(".")}`,
       rule: "manual",
       note: "replacement identical to deprecated symbol (review needed)",
     };
   }
-  if (sameKit && flat && trustworthy) {
-    const replacement = `${binding}.${leaf}`;
+  // Same-kit leaf rename at any depth (e.g.
+  // `abilityAccessCtrl.AtManager.verifyAccessToken` ->
+  // `abilityAccessCtrl.AtManager.checkAccessToken`): the container chain is
+  // unchanged, only the leaf moves. Requires a resolved kit (trustworthy) for
+  // multi-segment chains to avoid parse artifacts.
+  if (sameKit && trustworthy && prefixSame && depMembers.length > 0) {
+    const chain = rMembers.join(".");
+    const replacement = `${binding}.${chain}`;
     return {
       newSymbol: replacement,
       rule: "rename-member",
-      note: `rename member -> ${leaf}`,
+      note: `rename member -> ${chain}`,
       replacement,
     };
   }

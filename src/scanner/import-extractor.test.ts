@@ -7,10 +7,10 @@ test("named bindings with alias", () => {
   assert.equal(imps.length, 1);
   assert.equal(imps[0].specifier, "@ohos.router");
   assert.equal(imps[0].line, 1);
-  assert.deepEqual(imps[0].bindings, [
-    { imported: "a", local: "a" },
-    { imported: "b", local: "c" },
-  ]);
+  const b = imps[0].bindings;
+  assert.equal(b.length, 2);
+  assert.deepEqual({ ...b[0] }, { imported: "a", local: "a", nameStart: 9, nameEnd: 10 });
+  assert.deepEqual({ ...b[1] }, { imported: "b", local: "c", nameStart: 12, nameEnd: 13 });
 });
 
 test("default import binding", () => {

@@ -42,7 +42,7 @@ export function rewriteProject(
   );
   const memberFindings = findings.filter(
     (f) =>
-      (f.rule === "override" || f.rule === "rename-member") &&
+      (f.rule === "override" || f.rule === "rename-member" || f.rule === "rename-export") &&
       f.replacement != null &&
       f.matchStart != null &&
       f.matchEnd != null,
@@ -79,7 +79,7 @@ export function rewriteProject(
           from: f.oldSymbol,
           to: f.newSymbol!,
         });
-      } else if (f.rule === "override" || f.rule === "rename-member") {
+      } else if (f.rule === "override" || f.rule === "rename-member" || f.rule === "rename-export") {
         edits.push({
           start: f.matchStart!,
           end: f.matchEnd!,
