@@ -199,6 +199,21 @@ export interface Thing {
 /** @syscap x @since 3 @deprecated since 8 @useinstead ohos.router#RouterOptions */
 export interface RouterOptions { uri: string }
 `,
+  // Regression: a nested namespace inside a kit, deprecated with a cross-kit
+  // @useinstead, must NOT register a kit-level module move for the whole kit.
+  // (Once falsely moved `@ohos.bluetoothManager` -> `@ohos.bluetooth.ble`
+  // because a nested `namespace BLE` carried a member @useinstead.)
+  "@ohos.fakeKit.d.ts": `
+declare namespace fakeKit {
+  /**
+   * @since 9 @deprecated since 10 @useinstead ohos.otherKit/otherSub
+   */
+  namespace Sub {
+    /** @since 9 @deprecated since 10 @useinstead ohos.otherKit/foo */
+    function bar(): void;
+  }
+}
+`,
 };
 
 test("indexer: top-level entries + module-move + bare-kit useinstead", () => {
@@ -216,6 +231,25 @@ test("indexer: top-level entries + module-move + bare-kit useinstead", () => {
     const toast = map.entries.find((e) => e.dep.kit === "@ohos.prompt" && e.dep.members?.[0] === "showToast");
     assert.equal(toast?.repl?.kit, UI);
     assert.deepEqual(toast?.repl?.members, ["PromptAction", "showToast"]);
+  } finally {
+    cleanup(sdk);
+  }
+});
+
+test("indexer: nested namespace @useinstead does not register a false kit move", () => {
+  const sdk = makeTree(SDK_FILES);
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    // `fakeKit` itself is NOT deprecated (no @deprecated on its top-level
+    // namespace), so it must have NO kitIndex entry at all — in particular
+    // no false `newKit: @ohos.otherKit` borrowed from the nested `Sub`.
+    assert.equal(map.kitIndex["@ohos.fakeKit"], undefined,
+      "nested namespace @useinstead must not move the whole kit");
+    // The nested Sub namespace and its member are still indexed as members.
+    const sub = map.entries.find((e) => e.dep.kit === "@ohos.fakeKit" && e.dep.exportName === "Sub");
+    assert.ok(sub, "nested Sub namespace indexed as a member");
+    const bar = map.entries.find((e) => e.dep.kit === "@ohos.fakeKit" && e.dep.members?.includes("bar"));
+    assert.ok(bar, "nested Sub.bar indexed as a member");
   } finally {
     cleanup(sdk);
   }

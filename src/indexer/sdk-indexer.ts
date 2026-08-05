@@ -139,15 +139,24 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
 
       // Only top-level kits can drive import-level module moves; nested files
       // never produce kitIndex entries (they are re-exported, not imported).
+      // NB: `isNamespaceLevel` is also true for a *nested* namespace declaration
+      // inside a kit file (e.g. `namespace BLE` inside `@ohos.bluetoothManager`),
+      // so we additionally require the namespace to be the file's outermost (kit-
+      // level) one — no enclosing ModuleDeclaration — otherwise a deprecated
+      // sub-namespace's `@useinstead` would wrongly register a kit-level move
+      // for the whole kit (it once falsely moved `@ohos.bluetoothManager` to
+      // `@ohos.bluetooth.ble`).
       const newKit = repl?.kit;
+      const isKitLevelNamespace =
+        isNamespaceLevel && !node.getFirstAncestorByKind(SyntaxKind.ModuleDeclaration);
       const isModuleMove =
-        isTopLevel(filePath) && isNamespaceLevel && !!newKit && newKit !== ownKit;
+        isTopLevel(filePath) && isKitLevelNamespace && !!newKit && newKit !== ownKit;
 
       if (isTopLevel(filePath)) {
         if (isModuleMove) {
           mergeKit(kitIndex, ownKit, since, { newKit: newKit! });
-        } else if (isNamespaceLevel) {
-          // Namespace deprecated but no cross-kit replacement -> manual.
+        } else if (isKitLevelNamespace) {
+          // Kit namespace deprecated but no cross-kit replacement -> manual.
           mergeKit(kitIndex, ownKit, since, { manual: true });
         }
       }

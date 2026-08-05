@@ -53,7 +53,22 @@ export function parseUseinstead(
 
   if (rest.startsWith("ohos.")) {
     kit = longestKitPrefix(rest, knownKits, kitLookup);
-    if (kit) rest = rest.slice(kit.length); // kit stored without `@`; rest is the remainder
+    if (kit) {
+      rest = rest.slice(kit.length); // kit stored without `@`; rest is the remainder
+    } else {
+      // Fallback: the token may omit middle kit segments (e.g.
+      // `ohos.distributedDataObject.create` for `@ohos.data.distributedDataObject`).
+      // Try the segment right after `ohos.` as a kit-name *suffix*; when it
+      // resolves unambiguously, the rest of the token is the member chain.
+      const afterOhos = rest.slice(5); // strip "ohos."
+      const stop = afterOhos.search(/[.#]/);
+      const head = stop === -1 ? afterOhos : afterOhos.slice(0, stop);
+      const suffix = head ? resolveBySuffix(head, knownKits, kitLookup) : undefined;
+      if (suffix) {
+        kit = suffix;
+        rest = stop === -1 ? "" : afterOhos.slice(stop);
+      }
+    }
   } else if (fallbackKit) {
     kit = fallbackKit.startsWith("@") ? fallbackKit.slice(1) : fallbackKit;
   }
@@ -89,9 +104,19 @@ export function parseUseinstead(
     if (head && real) {
       kit = real;
       rest = stop === -1 ? "" : rest.slice(stop);
-    } else if (stop !== -1) {
-      exportName = head;
-      rest = rest.slice(stop); // now starts with `.` or `#`
+    } else if (head) {
+      // Shorthand kit prefix: the head is the LAST segment of a known kit's
+      // dotted name (e.g. `distributedDataObject` -> `@ohos.data.
+      // distributedDataObject`, `preferences` -> `@ohos.data.preferences`).
+      // Only resolve when unambiguous (exactly one kit ends with `.<head>`).
+      const suffix = resolveBySuffix(head, knownKits, kitLookup);
+      if (suffix) {
+        kit = suffix;
+        rest = stop === -1 ? "" : rest.slice(stop);
+      } else if (stop !== -1) {
+        exportName = head;
+        rest = rest.slice(stop); // now starts with `.` or `#`
+      }
     }
   }
 
@@ -151,6 +176,32 @@ function resolveKit(
 ): string | undefined {
   if (knownKits.has(candidate)) return candidate;
   return kitLookup?.get(candidate.toLowerCase());
+}
+
+/**
+ * Resolve a bare head to a kit when it is the LAST segment of exactly one
+ * known kit's dotted name (case-insensitive), e.g. `distributedDataObject` ->
+ * `@ohos.data.distributedDataObject`. Returns undefined when zero or multiple
+ * kits end with `.<head>` (ambiguous) — the caller then treats the head as an
+ * export name rather than risk a wrong kit.
+ */
+function resolveBySuffix(
+  head: string,
+  knownKits: Set<string>,
+  kitLookup?: Map<string, string>,
+): string | undefined {
+  const needle = "." + head.toLowerCase();
+  let match: string | undefined;
+  for (const k of knownKits) {
+    if (!k.toLowerCase().endsWith(needle)) continue;
+    if (match && match !== k) return undefined; // ambiguous
+    match = k;
+  }
+  if (match) return match;
+  // kitLookup keys are lowercased; a bare head has no `ohos.` prefix, so the
+  // lookup form is covered by the knownKits scan above. (Kept for parity.)
+  void kitLookup;
+  return undefined;
 }
 
 /** Best-effort human-readable rendering of a replacement symbol. */
