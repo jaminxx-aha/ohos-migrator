@@ -24,7 +24,7 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 
 import { buildDeprecationMap } from "./indexer/sdk-indexer.js";
-import { scanProject, scanProjectExportRenames } from "./scanner/scanner.js";
+import { scanProject, scanProjectExportRenames, scanProjectCrossKitDropin } from "./scanner/scanner.js";
 import { scanProjectMembers } from "./scanner/member-scanner.js";
 import { rewriteProject } from "./rewriter/rewriter.js";
 import type { DeprecationMap, DeprecationEntry, ReplSymbol } from "./rules/types.js";
@@ -69,8 +69,9 @@ function mapOf(
   entries: DeprecationEntry[],
   kitIndex: DeprecationMap["kitIndex"] = {},
   exportIndex: DeprecationMap["exportIndex"] = {},
+  crossKitDropin: DeprecationMap["crossKitDropin"] = {},
 ): DeprecationMap {
-  return { apiVersion: 12, sdkPath: "", generatedAt: "", entries, kitIndex, exportIndex };
+  return { apiVersion: 12, sdkPath: "", generatedAt: "", entries, kitIndex, exportIndex, crossKitDropin };
 }
 
 const UI = "@ohos.arkui.UIContext";
@@ -165,6 +166,12 @@ declare namespace featureAbility {
   function getData(): void;
 }
 `,
+  // Legacy `@system.*` kits are top-level importable modules (pre-API-9),
+  // not nested files. They must be attributed to their own kit, not `@?`.
+  "@system.router.d.ts": `
+/** @syscap x @since 3 @deprecated since 8 @useinstead ohos.router#RouterOptions */
+export interface RouterOptions { uri: string }
+`,
 };
 
 test("indexer: top-level entries + module-move + bare-kit useinstead", () => {
@@ -222,6 +229,19 @@ test("indexer: unresolved nested file gets @? synthetic kit", () => {
     const orphan = map.entries.find((e) => e.dep.members?.includes("m") && e.dep.exportName === "Orphan");
     assert.ok(orphan, "orphan indexed for completeness");
     assert.ok(orphan?.dep.kit.startsWith("@?"), "non-importable synthetic kit");
+  } finally {
+    cleanup(sdk);
+  }
+});
+
+test("indexer: legacy @system.* kits are top-level (not @? synthetic)", () => {
+  const sdk = makeTree(SDK_FILES);
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const ro = map.entries.find((e) => e.dep.exportName === "RouterOptions" && !e.dep.members?.length);
+    assert.ok(ro, "RouterOptions indexed");
+    assert.equal(ro?.dep.kit, "@system.router", "attributed to the @system kit, not @?");
+    assert.equal(ro?.repl?.kit, "@ohos.router");
   } finally {
     cleanup(sdk);
   }
@@ -957,6 +977,105 @@ Fresh.foo();
     const map = exportMap();
     const { findings } = scanProjectExportRenames({ projectRoot: root, map });
     assert.equal(findings.length, 0);
+  } finally {
+    cleanup(root);
+  }
+});
+
+/* 6. cross-kit drop-in (named-import clause, e.g.
+ * `import { RouterOptions } from '@system.router'` -> '@ohos.router')       */
+/* ------------------------------------------------------------------ */
+
+function dropinMap(): DeprecationMap {
+  // Exports moved to another kit under the same name. `@system.router`'s
+  // RouterOptions and RouterState both -> @ohos.router (uniform). fileio's
+  // access/open -> file.fs but hash -> file.hash (mixed); chmod has no drop-in
+  // (removed) so a clause containing it must not rewrite.
+  const dropin: DeprecationMap["crossKitDropin"] = {
+    "@system.router\0RouterOptions": "@ohos.router",
+    "@system.router\0RouterState": "@ohos.router",
+    "@ohos.fileio\0access": "@ohos.file.fs",
+    "@ohos.fileio\0open": "@ohos.file.fs",
+    "@ohos.fileio\0hash": "@ohos.file.hash",
+  };
+  const e = (kit: string, name: string, target: string, since: number): DeprecationEntry => ({
+    dep: { kit, exportName: name, members: [] },
+    since,
+    repl: { kit: target, members: [name] },
+    kind: "member",
+    source: { file: "", line: 0 },
+  });
+  return mapOf(
+    [
+      e("@system.router", "RouterOptions", "@ohos.router", 8),
+      e("@system.router", "RouterState", "@ohos.router", 8),
+      e("@ohos.fileio", "access", "@ohos.file.fs", 9),
+      e("@ohos.fileio", "open", "@ohos.file.fs", 9),
+      e("@ohos.fileio", "hash", "@ohos.file.hash", 9),
+    ],
+    {},
+    {},
+    dropin,
+  );
+}
+
+test("scan: cross-kit drop-in rewrites a uniform named-import clause", () => {
+  const root = makeTree({
+    "p.ets": `
+import { RouterOptions, RouterState } from '@system.router';
+import { access, open } from '@ohos.fileio';
+`,
+  });
+  try {
+    const { findings } = scanProjectCrossKitDropin({ projectRoot: root, map: dropinMap() });
+    const r = bySymbol(findings, "@system.router");
+    assert.equal(r?.rule, "rewrite-import");
+    assert.equal(r?.newSymbol, "@ohos.router");
+    const f = bySymbol(findings, "@ohos.fileio");
+    assert.equal(f?.newSymbol, "@ohos.file.fs");
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("scan: mixed-target clause is NOT rewritten", () => {
+  const root = makeTree({ "p.ets": `import { access, hash } from '@ohos.fileio';` });
+  try {
+    const { findings } = scanProjectCrossKitDropin({ projectRoot: root, map: dropinMap() });
+    assert.equal(findings.length, 0, "mixed targets -> no rewrite");
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("scan: clause with a removed export (no drop-in) is NOT rewritten", () => {
+  // `chmod` has no drop-in target (removed) -> the whole clause is left alone.
+  const root = makeTree({ "p.ets": `import { access, chmod } from '@ohos.fileio';` });
+  try {
+    const { findings } = scanProjectCrossKitDropin({ projectRoot: root, map: dropinMap() });
+    assert.equal(findings.length, 0, "removed export in clause -> no rewrite");
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("rewrite: cross-kit drop-in rewrites specifier, keeps names", () => {
+  const root = makeTree({
+    "p.ets": `
+import { RouterOptions } from '@system.router';
+import { access, open } from '@ohos.fileio';
+import { access, hash } from '@ohos.fileio';
+`,
+  });
+  try {
+    const { findings } = scanProjectCrossKitDropin({ projectRoot: root, map: dropinMap() });
+    const res = rewriteProject(root, findings, { write: true });
+    const out = readFileSync(join(root, "p.ets"), "utf8");
+    assert.ok(out.includes("from '@ohos.router'"), "system.router -> ohos.router");
+    assert.ok(out.includes("import { access, open } from '@ohos.file.fs'"), "fileio uniform -> file.fs");
+    // Mixed clause must be untouched.
+    assert.ok(out.includes("import { access, hash } from '@ohos.fileio'"), "mixed clause untouched");
+    assert.equal(res.skippedManual, 0);
   } finally {
     cleanup(root);
   }

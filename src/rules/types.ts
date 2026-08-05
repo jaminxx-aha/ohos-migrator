@@ -42,6 +42,17 @@ export interface KitDepInfo {
 /** Same-kit export rename: `${kit}\0${oldExport}` -> newExport. */
 export type ExportIndex = Record<string, string>;
 
+/**
+ * Cross-kit export drop-in: `${oldKit}\0${exportName}` -> newKit, for exports
+ * whose `@useinstead` moves them to another kit *under the same name* (e.g.
+ * `@system.router.RouterOptions` -> `@ohos.router.RouterOptions`). A named
+ * import clause `import { RouterOptions, RouterState } from '@system.router'`
+ * rewrites its specifier to `@ohos.router` when every binding in the clause
+ * drops to the same target kit. Per-clause (not wholesale) so a mixed clause
+ * or one with a removed export is left untouched.
+ */
+export type CrossKitDropin = Record<string, string>;
+
 /** The deprecation map, persisted as JSON. */
 export interface DeprecationMap {
   apiVersion: number;
@@ -52,6 +63,8 @@ export interface DeprecationMap {
   kitIndex: Record<string, KitDepInfo>;
   /** Same-kit export-name renames (e.g. `@ohos.UiTest` `By` -> `On`). */
   exportIndex?: ExportIndex;
+  /** Cross-kit same-name export moves (per-clause named-import drop-in). */
+  crossKitDropin?: CrossKitDropin;
 }
 
 /** Rule kind the rewriter may apply. */

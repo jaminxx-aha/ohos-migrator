@@ -173,3 +173,72 @@ function lineAtOffset(content: string, offset: number): number {
   for (let i = 0; i < offset; i++) if (content.charCodeAt(i) === 10) line++;
   return line;
 }
+
+/**
+ * Cross-kit named-import drop-in: rewrite a named-import clause's specifier
+ * when every binding in the clause is an export that moved to another kit
+ * *under the same name* (e.g. `import { RouterOptions } from '@system.router'`
+ * -> `from '@ohos.router'`, because `@system.router.RouterOptions` ->
+ * `@ohos.router.RouterOptions`). Per-clause: a mixed clause or one containing
+ * a removed export (no drop-in target) is left untouched so nothing breaks.
+ *
+ * Kits with an indexed module-level move are skipped — `scanProject` already
+ * rewrites their specifier wholesale.
+ */
+export function scanProjectCrossKitDropin(opts: ScanOptions): ScanResult {
+  const { projectRoot, map } = opts;
+  const since = opts.since ?? 0;
+  const dropin = map.crossKitDropin ?? {};
+  const files = collectSourceFiles(projectRoot);
+  const findings: Finding[] = [];
+
+  // `kit\0export` -> since (min over entries), for the --since filter.
+  const sinceFor: Record<string, number> = {};
+  for (const e of map.entries) {
+    if (!e.dep.members?.length && e.dep.exportName) {
+      const key = `${e.dep.kit}\0${e.dep.exportName}`;
+      if (dropin[key] === e.repl?.kit && e.repl?.members?.[0] === e.dep.exportName) {
+        sinceFor[key] = Math.min(sinceFor[key] ?? Infinity, e.since);
+      }
+    }
+  }
+
+  for (const file of files) {
+    let content: string;
+    try {
+      content = readFileSync(file, "utf8");
+    } catch {
+      continue;
+    }
+    const fileRel = relative(projectRoot, file).split(sep).join("/");
+    for (const imp of extractImports(content)) {
+      const named = imp.bindings.filter((b) => b.nameStart != null && b.nameEnd != null);
+      if (named.length === 0) continue;
+      let target: string | undefined;
+      let depSince = 0;
+      let ok = true;
+      for (const b of named) {
+        const t = dropin[`${imp.specifier}\0${b.imported}`];
+        if (!t) { ok = false; break; }
+        const s = sinceFor[`${imp.specifier}\0${b.imported}`] ?? 0;
+        if (since && s > since) { ok = false; break; }
+        if (target && t !== target) { ok = false; break; } // mixed targets
+        target = t;
+        depSince = Math.max(depSince, s);
+      }
+      if (!ok || !target || target === imp.specifier) continue;
+      findings.push({
+        file: fileRel,
+        line: imp.line,
+        oldSymbol: imp.specifier,
+        newSymbol: target,
+        since: depSince,
+        rule: "rewrite-import",
+        needsManual: false,
+        note: `cross-kit drop-in -> rewrite specifier to ${target} (${named.length} binding${named.length > 1 ? "s" : ""})`,
+      });
+    }
+  }
+
+  return { findings, filesScanned: files.length };
+}

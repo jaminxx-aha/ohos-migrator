@@ -41,13 +41,15 @@ node dist/cli.js index                       # auto-detect SDK
 node dist/cli.js index --sdk "E:\\DevEco Studio\\sdk\\default\\openharmony\\ets\\api"
 ```
 
-Parses every `@ohos.*.d.ts` / `.d.ets` in the SDK `api/` tree (recursively,
-including subdirectory declaration files such as `bundleManager/ApplicationInfo.d.ts`),
-extracting declarations annotated with `@deprecated since N` and their
-`@useinstead` replacement tokens. Subdirectory files are not themselves
-importable kits; their owning kit is resolved by tracing the re-export from a
-top-level `@ohos.*` kit (`import * as _X from './dir/file'` or
-`import { Name } from './dir/file'`). The result is cached to:
+Parses every `@ohos.*` / `@system.*` `.d.ts` / `.d.ets` in the SDK `api/` tree
+(recursively, including subdirectory declaration files such as
+`bundleManager/ApplicationInfo.d.ts`), extracting declarations annotated with
+`@deprecated since N` and their `@useinstead` replacement tokens. `@system.*`
+are the legacy (pre-API-9) system kits, also top-level importable modules.
+Subdirectory files are not themselves importable kits; their owning kit is
+resolved by tracing the re-export from a top-level `@ohos.*` / `@system.*` kit
+(`import * as _X from './dir/file'` or `import { Name } from './dir/file'`).
+The result is cached to:
 
 ```
 <project>/.harmony-deprecate/deprecation-map.<apiVersion>.json
@@ -116,7 +118,12 @@ never auto-written — they're reported for human review. Default is dry-run; pa
   scan output as a review report, not an authoritative linter verdict.
 - **What is auto-rewritten.** The rewriter applies these rule kinds:
   - `rewrite-import` — replace the quoted import specifier when a kit moved
-    (e.g. `@ohos.reminderAgent` -> `@ohos.reminderAgentManager`).
+    (e.g. `@ohos.reminderAgent` -> `@ohos.reminderAgentManager`), or when a
+    named-import clause's every binding is an export that moved to another kit
+    *under the same name* (cross-kit drop-in, e.g.
+    `import { RouterOptions } from '@system.router'` ->
+    `from '@ohos.router'`). The per-clause check leaves mixed-target or
+    removed-export clauses untouched so nothing breaks.
   - `rename-member` — same-kit (or kit-move-aligned) chain renames where the
     replacement chain has the **same length** as the deprecated one. The
     matched `binding.<old chain>` is spliced to `binding.<new chain>`. This

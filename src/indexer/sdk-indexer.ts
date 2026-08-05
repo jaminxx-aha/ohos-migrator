@@ -28,6 +28,7 @@ import type {
   DeprecationMap,
   DepSymbol,
   ExportIndex,
+  CrossKitDropin,
   KitDepInfo,
 } from "../rules/types.js";
 
@@ -98,6 +99,7 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
   const entries: DeprecationEntry[] = [];
   const kitIndex: Record<string, KitDepInfo> = {};
   const exportIndex: ExportIndex = {};
+  const crossKitDropin: CrossKitDropin = {};
 
   for (const filePath of files) {
     let content: string;
@@ -165,6 +167,14 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
         if (sameKit && newName !== dep.exportName) {
           exportIndex[`${ownKit}\0${dep.exportName}`] = newName;
         }
+        // Cross-kit same-name drop-in (e.g. @system.router.RouterOptions ->
+        // @ohos.router.RouterOptions): the export moved to another kit under
+        // the same name. A named-import clause rewrites its specifier when
+        // every binding drops to the same target kit. Skip kits that already
+        // have a module-level move (rewrite-import handles them wholesale).
+        if (repl.kit && repl.kit !== ownKit && newName === dep.exportName && !kitIndex[ownKit]?.newKit) {
+          crossKitDropin[`${ownKit}\0${dep.exportName}`] = repl.kit;
+        }
       }
     });
   }
@@ -176,6 +186,7 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
     entries,
     kitIndex,
     exportIndex,
+    crossKitDropin,
   };
 }
 
@@ -211,7 +222,11 @@ function isInternal(filePath: string): boolean {
 
 /** Top-level files are `@ohos.*.d.ts` / `.d.ets` directly under api/. */
 function isTopLevel(filePath: string): boolean {
-  return basename(filePath).startsWith("@ohos.");
+  // `@ohos.*` are the current kits; `@system.*` are the legacy (pre-API-9)
+  // system kits, also top-level importable modules. No nested declaration
+  // file has an `@`-prefixed basename, so the prefix check is unambiguous.
+  const name = basename(filePath);
+  return name.startsWith("@ohos.") || name.startsWith("@system.");
 }
 
 function isEts(filePath: string): boolean {
