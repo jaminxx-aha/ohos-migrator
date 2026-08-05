@@ -123,11 +123,25 @@ never auto-written — they're reported for human review. Default is dry-run; pa
   `ComponentUtils`, `MeasureUtils`, `MediaQuery`, `UIInspector`, ... — to
   `<uiContextExpr>.get<Head>().<member>` (e.g.
   `prompt.showToast` -> `this.getUIContext().getPromptAction().showToast`),
-  using the `get<Head>()` accessor pattern. Other cross-kit replacements are
-  still manual — they require wiring changes (e.g. obtaining a `WindowStage` or
-  `Window` instance). A replacement chain whose kit prefix could not be
-  resolved, or whose leaf is identical to the deprecated symbol (a no-op), is
-  also left manual.
+  using the `get<Head>()` accessor pattern. The `@ohos.window` recipe
+  rewrites `WindowStage` / `Window` instance-method targets (e.g. FAModel
+  `Context.setShowOnLockScreen` -> `WindowStage.setShowOnLockScreen`) to
+  `<windowStageExpr>.<member>` / `<windowExpr>.<member>`, using caller-supplied
+  `--window-stage-expr` / `--window-expr` (there is no universal accessor — a
+  WindowStage comes from the UIAbility lifecycle, a Window from
+  `getLastWindow()`). Other cross-kit replacements are still manual — they
+  require wiring changes. A replacement chain whose kit prefix could not be
+  resolved, or whose leaf is identical to the deprecated symbol (a no-op), or
+  whose replacement kit equals the deprecated kit (a same-kit instance-method
+  rename), is also left manual.
+
+  Note: the member scanner resolves deprecated members only through
+  *imported bindings* (e.g. `router.pushUrl` where `router` is an import).
+  Instance methods reached through a runtime value — such as
+  `featureAbility.getContext().setShowOnLockScreen()` — are not detected
+  because the receiver is a local, not an import. The window recipe is
+  correct and unit-tested, but firing it on real FAModel code needs a
+  type-aware scanner upgrade (resolving `getContext()`'s return type).
 
 ## Development
 

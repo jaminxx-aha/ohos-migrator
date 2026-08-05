@@ -30,6 +30,10 @@ export interface MemberScanOptions {
   since?: number;
   /** Runtime expression yielding a UIContext, for cross-kit overrides. */
   uiContextExpr?: string;
+  /** Runtime expression yielding a WindowStage (window recipe). */
+  windowStageExpr?: string;
+  /** Runtime expression yielding a Window (window recipe). */
+  windowExpr?: string;
 }
 
 /** Per-kit index of deprecated members (entries that have a member chain). */
@@ -54,7 +58,11 @@ export interface MemberScanResult {
 export function scanProjectMembers(opts: MemberScanOptions): MemberScanResult {
   const { projectRoot, map } = opts;
   const since = opts.since ?? 0;
-  const uiContextExpr = opts.uiContextExpr ?? "this.getUIContext()";
+  const ctx = {
+    uiContextExpr: opts.uiContextExpr ?? "this.getUIContext()",
+    windowStageExpr: opts.windowStageExpr ?? "this.windowStage",
+    windowExpr: opts.windowExpr ?? "this.window",
+  };
   const memberIndex = buildMemberIndex(map);
   const files = walkFiles(projectRoot, { extensions: [".ts", ".ets"] });
   const findings: Finding[] = [];
@@ -84,7 +92,7 @@ export function scanProjectMembers(opts: MemberScanOptions): MemberScanResult {
           if (m.index === undefined) continue;
           const matchEnd = m.index + m[0].length;
           const f = memberFinding(
-            file, projectRoot, m.index, matchEnd, content, binding, members, e, uiContextExpr,
+            file, projectRoot, m.index, matchEnd, content, binding, members, e, ctx,
           );
           const key = `${f.file}:${f.line}:${f.oldSymbol}`;
           const prev = dedupe.get(key);
@@ -106,11 +114,11 @@ function memberFinding(
   binding: string,
   members: string[],
   e: DeprecationEntry,
-  uiContextExpr: string,
+  ctx: { uiContextExpr: string; windowStageExpr: string; windowExpr: string },
 ): Finding {
   const fileRel = relative(projectRoot, file).split(sep).join("/");
   const oldSymbol = `${binding}.${members.join(".")}`;
-  const ov = findMemberOverride(e.dep.kit, members, e.repl, uiContextExpr);
+  const ov = findMemberOverride(e.dep.kit, members, e.repl, ctx);
   const desc: MemberReplacement = ov
     ? { newSymbol: ov.replacement, rule: "override", note: ov.note, replacement: ov.replacement }
     : describeMemberReplacement(binding, e.dep.kit, members, e.repl);

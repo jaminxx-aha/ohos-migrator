@@ -48,9 +48,14 @@ export interface Recipe {
 export interface RecipeCtx {
   /** Expression yielding a UIContext (e.g. `this.getUIContext()`). */
   uiContextExpr: string;
+  /** Expression yielding a WindowStage (e.g. `this.windowStage`). */
+  windowStageExpr: string;
+  /** Expression yielding a Window (e.g. `this.window`). */
+  windowExpr: string;
 }
 
 const UICONTEXT_KIT = "@ohos.arkui.UIContext";
+const WINDOW_KIT = "@ohos.window";
 
 /**
  * UIContext recipe: every sub-object (Router, PromptAction, Font, Animator,
@@ -74,37 +79,63 @@ const uiContextRecipe: Recipe = {
 };
 
 /**
+ * Window recipe: `WindowStage` and `Window` instance methods (e.g. from the
+ * FAModel `Context.setShowOnLockScreen` -> `WindowStage.setShowOnLockScreen`,
+ * `setWakeUpScreen` -> `Window.setWakeUpScreen`). Unlike UIContext there is no
+ * universal `get<Head>()` accessor — a WindowStage comes from the UIAbility
+ * `onWindowStageCreate` lifecycle and a Window from `getLastWindow()` — so the
+ * receiver is a caller-supplied expression (`--window-stage-expr` / `--window-expr`).
+ */
+const windowRecipe: Recipe = {
+  resolve(head, leaf, ctx) {
+    const receiver =
+      head === "WindowStage" ? ctx.windowStageExpr : ctx.windowExpr;
+    const leafChain = leaf.length ? "." + leaf.join(".") : "";
+    return {
+      replacement: `${receiver}${leafChain}`,
+      note: `use ${head}${leafChain}`,
+    };
+  },
+};
+
+/**
  * Recipe table keyed by replacement kit. Add entries here to teach the
- * rewriter how to obtain other runtime receivers (e.g. a WindowStage from a
- * Window instance). Kits absent from the table fall back to manual.
+ * rewriter how to obtain other runtime receivers. Kits absent from the table
+ * fall back to manual.
  */
 const RECIPES: Record<string, Recipe> = {
   [UICONTEXT_KIT]: uiContextRecipe,
+  [WINDOW_KIT]: windowRecipe,
 };
 
 /**
  * Resolve an auto-fix override for a deprecated member, or null if none.
  *
+ * Recipes only apply to *cross-kit* replacements (repl.kit !== dep kit).
+ * Same-kit targets (e.g. `window.Window.show` -> `window.Window.showWindow`,
+ * a leaf rename within the same kit) are left to `describeMemberReplacement`
+ * so the recipe never mishandles a same-kit instance-method rename.
+ *
  * @param kit           deprecated symbol's kit
  * @param members       deprecated symbol's member chain (leaf last) — unused
  *                      by the current recipes but kept for future ones
  * @param repl          parsed @useinstead target (may be null)
- * @param uiContextExpr runtime expression yielding a UIContext
+ * @param ctx           caller-supplied runtime receiver expressions
  */
 export function findMemberOverride(
   kit: string,
   members: string[],
   repl: ReplSymbol | null,
-  uiContextExpr: string,
+  ctx: Pick<RecipeCtx, "uiContextExpr" | "windowStageExpr" | "windowExpr">,
 ): OverrideResult | null {
-  void kit;
   void members;
   if (!repl || !repl.kit) return null;
+  if (repl.kit === kit) return null; // same-kit -> not an override
   const recipe = RECIPES[repl.kit];
   if (!recipe) return null;
   if (!repl.members || repl.members.length === 0) return null;
 
   const head = repl.members[0];
   const leaf = repl.members.slice(1);
-  return recipe.resolve(head, leaf, { uiContextExpr });
+  return recipe.resolve(head, leaf, ctx);
 }

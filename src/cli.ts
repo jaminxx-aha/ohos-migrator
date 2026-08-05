@@ -76,6 +76,8 @@ program
   .option("--sdk <path>", "SDK ets/api directory (to build map if missing)")
   .option("--since <n>", "only rewrite deprecations with since <= N", (v) => Number(v), 0)
   .option("--ui-context <expr>", "UIContext expression for cross-kit overrides", "this.getUIContext()")
+  .option("--window-stage-expr <expr>", "WindowStage expression for window overrides", "this.windowStage")
+  .option("--window-expr <expr>", "Window expression for window overrides", "this.window")
   .option("--write", "write changes to disk (default: dry-run)")
   .action((opts) => {
     const map = loadMap(opts.sdk);
@@ -86,6 +88,8 @@ program
       map,
       since: opts.since || 0,
       uiContextExpr: opts.uiContext,
+      windowStageExpr: opts.windowStageExpr,
+      windowExpr: opts.windowExpr,
     });
     const findings = [...mod.findings, ...mem.findings];
     const result = rewriteProject(projectRoot, findings, { write: !!opts.write });

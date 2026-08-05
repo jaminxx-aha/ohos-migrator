@@ -617,3 +617,67 @@ test("rewrite: manual findings are never written", () => {
     cleanup(root);
   }
 });
+
+/* ------------------------------------------------------------------ */
+/* 4. Window recipe (WindowStage / Window cross-kit overrides)       */
+/* ------------------------------------------------------------------ */
+
+test("scan+rewrite: window WindowStage override end-to-end", () => {
+  // FAModel Context.setShowOnLockScreen -> WindowStage.setShowOnLockScreen.
+  // `context` is bound via the import so the member scanner can match it.
+  const root = makeTree({
+    "fa.ets": `
+import context from '@ohos.ability.featureAbility';
+context.setShowOnLockScreen(true);
+context.setWakeUpScreen(false);
+`,
+  });
+  try {
+    const map = mapOf([
+      entry("@ohos.ability.featureAbility", ["setShowOnLockScreen"],
+        { kit: "@ohos.window", members: ["WindowStage", "setShowOnLockScreen"] }, 9),
+      entry("@ohos.ability.featureAbility", ["setWakeUpScreen"],
+        { kit: "@ohos.window", members: ["Window", "setWakeUpScreen"] }, 12),
+    ]);
+    const { findings } = scanProjectMembers({
+      projectRoot: root, map,
+      windowStageExpr: "this.windowStage", windowExpr: "this.window",
+    });
+    const stage = bySymbol(findings, "context.setShowOnLockScreen");
+    const win = bySymbol(findings, "context.setWakeUpScreen");
+    assert.equal(stage?.rule, "override");
+    assert.equal(stage?.replacement, "this.windowStage.setShowOnLockScreen");
+    assert.equal(win?.rule, "override");
+    assert.equal(win?.replacement, "this.window.setWakeUpScreen");
+
+    rewriteProject(root, findings, { write: true });
+    const out = readFileSync(join(root, "fa.ets"), "utf8");
+    assert.ok(out.includes("this.windowStage.setShowOnLockScreen(true);"));
+    assert.ok(out.includes("this.window.setWakeUpScreen(false);"));
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("scan: same-kit window method rename is NOT overridden (manual)", () => {
+  // window.Window.show -> window.Window.showWindow is same-kit; the window
+  // recipe must not fire (would splice a wrong `this.window.showWindow`).
+  const root = makeTree({
+    "w.ets": `
+import window from '@ohos.window';
+window.Window.show();
+`,
+  });
+  try {
+    const map = mapOf([
+      entry("@ohos.window", ["Window", "show"],
+        { kit: "@ohos.window", members: ["Window", "showWindow"] }, 9),
+    ]);
+    const { findings } = scanProjectMembers({ projectRoot: root, map });
+    const f = bySymbol(findings, "window.Window.show");
+    assert.equal(f?.rule, "manual", "same-kit multi-segment -> manual, not override");
+    assert.equal(f?.replacement, undefined);
+  } finally {
+    cleanup(root);
+  }
+});
