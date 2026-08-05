@@ -166,6 +166,33 @@ declare namespace featureAbility {
   function getData(): void;
 }
 `,
+  // Transitive re-export (two levels): @ohos.fake imports Outer (named),
+  // Outer imports Inner. Inner must attribute to @ohos.fake, not @?.
+  "@ohos.fake.d.ts": `
+import { Outer } from './fake/outer';
+declare namespace fake { export type Outer = Outer; }
+`,
+  "fake/outer.d.ts": `
+import { Inner } from './inner';
+export interface Outer { inner: Inner; }
+`,
+  "fake/inner.d.ts": `
+export interface Inner {
+  /** @since 9 @deprecated since 10 @useinstead Inner#newName */
+  old: string;
+}
+`,
+  // Re-export statement: `export { Thing } from './mod/thing'` binds the
+  // nested file to this kit (the import-only tracer would miss it -> @?).
+  "@ohos.mod.d.ts": `
+export { Thing } from './mod/thing';
+`,
+  "mod/thing.d.ts": `
+export interface Thing {
+  /** @since 9 @deprecated since 10 @useinstead Thing#newName */
+  old: string;
+}
+`,
   // Legacy `@system.*` kits are top-level importable modules (pre-API-9),
   // not nested files. They must be attributed to their own kit, not `@?`.
   "@system.router.d.ts": `
@@ -242,6 +269,30 @@ test("indexer: legacy @system.* kits are top-level (not @? synthetic)", () => {
     assert.ok(ro, "RouterOptions indexed");
     assert.equal(ro?.dep.kit, "@system.router", "attributed to the @system kit, not @?");
     assert.equal(ro?.repl?.kit, "@ohos.router");
+  } finally {
+    cleanup(sdk);
+  }
+});
+
+test("indexer: transitive re-export attributes second-level nested files", () => {
+  const sdk = makeTree(SDK_FILES);
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const inner = map.entries.find((e) => e.dep.exportName === "Inner" && e.dep.members?.includes("old"));
+    assert.ok(inner, "Inner.old indexed");
+    assert.equal(inner?.dep.kit, "@ohos.fake", "second-level nested file attributed transitively");
+  } finally {
+    cleanup(sdk);
+  }
+});
+
+test("indexer: export re-export statement binds a nested file to the kit", () => {
+  const sdk = makeTree(SDK_FILES);
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const thing = map.entries.find((e) => e.dep.exportName === "Thing" && e.dep.members?.includes("old"));
+    assert.ok(thing, "Thing.old indexed");
+    assert.equal(thing?.dep.kit, "@ohos.mod", "attributed via `export { Thing } from`");
   } finally {
     cleanup(sdk);
   }

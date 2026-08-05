@@ -47,9 +47,13 @@ Parses every `@ohos.*` / `@system.*` `.d.ts` / `.d.ets` in the SDK `api/` tree
 `@deprecated since N` and their `@useinstead` replacement tokens. `@system.*`
 are the legacy (pre-API-9) system kits, also top-level importable modules.
 Subdirectory files are not themselves importable kits; their owning kit is
-resolved by tracing the re-export from a top-level `@ohos.*` / `@system.*` kit
-(`import * as _X from './dir/file'` or `import { Name } from './dir/file'`).
-The result is cached to:
+resolved by tracing re-exports from a top-level `@ohos.*` / `@system.*` kit
+*transitively to a fixpoint*: `import * as _X from './dir/file'`,
+`import { Name } from './dir/file'`, and `export { Name } from './dir/file'`
+/ `export * from './dir/file'`. A second-level type (e.g.
+`@ohos.bundle` -> `bundle/bundleInfo` -> `bundle/hapModuleInfo`) is attributed
+to the top-level kit, not left as an unresolved `@?` synthetic. The result is
+cached to:
 
 ```
 <project>/.harmony-deprecate/deprecation-map.<apiVersion>.json

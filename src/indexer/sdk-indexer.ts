@@ -20,7 +20,7 @@
 
 import { basename, dirname, resolve, sep } from "node:path";
 import { readFileSync } from "node:fs";
-import { Project, SyntaxKind, type Node, type ImportDeclaration } from "ts-morph";
+import { Project, SyntaxKind, type Node, type ImportDeclaration, type ExportDeclaration } from "ts-morph";
 import { walkFiles } from "../walk.js";
 import { parseUseinstead, toReplSymbol } from "./useinstead-parser.js";
 import type {
@@ -366,7 +366,17 @@ function buildReexportMap(
   nsImportKits: Map<string, string>,
   namedReexports: Map<string, string>,
 ): void {
-  for (const filePath of topLevelFiles) {
+  // Fixpoint worklist: seed with top-level files, then propagate. When a
+  // nested file is attributed to a kit (via a namespace or named re-export),
+  // process ITS imports too so second-level types (e.g.
+  // `@ohos.bundle` -> `bundle/bundleInfo` -> `bundle/hapModuleInfo`) are
+  // attributed to the same kit instead of falling through to `@?`.
+  const processed = new Set<string>();
+  const worklist: string[] = [...topLevelFiles];
+  while (worklist.length > 0) {
+    const filePath = worklist.shift()!;
+    if (processed.has(filePath)) continue;
+    processed.add(filePath);
     let content: string;
     try {
       content = readFileSync(filePath, "utf8");
@@ -375,7 +385,11 @@ function buildReexportMap(
     }
     const sourceFile = getOrCreateSourceFile(project, filePath, content);
     if (!sourceFile) continue;
-    const ownKit = "@" + kitFromFile(basename(filePath));
+    const ownKit = isTopLevel(filePath)
+      ? "@" + kitFromFile(basename(filePath))
+      : resolveOwnKit(filePath, nsImportKits, namedReexports);
+    // Don't propagate unresolved (`@?`) synthetic kits.
+    if (!ownKit || ownKit.startsWith("@?")) continue;
 
     for (const imp of sourceFile.getDescendantsOfKind(SyntaxKind.ImportDeclaration)) {
       const spec = normalizeSpecifier(imp);
@@ -383,6 +397,18 @@ function buildReexportMap(
       const target = resolveRelative(filePath, spec, fileSet);
       if (!target) continue;
       recordImport(imp, target, ownKit, nsImportKits, namedReexports);
+      if (!processed.has(target) && !isTopLevel(target)) worklist.push(target);
+    }
+    // Re-exports (`export { X } from './y'`, `export * from './y'`) also bind a
+    // nested file to this kit — e.g. `@ohos.arkui.modifier` re-exports every
+    // `*Modifier` file. Without this those files fall through to `@?`.
+    for (const exp of sourceFile.getDescendantsOfKind(SyntaxKind.ExportDeclaration)) {
+      const spec = exp.getModuleSpecifierValue?.();
+      if (!spec || (!spec.startsWith("./") && !spec.startsWith("../"))) continue;
+      const target = resolveRelative(filePath, spec, fileSet);
+      if (!target) continue;
+      recordExport(exp, target, ownKit, nsImportKits, namedReexports);
+      if (!processed.has(target) && !isTopLevel(target)) worklist.push(target);
     }
   }
 }
@@ -433,5 +459,31 @@ function recordImport(
   for (const nis of imp.getNamedImports()) {
     const imported = nis.getName(); // the imported (source) name
     namedReexports.set(`${targetFile}\0${imported}`, kit);
+  }
+}
+
+/**
+ * Record a re-export (`export { X } from './y'` / `export * from './y'`) the
+ * same way an import would be: it binds the target file's export(s) to this
+ * kit. `export { a as b }` attributes the source name `a`.
+ */
+function recordExport(
+  exp: ExportDeclaration,
+  targetFile: string,
+  kit: string,
+  nsImportKits: Map<string, string>,
+  namedReexports: Map<string, string>,
+): void {
+  // `export * from './y'` -> whole file belongs to kit.
+  const ns = exp.getNamespaceExport?.();
+  if (ns) {
+    if (!nsImportKits.has(targetFile)) nsImportKits.set(targetFile, kit);
+    return;
+  }
+  // `export { a, b as c } from './y'` -> each source name maps (file, name).
+  // (`a as b`: the target file exports `a`; read it from the compiler node.)
+  for (const ex of exp.getNamedExports()) {
+    const source = ex.compilerNode.propertyName?.getText() ?? ex.getName();
+    namedReexports.set(`${targetFile}\0${source}`, kit);
   }
 }
