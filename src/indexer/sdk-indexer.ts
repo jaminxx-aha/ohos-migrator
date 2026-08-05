@@ -199,6 +199,14 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
           if (repl.kit && repl.kit !== ownKit && newName === dep.exportName && !kitIndex[ownKit]?.newKit) {
             crossKitDropin[`${ownKit}\0${dep.exportName}`] = repl.kit;
           }
+          // Default-export move (e.g. `export default class Want` ->
+          // @ohos.app.ability.Want): a default import `import Want from '...'
+          // only needs its specifier rewritten (the local binding is the
+          // default export regardless of its class name), so key it under the
+          // sentinel "default" rather than the class name.
+          if (repl.kit && repl.kit !== ownKit && hasDefaultModifier(node) && !kitIndex[ownKit]?.newKit) {
+            crossKitDropin[`${ownKit}\0default`] = repl.kit;
+          }
           // Cross-kit different-name move (e.g. @ohos.fileio.fstat ->
           // @ohos.file.fs.stat): the export moved to another kit under a new
           // name. A named-import clause rewrites its specifier AND aliases each
@@ -321,6 +329,17 @@ function resolveOwnKit(
   }
   // Unresolved: synthetic, non-importable kit (kept for map completeness).
   return "@?" + basename(filePath).replace(/\.d\.(ts|ets)$/, "");
+}
+
+/** True when the node is a default export (`export default ...`). */
+function hasDefaultModifier(node: Node): boolean {
+  type WithModifiers = Node & { getModifiers?: () => { getKind: () => SyntaxKind }[] };
+  try {
+    const mods = (node as WithModifiers).getModifiers?.() ?? [];
+    return mods.some((m) => m.getKind() === SyntaxKind.DefaultKeyword);
+  } catch {
+    return false;
+  }
 }
 
 function isNameable(node: Node): boolean {

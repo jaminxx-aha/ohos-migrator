@@ -193,17 +193,24 @@ export function scanProjectCrossKitDropin(opts: ScanOptions): ScanResult {
   const files = collectSourceFiles(projectRoot);
   const findings: Finding[] = [];
 
-  // `kit\0export` -> since (min over entries), for the --since filter.
+  // `kit\0export` -> since (min over entries), for the --since filter. Covers
+  // member-chain repls (`repl.members[0]`), whole-export repls (`repl.exportName`),
+  // and default-export moves (the sentinel `default` key).
   const sinceFor: Record<string, number> = {};
   for (const e of map.entries) {
     if (!e.dep.members?.length && e.dep.exportName && e.repl?.kit) {
       const key = `${e.dep.kit}\0${e.dep.exportName}`;
-      const nm = e.repl.members?.[0];
+      const nm = e.repl.members?.length === 1 ? e.repl.members[0] : e.repl.exportName;
       // Same-name drop-in OR different-name cross-kit rename.
       const sameName = nm === e.dep.exportName && dropin[key] === e.repl.kit;
       const diffName = nm && nm !== e.dep.exportName && rename[key] === `${e.repl.kit}\0${nm}`;
       if (sameName || diffName) {
         sinceFor[key] = Math.min(sinceFor[key] ?? Infinity, e.since);
+      }
+      // Default-export move: the indexer set `kit\0default` for default exports.
+      const defKey = `${e.dep.kit}\0default`;
+      if (dropin[defKey] === e.repl.kit) {
+        sinceFor[defKey] = Math.min(sinceFor[defKey] ?? Infinity, e.since);
       }
     }
   }
@@ -235,15 +242,18 @@ export function scanProjectCrossKitDropin(opts: ScanOptions): ScanResult {
     }
     const fileRel = relative(projectRoot, file).split(sep).join("/");
     for (const imp of extractImports(content)) {
-      const named = imp.bindings.filter((b) => b.nameStart != null && b.nameEnd != null);
-      if (named.length === 0) continue;
+      // All bindings (default + named) that moved cross-kit. A default import
+      // (`import Want from '...'`) is keyed by the sentinel "default"; its
+      // binding cannot be aliased, so only the specifier is rewritten.
+      const bindings = imp.bindings;
+      if (bindings.length === 0) continue;
       let target: string | undefined;
       let depSince = 0;
       let ok = true;
-      const moves: { binding: (typeof named)[number]; kit: string; newName: string }[] = [];
-      for (const b of named) {
+      const moves: { binding: (typeof bindings)[number]; kit: string; newName: string }[] = [];
+      for (const b of bindings) {
         const m = resolve(imp.specifier, b.imported);
-        if (!m) { ok = false; break; }
+        if (!m) { ok = false; break; } // a binding that did not move cross-kit
         const s = sinceFor[`${imp.specifier}\0${b.imported}`] ?? 0;
         if (since && s > since) { ok = false; break; }
         if (target && m.kit !== target) { ok = false; break; } // mixed target kits
@@ -260,14 +270,15 @@ export function scanProjectCrossKitDropin(opts: ScanOptions): ScanResult {
         since: depSince,
         rule: "rewrite-import",
         needsManual: false,
-        note: `cross-kit drop-in -> rewrite specifier to ${target} (${named.length} binding${named.length > 1 ? "s" : ""})`,
+        note: `cross-kit drop-in -> rewrite specifier to ${target} (${bindings.length} binding${bindings.length > 1 ? "s" : ""})`,
       });
-      // Alias any binding whose export moved under a DIFFERENT name on the
-      // target kit: `import { fstat }` -> `import { stat as fstat }`. The local
-      // binding is preserved, so no body rewrite is needed. Same-name bindings
-      // keep their name (no alias). Only aliased bindings get a finding; the
-      // specifier rewrite above is emitted once per clause.
+      // Alias any NAMED binding whose export moved under a DIFFERENT name on
+      // the target kit: `import { fstat }` -> `import { stat as fstat }`. The
+      // local binding is preserved, so no body rewrite is needed. Same-name
+      // bindings (and default imports) keep their form. Only aliased named
+      // bindings get a finding; the specifier rewrite above is emitted once.
       for (const { binding: b, newName } of moves) {
+        if (b.imported === "default") continue; // default import — no alias
         if (newName === b.imported) continue;
         if (b.nameStart == null || b.nameEnd == null) continue;
         const replacement = b.local === b.imported ? `${newName} as ${b.local}` : newName;

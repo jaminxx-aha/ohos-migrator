@@ -225,6 +225,15 @@ export interface Configuration { lang: string }
   "@ohos.app.ability.Configuration.d.ts": `
 declare namespace Configuration {}
 `,
+  // Default-export move: `export default class Want` deprecated ->
+  // @ohos.app.ability.Want. A default import rewrites only the specifier.
+  "@ohos.application.Want.d.ts": `
+/** @since 8 @deprecated since 9 @useinstead ohos.app.ability.Want/Want */
+export default class Want { bundle: string }
+`,
+  "@ohos.app.ability.Want.d.ts": `
+declare namespace Want {}
+`,
 };
 
 test("indexer: top-level entries + module-move + bare-kit useinstead", () => {
@@ -282,6 +291,32 @@ test("indexer: whole-export @useinstead (repl.exportName) surfaces as cross-kit 
     );
   } finally {
     cleanup(sdk);
+  }
+});
+
+test("indexer + scan: default-export move rewrites a default import's specifier", () => {
+  // `export default class Want` -> @ohos.app.ability.Want: a default import
+  // `import Want from '@ohos.application.Want'` only needs its specifier
+  // rewritten; the local binding `Want` is the default export and stays.
+  const sdk = makeTree(SDK_FILES);
+  const root = makeTree({ "p.ts": `import Want from '@ohos.application.Want';\nconst w = new Want();` });
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    assert.equal(map.crossKitDropin?.["@ohos.application.Want\0default"], "@ohos.app.ability.Want");
+    const { findings } = scanProjectCrossKitDropin({ projectRoot: root, map });
+    const f = bySymbol(findings, "@ohos.application.Want");
+    assert.equal(f?.rule, "rewrite-import");
+    assert.equal(f?.newSymbol, "@ohos.app.ability.Want");
+    // No binding alias (default import cannot be aliased).
+    assert.equal(bySymbol(findings, "default"), undefined);
+    const res = rewriteProject(root, findings, { write: true });
+    const out = readFileSync(join(root, "p.ts"), "utf8");
+    assert.ok(out.includes("import Want from '@ohos.app.ability.Want';"), "specifier rewritten");
+    assert.ok(out.includes("new Want()"), "call site unchanged");
+    assert.equal(res.skippedManual, 0);
+  } finally {
+    cleanup(sdk);
+    cleanup(root);
   }
 });
 
