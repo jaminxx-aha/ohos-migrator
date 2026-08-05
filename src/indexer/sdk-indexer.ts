@@ -29,6 +29,7 @@ import type {
   DepSymbol,
   ExportIndex,
   CrossKitDropin,
+  ReplSymbol,
   KitDepInfo,
 } from "../rules/types.js";
 
@@ -150,12 +151,14 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
       }
 
       const sourceLine = node.getStartLineNumber() ?? 0;
+      const instanceSafe = verifyInstanceSafe(node, dep, repl, ownKit, kitIndex);
       entries.push({
         dep,
         since,
         repl,
         kind: isModuleMove ? "module-move" : "member",
         source: { file: filePath, line: sourceLine },
+        ...(instanceSafe ? { instanceSafe: true } : {}),
       });
 
       // Same-kit export-name rename (e.g. @ohos.UiTest `By` -> `On`): a
@@ -349,6 +352,47 @@ function computeIdentity(
     dep.exportName = ownName;
   }
   return { dep, isNamespaceLevel };
+}
+
+/**
+ * Verify an instance-method single-leaf rename is safe to splice on a typed
+ * receiver: the replacement leaf must be declared as a (sibling) member of
+ * the same enclosing interface/class. Without this, splicing `var.<leaf>` ->
+ * `var.<repl leaf>` could write a namespace-function name onto an instance
+ * and break (e.g. `i18n.I18NUtil.getUnicodeWrappedFilePath` -> the namespace
+ * function `getUnicodeWrappedFilePath`, which is NOT an instance member).
+ *
+ * Conservative: only same-kit (or kit-move-aligned) single-leaf renames on a
+ * directly-enclosing named type whose name matches dep.members[0].
+ */
+function verifyInstanceSafe(
+  node: Node,
+  dep: DepSymbol,
+  repl: ReplSymbol | null,
+  ownKit: string,
+  kitIndex: Record<string, KitDepInfo>,
+): boolean {
+  if (!repl || !repl.members || repl.members.length !== 1) return false;
+  if (!dep.members || dep.members.length < 2 || !dep.exportName) return false;
+  const newLeaf = repl.members[0];
+  const oldLeaf = dep.members[dep.members.length - 1];
+  if (newLeaf === oldLeaf) return false; // no-op
+  const sameKit = !repl.kit || repl.kit === ownKit;
+  const aligned = !!(repl.kit && kitIndex[ownKit]?.newKit === repl.kit);
+  if (!sameKit && !aligned) return false;
+  // Nearest enclosing interface/class; its name must match dep.members[0]
+  // (the type the deprecated method lives on).
+  const typeAncestor =
+    node.getFirstAncestorByKind(SyntaxKind.InterfaceDeclaration) ??
+    node.getFirstAncestorByKind(SyntaxKind.ClassDeclaration);
+  if (!typeAncestor) return false;
+  type Named = Node & { getName?: () => string | undefined };
+  if (typeAncestor.getName?.() !== dep.members[0]) return false;
+  const members = (typeAncestor as unknown as { getMembers?: () => Named[] }).getMembers?.() ?? [];
+  for (const m of members) {
+    if (m.getName?.() === newLeaf) return true;
+  }
+  return false;
 }
 
 /**

@@ -180,19 +180,35 @@ never auto-written — they're reported for human review. Default is dry-run; pa
   targets resolve to the real kit and surface as clean `rename-export` aliases
   instead of being misclassified as unresolved manuals.
 
+- **Instance-method scanner (typed receiver).** The binding-only member
+  scanner sees `router.pushUrl` (receiver = import) but misses
+  `rm.getString()` where `rm` is a *typed local variable*
+  (`let rm: resourceManager.ResourceManager`). A second pass resolves
+  variable types from imports (`ns.Type` qualified or `T` named-import) via
+  regex (works on `.ts` and `.ets` alike, no tsc) and matches deprecated
+  instance members on the resolved receiver. An entry is auto-spliced
+  (`rename-member`, e.g. `rm.getString` -> `rm.getStringValue`) only when the
+  indexer has **verified** the replacement leaf is a sibling member of the same
+  enclosing interface/class in the SDK (`instanceSafe`) — otherwise the
+  replacement is a namespace function / different receiver and the call site is
+  reported manual (naming the `@useinstead` target) rather than silently
+  missed. FA-model -> stageless receiver changes (`ctx.setShowOnLockScreen` ->
+  `windowStage.setShowOnLockScreen`) are detected this way.
+
   Other cross-kit replacements whose chain also changes (FA-model -> stageless
   migrations, where both the kit and the call convention move) are still manual
   — they require wiring changes. A replacement chain whose kit prefix could not
   be resolved, or whose leaf is identical to the deprecated symbol (a no-op),
-  is also left manual.
+  is also left manual. Receivers reached through a runtime value with no
+  explicit type annotation (`const ctx = featureAbility.getContext()`) are
+  still missed — a later tsc-based increment would resolve them.
 
-  Note: the member scanner resolves deprecated members only through
-  *imported bindings* (e.g. `router.pushUrl` where `router` is an import).
-  Instance methods reached through a runtime value — such as
-  `featureAbility.getContext().setShowOnLockScreen()` — are not detected
-  because the receiver is a local, not an import. The window recipe is
-  correct and unit-tested, but firing it on real FAModel code needs a
-  type-aware scanner upgrade (resolving `getContext()`'s return type).
+  Note: instance methods reached through an *explicitly-typed* local
+  (`let ctx: Context; ctx.setShowOnLockScreen()`) are detected by the
+  instance-method scanner above. Receivers reached through a runtime value
+  with no type annotation — such as `featureAbility.getContext().setShowOnLockScreen()`
+  — are still not detected; resolving those needs a type-aware (tsc) scanner
+  upgrade that infers `getContext()`'s return type.
 
 ## Development
 

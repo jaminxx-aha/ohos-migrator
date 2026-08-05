@@ -25,7 +25,7 @@ import { tmpdir } from "node:os";
 
 import { buildDeprecationMap } from "./indexer/sdk-indexer.js";
 import { scanProject, scanProjectExportRenames, scanProjectCrossKitDropin } from "./scanner/scanner.js";
-import { scanProjectMembers } from "./scanner/member-scanner.js";
+import { scanProjectMembers, scanProjectInstanceMembers } from "./scanner/member-scanner.js";
 import { rewriteProject } from "./rewriter/rewriter.js";
 import type { DeprecationMap, DeprecationEntry, ReplSymbol } from "./rules/types.js";
 
@@ -1130,4 +1130,107 @@ import { access, hash } from '@ohos.fileio';
   } finally {
     cleanup(root);
   }
+});
+
+/* 7. instance-method scanner (typed receiver, e.g. `m.getString()` where
+ * `m` is typed `resourceManager.ResourceManager`). The binding-only scanner
+ * misses these; the instance scanner resolves the var's type via imports. */
+/* ------------------------------------------------------------------ */
+
+function instanceMap(): DeprecationMap {
+  // shape 1: namespace.type.leaf -> leaf (instanceSafe verified -> auto)
+  const safe: DeprecationEntry = {
+    dep: { kit: "@ohos.fake", exportName: "fake", members: ["Mgr", "old"] },
+    since: 9, repl: { kit: "@ohos.fake", members: ["new"] }, kind: "member",
+    source: { file: "", line: 0 }, instanceSafe: true,
+  };
+  // shape 1, same leaf, NOT instanceSafe (method -> namespace fn) -> manual
+  const nsfn: DeprecationEntry = {
+    dep: { kit: "@ohos.fake", exportName: "fake", members: ["Mgr", "op"] },
+    since: 20, repl: { kit: "@ohos.fake", members: ["op"] }, kind: "member",
+    source: { file: "", line: 0 },
+  };
+  // shape 2: type.leaf cross-kit (FA->stageless) -> manual
+  const fa: DeprecationEntry = {
+    dep: { kit: "@ohos.ability.featureAbility", exportName: "Context", members: ["setShowOnLockScreen"] },
+    since: 9, repl: { kit: "@ohos.window", members: ["WindowStage", "setShowOnLockScreen"] }, kind: "member",
+    source: { file: "", line: 0 },
+  };
+  return mapOf([safe, nsfn, fa]);
+}
+
+test("scan: instance-method rename on a typed param is auto-fixable", () => {
+  const root = makeTree({
+    "p.ets": `
+import fake from '@ohos.fake';
+function f(m: fake.Mgr) { m.old(); }
+`,
+  });
+  try {
+    const { findings } = scanProjectInstanceMembers({ projectRoot: root, map: instanceMap() });
+    const r = bySymbol(findings, "m.old");
+    assert.equal(r?.rule, "rename-member");
+    assert.equal(r?.replacement, "m.new");
+  } finally { cleanup(root); }
+});
+
+test("scan: method->namespace-function (same leaf, not instanceSafe) is manual", () => {
+  const root = makeTree({
+    "p.ets": `
+import fake from '@ohos.fake';
+function f(m: fake.Mgr) { m.op(); }
+`,
+  });
+  try {
+    const { findings } = scanProjectInstanceMembers({ projectRoot: root, map: instanceMap() });
+    const r = bySymbol(findings, "m.op");
+    assert.equal(r?.rule, "manual");
+    assert.equal(r?.needsManual, true);
+    assert.equal(r?.replacement, undefined, "no splice — receiver changes to the namespace");
+  } finally { cleanup(root); }
+});
+
+test("scan: FA->stageless instance method is detected (not a silent miss)", () => {
+  const root = makeTree({
+    "p.ets": `
+import fa from '@ohos.ability.featureAbility';
+function f(ctx: fa.Context) { ctx.setShowOnLockScreen(true); }
+`,
+  });
+  try {
+    const { findings } = scanProjectInstanceMembers({ projectRoot: root, map: instanceMap() });
+    const r = bySymbol(findings, "ctx.setShowOnLockScreen");
+    assert.equal(r?.rule, "manual");
+    assert.ok(r?.note.includes("@ohos.window/WindowStage.setShowOnLockScreen"));
+  } finally { cleanup(root); }
+});
+
+test("scan: untyped receiver is NOT detected (no false positive)", () => {
+  const root = makeTree({
+    "p.ets": `
+import fake from '@ohos.fake';
+function f() { let m = getMgr(); m.old(); }
+`,
+  });
+  try {
+    const { findings } = scanProjectInstanceMembers({ projectRoot: root, map: instanceMap() });
+    assert.equal(findings.length, 0, "untyped var not resolved -> no finding");
+  } finally { cleanup(root); }
+});
+
+test("rewrite: instance-method rename splices the receiver's leaf", () => {
+  const root = makeTree({
+    "p.ets": `
+import fake from '@ohos.fake';
+function f(m: fake.Mgr) { m.old(); m.op(); }
+`,
+  });
+  try {
+    const { findings } = scanProjectInstanceMembers({ projectRoot: root, map: instanceMap() });
+    const res = rewriteProject(root, findings, { write: true });
+    const out = readFileSync(join(root, "p.ets"), "utf8");
+    assert.ok(out.includes("m.new()"), "auto-fix applied");
+    assert.ok(out.includes("m.op()"), "manual left untouched");
+    assert.equal(res.skippedManual, 1);
+  } finally { cleanup(root); }
 });

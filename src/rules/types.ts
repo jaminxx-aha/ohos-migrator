@@ -28,6 +28,13 @@ export interface DeprecationEntry {
   repl: ReplSymbol | null;
   kind: DepKind;
   source: { file: string; line: number };
+  /**
+   * True when this is an instance-method single-leaf rename whose replacement
+   * leaf is declared as a sibling member of the same enclosing interface/class
+   * in the SDK (verified at index time). Lets the instance-method scanner
+   * splice `var.<leaf>` -> `var.<repl leaf>` safely; absent otherwise.
+   */
+  instanceSafe?: boolean;
 }
 
 /** Per-kit summary used by the scanner for import-level matching. */

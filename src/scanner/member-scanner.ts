@@ -340,6 +340,210 @@ export function extractBindingMap(content: string): BindingMap {
   return map;
 }
 
+/* ------------------------------------------------------------------ */
+/* Instance-method scanner — resolves typed local variables as the    */
+/* receiver (e.g. `let r: resourceManager.ResourceManager; r.getString()`),*/
+/* which the binding-only scanner above cannot see.                   */
+/* ------------------------------------------------------------------ */
+
+/** A typed variable resolved to its declaring kit + the type's head name. */
+export interface TypedVar {
+  kit: string;
+  /** The type name segment used to key the instance index. */
+  typeHead: string;
+}
+
+/**
+ * Resolve a type expression (from a `let v: <expr>` or param annotation) to
+ * `(kit, typeHead)` using the import binding->kit map.
+ *   - Qualified `ns.Type`  -> kit of the `ns` binding, typeHead `Type`.
+ *   - Simple `T`           -> kit of the `T` named-import binding, typeHead `T`.
+ * Deeper qualified names (`a.b.c`), generics, and unions are not inferred.
+ */
+function resolveType(
+  typeExpr: string,
+  bindingKit: BindingMap,
+): TypedVar | undefined {
+  const parts = typeExpr.split(".");
+  if (parts.length === 1) {
+    const kit = bindingKit.get(parts[0]);
+    return kit ? { kit, typeHead: parts[0] } : undefined;
+  }
+  if (parts.length === 2) {
+    const kit = bindingKit.get(parts[0]);
+    return kit ? { kit, typeHead: parts[1] } : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Build variable-name -> TypedVar from typed declarations and params. Works on
+ * both `.ts` and `.ets` (regex, no tsc). Only explicitly-typed bindings are
+ * resolved; untyped `let v = expr()` is missed (a later tsc-based increment).
+ */
+export function extractTypedVars(content: string, bindingKit: BindingMap): Map<string, TypedVar> {
+  const out = new Map<string, TypedVar>();
+  // `let|const|var v : <TypeExpr>`
+  const decl =
+    /(?:let|const|var)\s+([A-Za-z_$][\w$]*)\s*:\s*([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)/g;
+  // function/arrow params: `(v: T` or `, v?: T` (optional `?`)
+  const param =
+    /[(,]\s*([A-Za-z_$][\w$]*)\??\s*:\s*([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)/g;
+  for (const re of [decl, param]) {
+    for (const m of content.matchAll(re)) {
+      const resolved = resolveType(m[2], bindingKit);
+      if (resolved) out.set(m[1], resolved);
+    }
+  }
+  return out;
+}
+
+/** Per (kit, typeHead) index of deprecated instance members. */
+export interface InstanceIndexEntry {
+  /** The member chain accessed on the receiver, NOT including the type. */
+  accessChain: string[];
+  entry: DeprecationEntry;
+}
+
+export function buildInstanceIndex(map: DeprecationMap): Map<string, InstanceIndexEntry[]> {
+  const exportIndex = map.exportIndex ?? {};
+  const exportRenamed = (e: DeprecationEntry) =>
+    !!e.dep.exportName && !!exportIndex[`${e.dep.kit}\0${e.dep.exportName}`];
+  const idx = new Map<string, InstanceIndexEntry[]>();
+  for (const e of map.entries) {
+    if (!e.dep.members || e.dep.members.length === 0 || e.dep.members.length > 2) continue;
+    if (!e.dep.exportName) continue;
+    if (exportRenamed(e)) continue; // covered by the rename-export alias
+    // Shape 1: members=[Type, leaf] -> type=members[0], access=members.slice(1).
+    // Shape 2: members=[leaf]      -> type=exportName, access=members.
+    const typeHead =
+      e.dep.members.length >= 2 ? e.dep.members[0] : e.dep.exportName;
+    const accessChain =
+      e.dep.members.length >= 2 ? e.dep.members.slice(1) : e.dep.members.slice();
+    const key = `${e.dep.kit}\0${typeHead}`;
+    (idx.get(key) ?? idx.set(key, []).get(key)!).push({ accessChain, entry: e });
+  }
+  return idx;
+}
+
+export interface InstanceScanResult {
+  findings: Finding[];
+  filesScanned: number;
+}
+
+/**
+ * Scan for deprecated instance-method usages reached through a typed local
+ * variable (the receiver), e.g. `r.getString()` where `r` is typed
+ * `resourceManager.ResourceManager`. The binding-only `scanProjectMembers`
+ * misses these (the receiver is not an import name).
+ *
+ * - `instanceSafe` entries (SDK-verified sibling rename) -> `rename-member`,
+ *   splicing `var.<leaf>` -> `var.<repl leaf>` on the same receiver.
+ * - Everything else (cross-kit receiver change / namespace-function repl /
+ *   unverified) -> `manual`, naming the @useinstead target. Crucially this
+ *   turns a silent miss into a reported finding.
+ */
+export function scanProjectInstanceMembers(opts: MemberScanOptions): InstanceScanResult {
+  const { projectRoot, map } = opts;
+  const since = opts.since ?? 0;
+  const kitMove: KitMoveResolver = (k) => map.kitIndex[k]?.newKit;
+  const instanceIndex = buildInstanceIndex(map);
+  const files = walkFiles(projectRoot, { extensions: [".ts", ".ets"] });
+  const findings: Finding[] = [];
+  const dedupe = new Map<string, Finding>();
+
+  for (const file of files) {
+    let content: string;
+    try {
+      content = readFileSync(file, "utf8");
+    } catch {
+      continue;
+    }
+    const fileRel = relative(projectRoot, file).split(sep).join("/");
+    const bindingKit = extractBindingMap(content);
+    const typedVars = extractTypedVars(content, bindingKit);
+
+    for (const [varName, { kit, typeHead }] of typedVars) {
+      const entries = instanceIndex.get(`${kit}\0${typeHead}`);
+      if (!entries) continue;
+      for (const { accessChain, entry: e } of entries) {
+        if (since && e.since > since) continue;
+        const pattern = varName + "\\." + accessChain.map(escapeRe).join("\\.");
+        const re = new RegExp(`\\b${pattern}\\b`, "g");
+        for (const m of content.matchAll(re)) {
+          if (m.index === undefined) continue;
+          const matchEnd = m.index + m[0].length;
+          const oldSymbol = `${varName}.${accessChain.join(".")}`;
+          const f = instanceFinding(
+            fileRel, m.index, matchEnd, content, varName, accessChain, e, kitMove,
+          );
+          if (!f) continue; // suppressed (e.g. no-op)
+          const key = `${f.file}:${f.line}:${f.oldSymbol}`;
+          const prev = dedupe.get(key);
+          if (!prev || (prev.needsManual && !f.needsManual)) dedupe.set(key, f);
+        }
+      }
+    }
+  }
+
+  const deduped = dedupeOverlappingSpans([...dedupe.values()]);
+  return { findings: deduped, filesScanned: files.length };
+}
+
+function instanceFinding(
+  file: string,
+  offset: number,
+  matchEnd: number,
+  content: string,
+  varName: string,
+  accessChain: string[],
+  e: DeprecationEntry,
+  kitMove: KitMoveResolver,
+): Finding | null {
+  const oldSymbol = `${varName}.${accessChain.join(".")}`;
+  const repl = e.repl;
+  if (!repl || !repl.members || repl.members.length === 0) {
+    return {
+      file, line: lineAt(content, offset), oldSymbol, newSymbol: null,
+      since: e.since, rule: "manual", needsManual: true,
+      note: "no @useinstead replacement",
+    };
+  }
+  const sameKit = !repl.kit || repl.kit === e.dep.kit;
+  const aligned = !!(repl.kit && kitMove(e.dep.kit) === repl.kit);
+  // No-op: a VERIFIED instance method whose replacement leaf equals the
+  // deprecated leaf (self-referential). NB: when instanceSafe is false and
+  // the leaf is equal, the replacement is a namespace function (e.g.
+  // `i18n.I18NUtil.getUnicodeWrappedFilePath` -> the namespace fn
+  // `getUnicodeWrappedFilePath`) — the receiver changes, so it is NOT a no-op;
+  // fall through to manual.
+  const newLeaf = repl.members[repl.members.length - 1];
+  const oldLeaf = accessChain[accessChain.length - 1];
+  if (e.instanceSafe && repl.members.length === 1 && newLeaf === oldLeaf) {
+    return null; // suppress — identical splice would be a confusing no-op
+  }
+  // Auto-fix: verified instance-safe same-kit/aligned single-leaf rename.
+  if (e.instanceSafe && (sameKit || aligned) && repl.members.length === 1) {
+    const replacement = `${varName}.${repl.members[0]}`;
+    return {
+      file, line: lineAt(content, offset), oldSymbol, newSymbol: replacement,
+      since: e.since, rule: "rename-member", needsManual: false,
+      note: `rename instance member -> ${repl.members[0]}`,
+      matchStart: offset, matchEnd, replacement,
+    };
+  }
+  // Otherwise: report manual, naming the @useinstead target so it is not a
+  // silent miss (cross-kit receiver change, namespace-function repl, etc.).
+  const target = repl.kit
+    ? `${repl.kit}/${repl.members.join(".")}`
+    : repl.members.join(".");
+  return {
+    file, line: lineAt(content, offset), oldSymbol, newSymbol: target,
+    since: e.since, rule: "manual", needsManual: true,
+    note: `instance method -> ${target} (requires wiring changes)`,
+  };
+}
+
 function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

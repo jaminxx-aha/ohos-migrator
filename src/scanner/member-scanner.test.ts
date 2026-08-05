@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildMemberIndex, extractBindingMap, describeMemberReplacement } from "./member-scanner.js";
+import { buildMemberIndex, extractBindingMap, extractTypedVars, describeMemberReplacement } from "./member-scanner.js";
 import type { DeprecationMap, DeprecationEntry, ReplSymbol } from "../rules/types.js";
 
 function entry(kit: string, members: string[], repl: ReplSymbol | null): DeprecationEntry {
@@ -188,4 +188,27 @@ test("describeMemberReplacement: cross-kit without alignment is manual", () => {
   );
   assert.equal(r.rule, "manual");
   assert.ok(r.note.includes("@ohos.unrelated"));
+});
+
+test("extractTypedVars: resolves qualified and simple types from imports", () => {
+  const content = `
+import rm from '@ohos.resourceManager';
+import { Context } from '@ohos.ability.featureAbility';
+let r: rm.ResourceManager = null;
+const c: Context = null;
+function f(ctx: Context, u: rm.ResourceManager) {}
+let untyped = null;
+let generic: Array<string> = [];
+`;
+  const bindings = extractBindingMap(content);
+  const vars = extractTypedVars(content, bindings);
+  assert.equal(vars.get("r")?.kit, "@ohos.resourceManager");
+  assert.equal(vars.get("r")?.typeHead, "ResourceManager");
+  assert.equal(vars.get("c")?.kit, "@ohos.ability.featureAbility");
+  assert.equal(vars.get("c")?.typeHead, "Context");
+  assert.equal(vars.get("ctx")?.typeHead, "Context");
+  assert.equal(vars.get("u")?.typeHead, "ResourceManager");
+  // Untyped and generic declarations are NOT inferred (no false positive).
+  assert.equal(vars.get("untyped"), undefined);
+  assert.equal(vars.get("generic"), undefined);
 });
