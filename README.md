@@ -41,9 +41,13 @@ node dist/cli.js index                       # auto-detect SDK
 node dist/cli.js index --sdk "E:\\DevEco Studio\\sdk\\default\\openharmony\\ets\\api"
 ```
 
-Parses every `@ohos.*.d.ts` in the SDK `api/` directory, extracting declarations
-annotated with `@deprecated since N` and their `@useinstead` replacement tokens.
-The result is cached to:
+Parses every `@ohos.*.d.ts` / `.d.ets` in the SDK `api/` tree (recursively,
+including subdirectory declaration files such as `bundleManager/ApplicationInfo.d.ts`),
+extracting declarations annotated with `@deprecated since N` and their
+`@useinstead` replacement tokens. Subdirectory files are not themselves
+importable kits; their owning kit is resolved by tracing the re-export from a
+top-level `@ohos.*` kit (`import * as _X from './dir/file'` or
+`import { Name } from './dir/file'`). The result is cached to:
 
 ```
 <project>/.harmony-deprecate/deprecation-map.<apiVersion>.json
@@ -92,7 +96,9 @@ never auto-written — they're reported for human review. Default is dry-run; pa
 ```
 
 - **Indexer** uses `ts-morph` (TypeScript compiler API) for accurate AST-level
-  JSDoc and symbol-identity extraction from the standard `.d.ts` files.
+  JSDoc and symbol-identity extraction from the standard `.d.ts` / `.d.ets`
+  files, recursively across the `api/` tree. Nested declaration files are
+  attributed to their owning top-level kit via re-export tracing.
 - **Scanner** is deliberately regex/offset based and tolerant: ArkUI `.ets`
   uses `struct` / `@Component` / `build()` syntax that `tsc` cannot parse, so a
   full AST parse is avoided. Import specifiers and member accesses are matched
@@ -102,18 +108,26 @@ never auto-written — they're reported for human review. Default is dry-run; pa
 
 ## Limitations
 
-- **`.d.ets` is not indexed** (phase 1 covers `@ohos.*.d.ts` only). ArkUI
-  component-related API deprecations in `.d.ets` are not detected.
+- **`.d.ets` is indexed** alongside `.d.ts` (parsed as TS declarations). Note
+  that only a handful of ArkUI component `.d.ets` files carry `@deprecated`
+  markers today; the bulk of deprecations live in `.d.ts`.
 - **Member-level detection is heuristic, not type-checked.** Binding resolution
   from imports keeps false positives low, but shadowing can still occur. Treat
   scan output as a review report, not an authoritative linter verdict.
 - **What is auto-rewritten.** The rewriter applies three rule kinds: import
   specifiers (`rewrite-import`), same-kit member renames (`rename-member`, e.g.
   `Window.create` -> `Window.createWindow`), and the data-driven
-  `@ohos.arkui.UIContext.Router` override. Cross-kit replacements are always
-  manual — they require wiring changes (e.g. obtaining a runtime `UIContext`).
-  A replacement chain whose kit prefix could not be resolved is also left
-  manual, to avoid producing a wrong same-kit rewrite.
+  `@ohos.arkui.UIContext` recipe. The UIContext recipe rewrites any deprecated
+  member whose `@useinstead` points at a UIContext sub-object — `Router`,
+  `PromptAction`, `Font`, `Animator`, `DragController`, `ComponentSnapshot`,
+  `ComponentUtils`, `MeasureUtils`, `MediaQuery`, `UIInspector`, ... — to
+  `<uiContextExpr>.get<Head>().<member>` (e.g.
+  `prompt.showToast` -> `this.getUIContext().getPromptAction().showToast`),
+  using the `get<Head>()` accessor pattern. Other cross-kit replacements are
+  still manual — they require wiring changes (e.g. obtaining a `WindowStage` or
+  `Window` instance). A replacement chain whose kit prefix could not be
+  resolved, or whose leaf is identical to the deprecated symbol (a no-op), is
+  also left manual.
 
 ## Development
 

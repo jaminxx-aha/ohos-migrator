@@ -168,6 +168,17 @@ export function describeMemberReplacement(
   // A bare @useinstead with no resolved kit is only trustworthy as a single
   // segment; a multi-segment chain without a kit is a parse artifact.
   const trustworthy = repl.kit ? true : repl.members.length === 1;
+  // No-op: the replacement leaf matches the deprecated leaf (e.g. an API kept
+  // under the same name but flagged for removal). Splicing an identical symbol
+  // would be a confusing no-op diff; report it for review instead.
+  const isNoOp = flat && leaf === depMembers[depMembers.length - 1];
+  if (isNoOp) {
+    return {
+      newSymbol: `${binding}.${leaf}`,
+      rule: "manual",
+      note: "replacement identical to deprecated symbol (review needed)",
+    };
+  }
   if (sameKit && flat && trustworthy) {
     const replacement = `${binding}.${leaf}`;
     return {

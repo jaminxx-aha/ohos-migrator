@@ -71,11 +71,18 @@ export function parseUseinstead(
     // `Type#member` or bare member: handled below.
   } else {
     // Bare-identifier short form (no ohos. prefix, no leading / . #).
-    // The leading identifier up to the first `.`/`#` is the export name;
-    // a lone bare member with no separator stays a member.
+    // If the leading identifier (up to the first `.`/`#`) matches a known
+    // kit (`ohos.<head>`), treat it as the kit — e.g.
+    // `reminderAgentManager.publishReminder` -> @ohos.reminderAgentManager.
+    // Otherwise the leading identifier is the export name; a lone bare
+    // member with no separator stays a member.
     const stop = rest.search(/[.#]/);
-    if (stop !== -1) {
-      exportName = rest.slice(0, stop);
+    const head = stop === -1 ? rest : rest.slice(0, stop);
+    if (head && knownKits.has("ohos." + head)) {
+      kit = "ohos." + head;
+      rest = stop === -1 ? "" : rest.slice(stop);
+    } else if (stop !== -1) {
+      exportName = head;
       rest = rest.slice(stop); // now starts with `.` or `#`
     }
   }

@@ -44,6 +44,16 @@ test("no ohos prefix and no fallback leaves kit undefined", () => {
   assert.deepEqual(r.members, ["pushUrl"]);
 });
 
+test("bare identifier matching a known kit resolves as kit", () => {
+  // `reminderAgentManager` is a known kit (ohos.reminderAgentManager); a bare
+  // token like `reminderAgentManager.publishReminder` must resolve its kit
+  // rather than falling back to the importing file's kit.
+  const kits = new Set([...KITS, "ohos.reminderAgentManager"]);
+  const r = parseUseinstead("reminderAgentManager.publishReminder", kits, "@ohos.reminderAgent");
+  assert.equal(r.kit, "@ohos.reminderAgentManager");
+  assert.deepEqual(r.members, ["publishReminder"]);
+});
+
 test("toReplSymbol normalizes kit with leading @", () => {
   const r = toReplSymbol(parseUseinstead("ohos.router/Router.pushUrl", KITS));
   assert.equal(r.kit, "@ohos.router");
