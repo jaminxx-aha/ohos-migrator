@@ -117,9 +117,14 @@ never auto-written — they're reported for human review. Default is dry-run; pa
 - **What is auto-rewritten.** The rewriter applies these rule kinds:
   - `rewrite-import` — replace the quoted import specifier when a kit moved
     (e.g. `@ohos.reminderAgent` -> `@ohos.reminderAgentManager`).
-  - `rename-member` — same-kit member renames (e.g.
-    `Window.create` -> `Window.createWindow`, or a multi-segment leaf rename
-    `AtManager.verifyAccessToken` -> `AtManager.checkAccessToken`).
+  - `rename-member` — same-kit (or kit-move-aligned) chain renames where the
+    replacement chain has the **same length** as the deprecated one. The
+    matched `binding.<old chain>` is spliced to `binding.<new chain>`. This
+    covers a leaf-only rename (`Window.create` -> `Window.createWindow`), a
+    container/mid-segment rename (`rpc.MessageParcel.create` ->
+    `rpc.MessageSequence.create`), or both (`media.MediaErrorCode.MSERR_OK` ->
+    `media.AVErrorCode.AVERR_OK`). When the chain length differs the call shape
+    changed and the finding stays manual.
   - `rename-export` — same-kit export/class renames, applied as a *safe alias*
     that preserves the local binding: `import { By }` ->
     `import { On as By }` so every `By.text` / `new By()` reference resolves to
@@ -146,9 +151,17 @@ never auto-written — they're reported for human review. Default is dry-run; pa
   binding that `rewrite-import` re-points. The scanner then treats it as
   effectively same-kit: if the member chain is unchanged the finding is
   *suppressed* (redundant with the import rewrite — no false-positive manual);
-  if only the leaf changes it is a `rename-member` on the re-pointed binding
-  (e.g. `@ohos.bluetooth` -> `@ohos.bluetoothManager` kit move plus
-  `bluetooth.getProfileConnState` -> `bluetooth.getProfileConnectionState`).
+  if the chain changes with the same length it is a `rename-member` on the
+  re-pointed binding (e.g. `@ohos.bluetooth` -> `@ohos.bluetoothManager` kit
+  move plus `bluetooth.getProfileConnState` ->
+  `bluetooth.getProfileConnectionState`).
+
+- **Nested-match overlap dedup.** The SDK often deprecates both a class
+  (`rpc.MessageParcel` -> `rpc.MessageSequence`) and its members
+  (`rpc.MessageParcel.create` -> `rpc.MessageSequence.create`). Both
+  regex-match the same call site; the scanner keeps only the longer (more
+  specific) finding per span, and the rewriter drops overlapping edits, so the
+  text is spliced once without corruption.
 
 - **Case-insensitive kit resolution.** The SDK occasionally uses a wrong-cased
   kit qualifier in `@useinstead` (e.g. `ohos.uitest.Component` for

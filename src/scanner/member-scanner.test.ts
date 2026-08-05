@@ -61,13 +61,34 @@ test("describeMemberReplacement: same-kit rename with kit set is auto-fixable", 
   assert.equal(r.replacement, "display.getDefaultDisplaySync");
 });
 
-test("describeMemberReplacement: multi-segment replacement without a kit is manual", () => {
+test("describeMemberReplacement: same-kit multi-segment replacement without a kit is manual", () => {
   // Parse artifact: kit prefix not resolved -> must not be auto-applied.
   const r = describeMemberReplacement("dataStorage", "@ohos.data.storage", ["getStorage"], {
     members: ["preferences", "preferences", "getPreferences"],
   });
   assert.equal(r.rule, "manual");
   assert.equal(r.replacement, undefined);
+});
+
+test("describeMemberReplacement: same-kit container-rename is rename-member", () => {
+  // `rpc.MessageParcel.create` -> `rpc.MessageSequence.create`: same kit, same
+  // length, a non-leaf (container) segment changes. The whole chain is spliced.
+  const r = describeMemberReplacement("rpc", "@ohos.rpc", ["MessageParcel", "create"], {
+    kit: "@ohos.rpc", members: ["MessageSequence", "create"],
+  });
+  assert.equal(r.rule, "rename-member");
+  assert.equal(r.newSymbol, "rpc.MessageSequence.create");
+  assert.equal(r.replacement, "rpc.MessageSequence.create");
+});
+
+test("describeMemberReplacement: same-kit full-chain rename (container+leaf) is rename-member", () => {
+  // `media.MediaErrorCode.MSERR_OK` -> `media.AVErrorCode.AVERR_OK`: both the
+  // container and the leaf change, same length -> spliced wholesale.
+  const r = describeMemberReplacement("media", "@ohos.multimedia.media", ["MediaErrorCode", "MSERR_OK"], {
+    kit: "@ohos.multimedia.media", members: ["AVErrorCode", "AVERR_OK"],
+  });
+  assert.equal(r.rule, "rename-member");
+  assert.equal(r.replacement, "media.AVErrorCode.AVERR_OK");
 });
 
 test("describeMemberReplacement: cross-kit replacement is manual", () => {
@@ -130,13 +151,27 @@ test("describeMemberReplacement: aligned leaf-rename is rename-member", () => {
   assert.ok(r.note.includes("kit move"));
 });
 
-test("describeMemberReplacement: aligned prefix-diff stays manual", () => {
-  // Kit moves but the member chain's prefix also changes — not a simple leaf
-  // rename on the re-pointed binding, so it stays manual.
+test("describeMemberReplacement: aligned container-rename is rename-member", () => {
+  // Kit moves and a non-leaf (container) segment changes on the re-pointed
+  // binding, same length, leaf preserved -> a same-length chain splice.
   const kitMove = (k: string) => (k === "@ohos.a" ? "@ohos.b" : undefined);
   const r = describeMemberReplacement(
     "a", "@ohos.a", ["Flags", "X"],
     { kit: "@ohos.b", members: ["Y", "X"] },
+    kitMove,
+  );
+  assert.equal(r.rule, "rename-member");
+  assert.equal(r.newSymbol, "a.Y.X");
+  assert.equal(r.replacement, "a.Y.X");
+  assert.ok(r.note.includes("kit move"));
+});
+
+test("describeMemberReplacement: aligned length-diff stays manual", () => {
+  // Kit moves but the chain length changes — call shape changed, not a splice.
+  const kitMove = (k: string) => (k === "@ohos.a" ? "@ohos.b" : undefined);
+  const r = describeMemberReplacement(
+    "a", "@ohos.a", ["Flags", "X"],
+    { kit: "@ohos.b", members: ["Y"] },
     kitMove,
   );
   assert.equal(r.rule, "manual");

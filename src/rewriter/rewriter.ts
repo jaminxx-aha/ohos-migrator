@@ -92,21 +92,49 @@ export function rewriteProject(
     }
     if (edits.length === 0) continue;
 
-    edits.sort((a, b) => b.start - a.start);
+    // Drop overlapping edits. Member-chain matches can nest: e.g. a class
+    // rename `rpc.MessageParcel` and its method `rpc.MessageParcel.create`
+    // both match the same call site, and applying both corrupts the text
+    // (`...createte()`). Keep the longest (most specific) match per span and
+    // discard any edit whose range it subsumes or overlaps.
+    const deduped = dedupeOverlapping(edits);
+
+    deduped.sort((a, b) => b.start - a.start);
     let next = content;
-    for (const e of edits) {
+    for (const e of deduped) {
       next = next.slice(0, e.start) + e.text + next.slice(e.end);
     }
 
     if (options.write) writeFileSync(absPath, next, "utf8");
     changedFiles.push({
       file: relFile,
-      edits: edits.map((e) => ({ line: e.line, from: e.from, to: e.to })),
-      diff: renderDiff(content, next, edits),
+      edits: deduped.map((e) => ({ line: e.line, from: e.from, to: e.to })),
+      diff: renderDiff(content, next, deduped),
     });
   }
 
   return { changedFiles, skippedManual };
+}
+
+/**
+ * Remove edits whose range overlaps an earlier (longer / more specific) edit.
+ * Edits are ordered by start ascending, then by end descending so the longest
+ * match at a given offset wins. An edit is dropped when it starts before the
+ * previous kept edit ends (containment or partial overlap). Touching ranges
+ * (start == prev end) are kept — they are adjacent, independent edits.
+ */
+function dedupeOverlapping<T extends { start: number; end: number }>(edits: T[]): T[] {
+  const sorted = [...edits].sort((a, b) => a.start - b.start || b.end - a.end);
+  const kept: T[] = [];
+  const seen = new Set<string>();
+  for (const e of sorted) {
+    const key = `${e.start}\0${e.end}`;
+    if (seen.has(key)) continue; // duplicate exact span (keep first)
+    if (kept.length && e.start < kept[kept.length - 1].end) continue; // overlaps
+    seen.add(key);
+    kept.push(e);
+  }
+  return kept;
 }
 
 function renderDiff(

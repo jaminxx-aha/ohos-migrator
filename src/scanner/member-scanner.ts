@@ -116,7 +116,44 @@ export function scanProjectMembers(opts: MemberScanOptions): MemberScanResult {
     }
   }
 
-  return { findings: [...dedupe.values()], filesScanned: files.length };
+  // Drop findings whose match span is subsumed by a longer match at the same
+  // call site. The SDK marks both a class rename (`rpc.MessageParcel` ->
+  // `rpc.MessageSequence`) and its members (`rpc.MessageParcel.create` ->
+  // `rpc.MessageSequence.create`); both regex-match the same source span and
+  // would double-report / produce overlapping rewriter edits. Keep the longer
+  // (more specific) match per span.
+  const deduped = dedupeOverlappingSpans([...dedupe.values()]);
+  return { findings: deduped, filesScanned: files.length };
+}
+
+/**
+ * Keep the longest member finding per overlapping match span (per file).
+ * Findings without a match span (e.g. manual / rewrite-import) pass through.
+ */
+function dedupeOverlappingSpans(findings: Finding[]): Finding[] {
+  const withSpan = findings.filter(
+    (f): f is Finding & { matchStart: number; matchEnd: number } =>
+      f.matchStart != null && f.matchEnd != null,
+  );
+  const without = findings.filter((f) => f.matchStart == null || f.matchEnd == null);
+  // Group by file, sort longest-first, drop any whose span overlaps a kept one.
+  const byFile = new Map<string, Array<Finding & { matchStart: number; matchEnd: number }>>();
+  for (const f of withSpan) {
+    const arr = byFile.get(f.file) ?? [];
+    arr.push(f);
+    byFile.set(f.file, arr);
+  }
+  const kept: Finding[] = [...without];
+  for (const arr of byFile.values()) {
+    const sorted = [...arr].sort((a, b) => a.matchStart - b.matchStart || b.matchEnd - a.matchEnd);
+    let lastEnd = -1;
+    for (const f of sorted) {
+      if (f.matchStart < lastEnd) continue; // overlaps a kept (longer) span
+      kept.push(f);
+      lastEnd = f.matchEnd;
+    }
+  }
+  return kept;
 }
 
 function memberFinding(
@@ -188,20 +225,26 @@ export type KitMoveResolver = (depKit: string) => string | undefined;
 /**
  * Classify a deprecated member's replacement.
  *
- * - Same-kit rename (repl.kit absent, or repl.kit === dep.kit) on a matching
- *   prefix is auto-fixable: only the leaf (or deeper chain) changes ->
- *   `rename-member`. When the prefix AND leaf are identical the replacement is
- *   a no-op (parse artifact / self-referential) and is flagged for review.
+ * - Same-kit rename (repl.kit absent, or repl.kit === dep.kit) on a same-length
+ *   chain is auto-fixable: the matched `binding.<dep chain>` is spliced to
+ *   `binding.<repl chain>` -> `rename-member`. This covers a leaf-only rename
+ *   (`router.push` -> `router.pushUrl`), a container/mid-segment rename
+ *   (`rpc.MessageParcel.create` -> `rpc.MessageSequence.create`), or both
+ *   (`media.MediaErrorCode.MSERR_OK` -> `media.AVErrorCode.AVERR_OK`). When the
+ *   full chain is identical the replacement is a no-op (self-referential) and is
+ *   flagged for review.
  * - A cross-kit replacement whose `repl.kit` equals the deprecated kit's
  *   indexed move target (`kitMove(dep.kit) === repl.kit`) is treated as
  *   same-kit too: `rewrite-import` re-points the binding to `repl.kit`, so the
- *   member is reached on the same binding. If the chain is unchanged there the
- *   member finding is *suppressed* (redundant with the import rewrite); if only
- *   the leaf changes it is a `rename-member` on the re-pointed binding.
+ *   member is reached on the same binding. Same rules then apply (suppress on a
+ *   no-op, `rename-member` on a same-length chain change).
  * - Any other cross-kit target is `manual` (requires wiring changes). A
  *   multi-segment replacement chain with no resolved kit is a parse artifact
  *   (the kit prefix wasn't recognised) and is treated as `manual` rather than
- *   silently producing a wrong same-kit rewrite.
+ *   silently producing a wrong same-kit rewrite. A replacement chain whose
+ *   length differs from the deprecated chain is also `manual` — the call shape
+ *   changed (e.g. an instance method becoming a namespace function), which a
+ *   text splice cannot express.
  */
 export function describeMemberReplacement(
   binding: string,
@@ -214,7 +257,6 @@ export function describeMemberReplacement(
     return { newSymbol: null, rule: "manual", note: "no @useinstead replacement" };
   }
   const rMembers = repl.members;
-  const leaf = rMembers[rMembers.length - 1];
   // A cross-kit target that lines up with the deprecated kit's indexed module
   // move is "effectively same-kit": the import rewrite re-points the binding.
   const aligned = !!(repl.kit && kitMove && kitMove(depKit) === repl.kit);
@@ -222,15 +264,10 @@ export function describeMemberReplacement(
   // A bare @useinstead with no resolved kit is only trustworthy as a single
   // segment; a multi-segment chain without a kit is a parse artifact.
   const trustworthy = repl.kit ? true : rMembers.length === 1;
-  // No-op: the full replacement chain equals the deprecated chain (same prefix
-  // AND same leaf) AND the kit is unchanged (or aligned with a kit move). When
-  // the kit genuinely differs, an identical chain is a cross-kit drop-in, not a
-  // self-referential no-op — so it must fall through to the cross-kit branch.
-  const prefixSame =
-    depMembers.length > 0 &&
-    depMembers.length === rMembers.length &&
-    depMembers.slice(0, -1).every((x, i) => x === rMembers[i]);
-  const isNoOp = sameKit && prefixSame && leaf === depMembers[depMembers.length - 1];
+  // The replacement is a same-length chain splice only when the shapes match.
+  const sameLength = depMembers.length > 0 && depMembers.length === rMembers.length;
+  const chainEqual = sameLength && depMembers.every((x, i) => x === rMembers[i]);
+  const isNoOp = sameKit && chainEqual;
   if (isNoOp) {
     // If the chain is unchanged AND the kit is moved to exactly this
     // replacement kit, `rewrite-import` already migrates every call site of
@@ -249,13 +286,11 @@ export function describeMemberReplacement(
       note: "replacement identical to deprecated symbol (review needed)",
     };
   }
-  // Same-kit leaf rename at any depth (e.g.
-  // `abilityAccessCtrl.AtManager.verifyAccessToken` ->
-  // `abilityAccessCtrl.AtManager.checkAccessToken`): the container chain is
-  // unchanged, only the leaf moves. Requires a resolved kit (trustworthy) for
-  // multi-segment chains to avoid parse artifacts. Also covers an aligned
-  // cross-kit move where only the leaf differs on the re-pointed binding.
-  if (sameKit && trustworthy && prefixSame && depMembers.length > 0) {
+  // Same-kit (or kit-move-aligned) chain rename at any depth. The matched
+  // `binding.<dep chain>` is spliced to `binding.<repl chain>`. Requires a
+  // resolved kit (trustworthy) for multi-segment chains to avoid parse
+  // artifacts, and equal lengths so the call shape is preserved.
+  if (sameKit && trustworthy && sameLength) {
     const chain = rMembers.join(".");
     const replacement = `${binding}.${chain}`;
     return {

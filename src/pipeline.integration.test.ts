@@ -499,6 +499,85 @@ test("rewrite: aligned kit move + member rename both apply", () => {
 
 /* module-level */
 
+/* same-kit container-rename + nested-match overlap dedup:
+ * `rpc.MessageParcel.create` -> `rpc.MessageSequence.create` (a non-leaf
+ * segment changes, same length). The SDK also deprecates the class itself
+ * (`rpc.MessageParcel` -> `rpc.MessageSequence`); both regex-match the same
+ * call site, so the scanner must keep only the longer finding and the
+ * rewriter must not corrupt the text by splicing twice. */
+
+function containerProject(): string {
+  return makeTree({
+    "page.ets": `
+import rpc from '@ohos.rpc';
+import media from '@ohos.multimedia.media';
+const p = rpc.MessageParcel.create();
+const e = media.MediaErrorCode.MSERR_IO;
+`,
+  });
+}
+
+function containerMap(): DeprecationMap {
+  return mapOf([
+    // class-level rename (would overlap the method match below)
+    entry("@ohos.rpc", ["MessageParcel"], { kit: "@ohos.rpc", members: ["MessageSequence"] }, 9),
+    // method-level: container segment changes, leaf preserved
+    entry("@ohos.rpc", ["MessageParcel", "create"], { kit: "@ohos.rpc", members: ["MessageSequence", "create"] }, 9),
+    // container + leaf both change
+    entry("@ohos.multimedia.media", ["MediaErrorCode"], { kit: "@ohos.multimedia.media", members: ["AVErrorCode"] }, 11),
+    entry("@ohos.multimedia.media", ["MediaErrorCode", "MSERR_IO"], { kit: "@ohos.multimedia.media", members: ["AVErrorCode", "AVERR_IO"] }, 11),
+  ]);
+}
+
+test("scan: same-kit container-rename is rename-member (whole chain spliced)", () => {
+  const root = containerProject();
+  try {
+    const { findings } = scanProjectMembers({ projectRoot: root, map: containerMap() });
+    const f = bySymbol(findings, "rpc.MessageParcel.create");
+    assert.equal(f?.rule, "rename-member");
+    assert.equal(f?.replacement, "rpc.MessageSequence.create");
+    const m = bySymbol(findings, "media.MediaErrorCode.MSERR_IO");
+    assert.equal(m?.rule, "rename-member");
+    assert.equal(m?.replacement, "media.AVErrorCode.AVERR_IO");
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("scan: nested class+method matches collapse to the longer finding", () => {
+  const root = containerProject();
+  try {
+    const { findings } = scanProjectMembers({ projectRoot: root, map: containerMap() });
+    // The shorter `rpc.MessageParcel` finding is subsumed by the longer
+    // `rpc.MessageParcel.create` finding at the same call site -> not emitted.
+    assert.equal(bySymbol(findings, "rpc.MessageParcel"), undefined);
+    assert.ok(bySymbol(findings, "rpc.MessageParcel.create"), "longer finding kept");
+    assert.equal(bySymbol(findings, "media.MediaErrorCode"), undefined);
+    assert.ok(bySymbol(findings, "media.MediaErrorCode.MSERR_IO"), "longer finding kept");
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("rewrite: container-rename splices the whole chain without corruption", () => {
+  const root = containerProject();
+  try {
+    const { findings } = scanProjectMembers({ projectRoot: root, map: containerMap() });
+    const res = rewriteProject(root, findings, { write: true });
+    const page = res.changedFiles.find((c) => c.file === "page.ets");
+    assert.ok(page, "page.ets changed");
+    // Final file content: whole chains spliced, no overlap-corruption, no leftovers.
+    const out = readFileSync(join(root, "page.ets"), "utf8");
+    assert.ok(out.includes("rpc.MessageSequence.create()"), "method chain spliced");
+    assert.ok(out.includes("media.AVErrorCode.AVERR_IO"), "enum chain spliced");
+    assert.ok(!out.includes("createte"), "no corrupted splice");
+    assert.ok(!out.includes("MessageParcel"), "no leftover old class name");
+    assert.ok(!out.includes("MSERR_IO"), "no leftover old enum value");
+  } finally {
+    cleanup(root);
+  }
+});
+
 function moduleProject(): string {
   return makeTree({
     "page.ets": `
