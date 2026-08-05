@@ -18,7 +18,7 @@
  * `@internal/**` is skipped.
  */
 
-import { basename, dirname, resolve, sep } from "node:path";
+import { basename, dirname, relative, resolve, sep } from "node:path";
 import { readFileSync } from "node:fs";
 import { Project, SyntaxKind, type Node, type ImportDeclaration, type ExportDeclaration } from "ts-morph";
 import { walkFiles } from "../walk.js";
@@ -101,6 +101,7 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
   const kitIndex: Record<string, KitDepInfo> = {};
   const exportIndex: ExportIndex = {};
   const crossKitDropin: CrossKitDropin = {};
+  const fileKit: Record<string, string> = {};
 
   for (const filePath of files) {
     let content: string;
@@ -112,6 +113,7 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
     const sourceFile = getOrCreateSourceFile(project, filePath, content);
     if (!sourceFile) continue;
     const ownKit = resolveOwnKit(filePath, nsImportKits, namedReexports);
+    fileKit[toRelPath(filePath, sdkApiDir)] = ownKit;
 
     sourceFile.forEachDescendant((node) => {
       if (!isNameable(node)) return;
@@ -190,7 +192,13 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
     kitIndex,
     exportIndex,
     crossKitDropin,
+    fileKit,
   };
+}
+
+/** SDK api-tree path (forward slashes, relative to sdkApiDir). */
+function toRelPath(filePath: string, sdkApiDir: string): string {
+  return relative(sdkApiDir, filePath).split(sep).join("/");
 }
 
 /** Merge a kit summary, keeping the lowest `since` and respecting precedence. */

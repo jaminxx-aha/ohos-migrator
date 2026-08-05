@@ -72,6 +72,14 @@ export interface DeprecationMap {
   exportIndex?: ExportIndex;
   /** Cross-kit same-name export moves (per-clause named-import drop-in). */
   crossKitDropin?: CrossKitDropin;
+  /**
+   * Declaration-file -> kit attribution (path relative to sdkPath, forward
+   * slashes, keyed by the SDK `api/` tree path). Built by the indexer's
+   * re-export tracing so the type-aware (tsc) scanner can map a resolved
+   * type's declaration file back to its owning kit — the same attribution
+   * the dep entries use, keeping lookup keys consistent.
+   */
+  fileKit?: Record<string, string>;
 }
 
 /** Rule kind the rewriter may apply. */

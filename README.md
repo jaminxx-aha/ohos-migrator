@@ -210,6 +210,25 @@ never auto-written — they're reported for human review. Default is dry-run; pa
   — are still not detected; resolving those needs a type-aware (tsc) scanner
   upgrade that infers `getContext()`'s return type.
 
+- **Type-aware instance scanner (`.ts`, tsc).** The regex instance scanner only
+  resolves *explicitly-typed* receivers (`let v: T`). It misses the common case
+  of an *untyped* local whose type comes from a factory call, e.g.
+  `const ctx = featureAbility.getContext()` (sync, returns `Context`) or
+  `const win = await window.getLastWindow()` (a `Promise<Window>` unwrapped by
+  `await`). A second pass runs the TypeScript compiler (ts-morph) over the
+  project's `.ts` files — `.ets` is excluded, since ArkUI `struct` / `build()`
+  syntax `tsc` cannot parse — type-checking them against the SDK declaration
+  files. For each property access it resolves the receiver's type, maps the
+  type's declaration file back to its owning kit via the indexer's persisted
+  file→kit attribution, then reuses the instance index and the same
+  `instanceSafe`/manual classification as the regex pass. This turns previously
+  *silent misses* into reported findings (manual for cross-kit FA→stageless and
+  Window instance methods; auto `rename-member` for verified `instanceSafe`
+  renames like `rm.getString` -> `rm.getStringValue`), and handles `Promise`
+  unwrapping on `await` for free. The pass degrades gracefully: if the SDK is
+  no longer on disk or the project has no `.ts` files, it returns nothing and
+  the regex scanner remains the source of truth.
+
 ## Development
 
 ```bash

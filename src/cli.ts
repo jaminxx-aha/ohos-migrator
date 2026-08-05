@@ -15,6 +15,7 @@ import { scanProject } from "./scanner/scanner.js";
 import { scanProjectExportRenames } from "./scanner/scanner.js";
 import { scanProjectCrossKitDropin } from "./scanner/scanner.js";
 import { scanProjectMembers, scanProjectInstanceMembers } from "./scanner/member-scanner.js";
+import { scanProjectInstanceMembersTsc } from "./scanner/tsc-instance-scanner.js";
 import { rewriteProject } from "./rewriter/rewriter.js";
 import { printScanSummary, printRewriteSummary } from "./report.js";
 import {
@@ -64,12 +65,13 @@ program
     const mod = scanProject({ projectRoot, map, since: opts.since || 0 });
     const mem = scanProjectMembers({ projectRoot, map, since: opts.since || 0 });
     const ins = scanProjectInstanceMembers({ projectRoot, map, since: opts.since || 0 });
+    const tsc = scanProjectInstanceMembersTsc({ projectRoot, map, since: opts.since || 0 });
     const exp = scanProjectExportRenames({ projectRoot, map, since: opts.since || 0 });
     const drp = scanProjectCrossKitDropin({ projectRoot, map, since: opts.since || 0 });
-    const findings = [...mod.findings, ...mem.findings, ...ins.findings, ...exp.findings, ...drp.findings];
+    const findings = [...mod.findings, ...mem.findings, ...ins.findings, ...tsc.findings, ...exp.findings, ...drp.findings];
     console.log(
       printScanSummary(
-        { findings, filesScanned: Math.max(mod.filesScanned, mem.filesScanned, ins.filesScanned, exp.filesScanned, drp.filesScanned) },
+        { findings, filesScanned: Math.max(mod.filesScanned, mem.filesScanned, ins.filesScanned, tsc.filesScanned, exp.filesScanned, drp.filesScanned) },
       ),
     );
   });
@@ -106,7 +108,15 @@ program
       windowStageExpr: opts.windowStageExpr,
       windowExpr: opts.windowExpr,
     });
-    const findings = [...mod.findings, ...mem.findings, ...ins.findings, ...exp.findings, ...drp.findings];
+    const tsc = scanProjectInstanceMembersTsc({
+      projectRoot,
+      map,
+      since: opts.since || 0,
+      uiContextExpr: opts.uiContext,
+      windowStageExpr: opts.windowStageExpr,
+      windowExpr: opts.windowExpr,
+    });
+    const findings = [...mod.findings, ...mem.findings, ...ins.findings, ...tsc.findings, ...exp.findings, ...drp.findings];
     const result = rewriteProject(projectRoot, findings, { write: !!opts.write });
     console.log(printRewriteSummary(result, !!opts.write));
   });

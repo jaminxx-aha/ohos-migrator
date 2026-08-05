@@ -130,7 +130,7 @@ export function scanProjectMembers(opts: MemberScanOptions): MemberScanResult {
  * Keep the longest member finding per overlapping match span (per file).
  * Findings without a match span (e.g. manual / rewrite-import) pass through.
  */
-function dedupeOverlappingSpans(findings: Finding[]): Finding[] {
+export function dedupeOverlappingSpans(findings: Finding[]): Finding[] {
   const withSpan = findings.filter(
     (f): f is Finding & { matchStart: number; matchEnd: number } =>
       f.matchStart != null && f.matchEnd != null,
@@ -490,7 +490,7 @@ export function scanProjectInstanceMembers(opts: MemberScanOptions): InstanceSca
   return { findings: deduped, filesScanned: files.length };
 }
 
-function instanceFinding(
+export function instanceFinding(
   file: string,
   offset: number,
   matchEnd: number,
