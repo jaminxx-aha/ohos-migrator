@@ -81,8 +81,11 @@ declare namespace window {
   export interface Window {
     setWakeUpScreen(visible: boolean): void;
     setScreenBrightness(b: number): void;
+    show(): void;
+    showWindow(): void;
   }
   export function getLastWindow(): Promise<Window>;
+  export function createWindow(c: any): Promise<Window>;
 }
 export default window;`,
 };
@@ -191,6 +194,41 @@ function f() {
       ]);
     const r = scanProjectInstanceMembersTsc({ projectRoot: proj, map });
     assert.equal(r.findings.length, 0, "getStringValue is not deprecated — no finding");
+  } finally {
+    rm(sdk);
+    rm(proj);
+  }
+});
+
+test("tsc instance scanner: type-preserving 2-seg repl -> auto rename (Window.show)", () => {
+  // `Window.show` -> repl `[Window, showWindow]`: the type is restated in the
+  // repl chain but only the leaf changes. instanceSafe-verified -> auto splice.
+  const sdk = makeTree(SDK);
+  const proj = makeTree({
+    "src/logic.ts": `
+import window from '@ohos.window';
+async function f() {
+  const win = await window.createWindow({ name: 'x' } as any);
+  win.show();
+}
+`,
+  });
+  try {
+    const map = mkMap(sdk, [
+      {
+        dep: { kit: "@ohos.window", exportName: "window", members: ["Window", "show"] },
+        since: 9,
+        repl: { kit: "@ohos.window", members: ["Window", "showWindow"] },
+        kind: "member",
+        source: { file: "", line: 0 },
+        instanceSafe: true,
+      } as DeprecationEntry,
+    ]);
+    const r = scanProjectInstanceMembersTsc({ projectRoot: proj, map });
+    const f = r.findings.find((x) => x.oldSymbol === "win.show");
+    assert.ok(f, "expected a finding for win.show");
+    assert.equal(f!.rule, "rename-member");
+    assert.equal(f!.replacement, "win.showWindow");
   } finally {
     rm(sdk);
     rm(proj);

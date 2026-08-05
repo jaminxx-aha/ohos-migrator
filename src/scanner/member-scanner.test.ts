@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildMemberIndex, extractBindingMap, extractTypedVars, describeMemberReplacement } from "./member-scanner.js";
+import { buildMemberIndex, extractBindingMap, extractTypedVars, describeMemberReplacement, instanceFinding } from "./member-scanner.js";
 import type { DeprecationMap, DeprecationEntry, ReplSymbol } from "../rules/types.js";
 
 function entry(kit: string, members: string[], repl: ReplSymbol | null): DeprecationEntry {
@@ -211,4 +211,67 @@ let generic: Array<string> = [];
   // Untyped and generic declarations are NOT inferred (no false positive).
   assert.equal(vars.get("untyped"), undefined);
   assert.equal(vars.get("generic"), undefined);
+});
+
+// --- instanceFinding: type-preserving leaf rename ----------------------
+// A two-segment repl whose first segment restates the (unchanged) type, e.g.
+// `Window.show` -> repl `[Window, showWindow]`. With instanceSafe verified, the
+// scanner splices `var.show` -> `var.showWindow` on the same receiver.
+
+function instEntry(
+  kit: string,
+  exportName: string,
+  members: string[],
+  repl: ReplSymbol | null,
+  opts: { instanceSafe?: boolean } = {},
+): DeprecationEntry {
+  return {
+    dep: { kit, exportName, members },
+    since: 9,
+    repl,
+    kind: "member",
+    source: { file: "", line: 0 },
+    ...(opts.instanceSafe ? { instanceSafe: true } : {}),
+  };
+}
+
+const noMove = () => undefined;
+
+test("instanceFinding: type-preserving 2-seg repl + instanceSafe -> rename-member", () => {
+  // Window.show -> Window.showWindow, verified sibling.
+  const e = instEntry("@ohos.window", "window", ["Window", "show"],
+    { kit: "@ohos.window", members: ["Window", "showWindow"] }, { instanceSafe: true });
+  const f = instanceFinding("p.ts", 0, 10, "win.show();", "win", ["show"], e, noMove);
+  assert.ok(f);
+  assert.equal(f!.rule, "rename-member");
+  assert.equal(f!.replacement, "win.showWindow");
+});
+
+test("instanceFinding: type-preserving 2-seg repl without instanceSafe -> manual", () => {
+  // Same shape but NOT sibling-verified -> must not auto-splice.
+  const e = instEntry("@ohos.window", "window", ["Window", "show"],
+    { kit: "@ohos.window", members: ["Window", "showWindow"] });
+  const f = instanceFinding("p.ts", 0, 10, "win.show();", "win", ["show"], e, noMove);
+  assert.ok(f);
+  assert.equal(f!.rule, "manual");
+  assert.ok(f!.newSymbol!.includes("showWindow"));
+});
+
+test("instanceFinding: 2-seg repl that changes the type -> manual", () => {
+  // repl[0] !== typeHead (the type moves) -> not a same-receiver splice.
+  const e = instEntry("@ohos.window", "window", ["Window", "show"],
+    { kit: "@ohos.window", members: ["OtherType", "showWindow"] }, { instanceSafe: true });
+  const f = instanceFinding("p.ts", 0, 10, "win.show();", "win", ["show"], e, noMove);
+  assert.ok(f);
+  assert.equal(f!.rule, "manual");
+});
+
+test("instanceFinding: single-leaf instanceSafe still auto-fixes", () => {
+  // resourceManager.ResourceManager.getString -> getStringValue (single-seg repl).
+  const e = instEntry("@ohos.resourceManager", "resourceManager", ["ResourceManager", "getString"],
+    { kit: "@ohos.resourceManager", members: ["getStringValue"] }, { instanceSafe: true });
+  const f = instanceFinding("p.ts", 0, 12, "rm.getString();", "rm", ["getString"], e, noMove);
+  assert.ok(f);
+  assert.equal(f!.rule, "rename-member");
+  assert.equal(f!.replacement, "rm.getStringValue");
 });

@@ -511,24 +511,34 @@ export function instanceFinding(
   }
   const sameKit = !repl.kit || repl.kit === e.dep.kit;
   const aligned = !!(repl.kit && kitMove(e.dep.kit) === repl.kit);
+  // Resolve the replacement leaf for a same-type instance rename. Two shapes
+  // (mirroring `verifyInstanceSafe`): a single-segment repl, or a two-segment
+  // repl whose first segment restates the unchanged type (e.g.
+  // `Window.show` -> repl `[Window, showWindow]`).
+  const typeHead = e.dep.members && e.dep.members.length >= 2 ? e.dep.members[0] : e.dep.exportName;
+  const isTypePreservingLeaf =
+    repl.members.length === 2 && !!typeHead && repl.members[0] === typeHead;
+  let newLeaf: string | undefined;
+  if (repl.members.length === 1) newLeaf = repl.members[0];
+  else if (isTypePreservingLeaf) newLeaf = repl.members[1];
+  const oldLeaf = accessChain[accessChain.length - 1];
   // No-op: a VERIFIED instance method whose replacement leaf equals the
   // deprecated leaf (self-referential). NB: when instanceSafe is false and
   // the leaf is equal, the replacement is a namespace function (e.g.
   // `i18n.I18NUtil.getUnicodeWrappedFilePath` -> the namespace fn
   // `getUnicodeWrappedFilePath`) — the receiver changes, so it is NOT a no-op;
   // fall through to manual.
-  const newLeaf = repl.members[repl.members.length - 1];
-  const oldLeaf = accessChain[accessChain.length - 1];
-  if (e.instanceSafe && repl.members.length === 1 && newLeaf === oldLeaf) {
+  if (e.instanceSafe && newLeaf !== undefined && newLeaf === oldLeaf) {
     return null; // suppress — identical splice would be a confusing no-op
   }
-  // Auto-fix: verified instance-safe same-kit/aligned single-leaf rename.
-  if (e.instanceSafe && (sameKit || aligned) && repl.members.length === 1) {
-    const replacement = `${varName}.${repl.members[0]}`;
+  // Auto-fix: verified instance-safe same-kit/aligned leaf rename on the same
+  // receiver type.
+  if (e.instanceSafe && (sameKit || aligned) && newLeaf !== undefined) {
+    const replacement = `${varName}.${newLeaf}`;
     return {
       file, line: lineAt(content, offset), oldSymbol, newSymbol: replacement,
       since: e.since, rule: "rename-member", needsManual: false,
-      note: `rename instance member -> ${repl.members[0]}`,
+      note: `rename instance member -> ${newLeaf}`,
       matchStart: offset, matchEnd, replacement,
     };
   }

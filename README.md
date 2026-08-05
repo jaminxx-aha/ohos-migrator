@@ -192,7 +192,11 @@ never auto-written — they're reported for human review. Default is dry-run; pa
   enclosing interface/class in the SDK (`instanceSafe`) — otherwise the
   replacement is a namespace function / different receiver and the call site is
   reported manual (naming the `@useinstead` target) rather than silently
-  missed. FA-model -> stageless receiver changes (`ctx.setShowOnLockScreen` ->
+  missed. The sibling check covers both a single-segment replacement
+  (`getString` -> `getStringValue`) and a type-preserving two-segment
+  replacement (`Window.show` -> `Window.showWindow` — the type is restated in
+  the replacement chain but only the leaf changes). FA-model -> stageless
+  receiver changes (`ctx.setShowOnLockScreen` ->
   `windowStage.setShowOnLockScreen`) are detected this way.
 
   Other cross-kit replacements whose chain also changes (FA-model -> stageless

@@ -373,6 +373,25 @@ function computeIdentity(
  * Conservative: only same-kit (or kit-move-aligned) single-leaf renames on a
  * directly-enclosing named type whose name matches dep.members[0].
  */
+/**
+ * Verify an instance-method leaf rename is safe to splice on a typed receiver:
+ * the replacement leaf must be declared as a (sibling) member of the same
+ * enclosing interface/class. Without this, splicing `var.<leaf>` ->
+ * `var.<repl leaf>` could write a namespace-function name onto an instance
+ * and break (e.g. `i18n.I18NUtil.getUnicodeWrappedFilePath` -> the namespace
+ * function `getUnicodeWrappedFilePath`, which is NOT an instance member).
+ *
+ * Two shapes are verified (the type the method lives on is preserved — only
+ * the leaf changes):
+ *   - single-leaf:  `repl = [newLeaf]`                  (e.g. getString->getStringValue)
+ *   - type+leaf:    `repl = [Type, newLeaf]`, Type===dep.members[0]
+ *                   (e.g. Window.show -> Window.showWindow)
+ *
+ * Conservative: only same-kit (or kit-move-aligned) renames on a directly-
+ * enclosing named type whose name matches dep.members[0]. Multi-seg repls that
+ * change the type, deeper chains, and cross-kit targets are left unverified
+ * (the scanner reports them manual rather than risk a bad splice).
+ */
 function verifyInstanceSafe(
   node: Node,
   dep: DepSymbol,
@@ -380,9 +399,18 @@ function verifyInstanceSafe(
   ownKit: string,
   kitIndex: Record<string, KitDepInfo>,
 ): boolean {
-  if (!repl || !repl.members || repl.members.length !== 1) return false;
+  if (!repl || !repl.members || repl.members.length === 0) return false;
   if (!dep.members || dep.members.length < 2 || !dep.exportName) return false;
-  const newLeaf = repl.members[0];
+  // Resolve the replacement leaf: either a single-segment repl, or a
+  // two-segment repl whose first segment restates the (unchanged) type.
+  let newLeaf: string;
+  if (repl.members.length === 1) {
+    newLeaf = repl.members[0];
+  } else if (repl.members.length === 2 && repl.members[0] === dep.members[0]) {
+    newLeaf = repl.members[1];
+  } else {
+    return false;
+  }
   const oldLeaf = dep.members[dep.members.length - 1];
   if (newLeaf === oldLeaf) return false; // no-op
   const sameKit = !repl.kit || repl.kit === ownKit;
