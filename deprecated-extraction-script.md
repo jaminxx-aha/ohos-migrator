@@ -1,0 +1,42 @@
+---
+name: deprecated-extraction-script
+description: ohos-migrator 项目结构与废弃函数迁移规则集（ts-morph 索引 + 扫描 + 重写管线）
+metadata:
+  node_type: memory
+  type: project
+  originSessionId: 34643758-d30e-4893-9711-e6f7576f09ce
+  modified: 2026-08-05T16:52:09.129Z
+---
+
+ohos-migrator 项目位于 `/Users/aha/code/ohos-migrator`，是鸿蒙废弃函数迁移工具（非早期的独立 `extract_deprecated_ts.js`，已废弃）。3 阶段管线：index(ts-morph) → scan(正则/offset tolerant) → rewrite(自底向上 offset 拼接)。
+
+**索引**：`src/indexer/sdk-indexer.ts` 递归收集 `.d.ts/.d.ets`，跳过 `@internal/`；嵌套文件经 re-export 追溯归属顶层 kit；输出 `DeprecationMap`（entries + kitIndex + exportIndex），缓存于 `.harmony-deprecate/deprecation-map.<apiVersion>.json`（API 24 = 4713 条，其中带 @useinstead 3891 条）。
+
+**规则种类（RuleKind）与自动可替换性**：
+- `rewrite-import` —— kit 整体迁移（kitIndex[oldKit].newKit）改 import specifier；或**跨 kit 命名导入 drop-in**：named-import 子句中所有 binding 都同名迁移到同一目标 kit 时改 specifier 保名（per-clause 安全，混合目标/含无替代项的子句不动）。由 `crossKitDropin` 索引驱动。**默认导出迁移**（`export default class X` 跨 kit，indexer 用 `hasDefaultModifier` 检测，键为 `${kit}\0default`）也走 drop-in：`import X from '@old'`→`import X from '@new'`（仅改 specifier，本地 binding 是 default 导出，保名，调用点不动）。scanner 的 `scanProjectCrossKitDropin` 统一处理 default+named binding（per-clause：所有 binding 含 default 须同目标 kit，否则整子句不动；default binding 不可别名，只改 specifier）。
+- `rename-member` —— 同 kit（或 kit-move 对齐）且**替换链与废弃链等长**的改名：把 `binding.<old chain>` 整条拼成 `binding.<new chain>`。覆盖 leaf-only、container/mid-segment、container+leaf 三类（如 `rpc.MessageParcel.create`→`rpc.MessageSequence.create`、`media.MediaErrorCode.MSERR_OK`→`media.AVErrorCode.AVERR_OK`）。链长不等→manual（调用形状变了）。
+- `rename-export` —— 同 kit 导出/类改名，用安全别名保本地 binding：`{By}`→`{On as By}`，body 不改。exportIndex 由 indexer 构建。**跨 kit 不同名导出**（`crossKitRenameExport: ${oldKit}\0${old} -> ${newKit}\0${new}`）也走别名：specifier 改到新 kit 且 binding 别名为 `{new as old}`（如 `@ohos.fileio.fstat`→`@ohos.file.fs/stat`，`import { fstat }`→`import { stat as fstat } from '@ohos.file.fs'`，调用点不变）。per-clause：子句所有 binding 须迁到同一目标 kit（同名 dropin 或异名 rename 混合均可），否则整子句不动。由 `scanProjectCrossKitDropin` 统一处理（同名只改 specifier、异名额外发 rename-export finding 别名 binding）。
+- `override` —— UIContext `get<Head>()` recipe 与 `@ohos.window` WindowStage/Window recipe（recipe 表见 `src/rewriter/overrides.ts`，跨 kit 才触发）。
+- `manual` —— 其余。
+
+**索引 kit 范围**：顶层 `@ohos.*` 与 `@system.*`（API 9 前遗留系统 kit，同为可导入顶层模块）。`@?` 合成 kit 仅用于无 importer/re-exporter 的真孤儿嵌套文件（已从 495 降到 23）。`@useinstead` kit 前缀大小写不敏感解析（kitLookup）。re-export 追溯为 fixpoint worklist：处理顶层 kit 的 `import` 与 `export {X} from`/`export *`，并递归处理被归属的嵌套文件的再导出（解析 `@ohos.bundle → bundle/bundleInfo → bundle/hapModuleInfo` 这类二级嵌套）。
+
+**嵌套匹配去重**：SDK 常同时废弃类与成员（`rpc.MessageParcel` 与 `rpc.MessageParcel.create`），二者正则命中同一调用点。scanner 每 span 只保留最长 finding，rewriter 丢弃重叠 edit，避免拼接两次导致文本损坏（曾产出 `createte`）。
+
+**kit-move 对齐（重要）**：跨 kit 成员若 `kitMove(dep.kit)===repl.kit`，则 rewrite-import 已重指 binding，视为"等效同 kit"：链不变→抑制（去除 ~1225 误报 manual）；等长链变→rename-member（如 bluetooth.getProfileConnState→getProfileConnectionState）。
+
+**大小写不敏感 kit 解析**：useinstead-parser 用 lowercased→real kitLookup，修正 SDK 中 `ohos.uitest.Component` 这类错大小写限定符，使 UiComponent→Component / UiDriver→Driver 进入 exportIndex。
+
+**已知缺口**（API 24 真实 map 4713 条，2026-08-06 精确复算，口径=镜像 scanner 实际分类）：auto/covered 3044 条（64.6%：rewrite-import 1627、rename-member 767、instanceSafe 256、cross-kit rename-export 173、cross-kit same-name dropin 152、rename-export 69）；manual 1669 条（35.4%：cross-kit 909、no_replacement 667、noop_review 86、unresolved 7）。注：上一版 68.2% 因 `@ohos.bluetoothManager` 误判为 module-move（嵌套 `namespace BLE` 的 @useinstead 被错当 kit 级 move）虚高；已修（见下），bluetoothManager 152 条恢复为诚实 manual。
+
+**嵌套 namespace module-move bug（已修）**：indexer 原以 `isNamespaceLevel`（node 为 ModuleDeclaration）判 kit 级 move，但嵌套 namespace（如 bluetoothManager 内的 `namespace BLE`）也是 ModuleDeclaration，其成员的 cross-kit @useinstead 被错记为整 kit 的 newKit。修正：要求该 namespace 无外层 ModuleDeclaration 祖先（即文件最外层 kit 命名空间）才记 kitIndex module-move/manual。
+
+**@useinstead 后缀解析**：解析器原只认 `ohos.<完整点分 kit>` 前缀。SDK 偶有简写/缺中段形式（`ohos.distributedDataObject.create` 实指 `@ohos.data.distributedDataObject`；裸 `distributedDataObject`）。新增 `resolveBySuffix`：当 head 是唯一已知 kit 点分名的末段（大小写不敏感）时解析为该 kit。`ohos.` 分支在 longestKitPrefix 失败时回退到后缀解析；裸标识符分支同样回退。unresolved 48→7。保守：多义不解析。
+
+测试：`npm test`（node --test，119 个，全部通过）。SDK 路径见 [[harmonyos-sdk-location]]。
+
+**实例方法检测（type-aware）**：两层。①regex 增量 1：`scanProjectInstanceMembers` 用正则从 import 解析变量类型（`ns.Type` 限定式 / `T` 命名导入，同时支持 .ts/.ets 无 tsc），匹配带类型注解的本地变量/参数作 receiver 的实例方法。indexer 用 **sibling check**（在 SDK AST 里查 repl leaf 是否为同接口/类成员）打 `instanceSafe`：支持两种 repl 形状——单段 `[newLeaf]`（如 getString→getStringValue）与**类型保留两段** `[Type,newLeaf]`（repl[0]===dep 类型，如 Window.show→Window.showWindow，仅 leaf 变）。已验证→rename-member 自动拼 `var.leaf→var.replLeaf`（真实 map 256 条，较增量1 的 46 条 +210，覆盖 window/rpc/account.appAccount/account.osAccount/audio 等）；未验证/跨 kit→manual finding 报 @useinstead 目标（不再静默漏报）。②tsc 增量 2：`scanProjectInstanceMembersTsc` 用 ts-morph 对项目 **.ts** 文件（.ets 排除，struct/build() tsc 解析不了）做类型检查，解析无类型注解的运行时 receiver（`const ctx = featureAbility.getContext()` 同步、`const win = await window.getLastWindow()` 经 await 解开 Promise）。kit 归属用 indexer 新持久化的 **fileKit**（文件→kit 映射，API 24 共 695 条，与 dep 条目同源归属保证 key 一致），辅以 `declare module` 回退（合成 fixture）。复用 instance index + instanceSafe 分类。SDK 缺失或无 .ts 文件→静默降级（regex scanner 仍为基准）。真实 SDK 实测：ctx.setShowOnLockScreen/win.show→manual 检测、rm.getString→rm.getStringValue 自动（皆由静默漏报转为检出）。仍漏：.ets 中的无注解 receiver、多段 repl 路径在实例上、跨 kit FA→stageless 自动改写（receiver 合成）。
+
+**fileKit 映射**：`DeprecationMap.fileKit: Record<string,string>`，key 为 SDK api 树内相对路径（正斜杠），value 为 indexer re-export 追溯出的归属 kit（孤儿文件为 `@?`）。tsc scanner 据已解析类型的声明文件回查 kit。另需 `paths` 映射（`@ohos.*`/`@system.*`→`./@ohos.*.d.ts`）+ baseUrl= sdkApiDir，使默认导入解析真实 SDK 的 module 式声明文件（`declare namespace X` + `export default X`，非 `declare module`）。
+
+测试：`npm test`（node --test，112 个，全部通过）。SDK 路径见 [[harmonyos-sdk-location]]。
