@@ -86,6 +86,7 @@ export function scanProjectMembers(opts: MemberScanOptions): MemberScanResult {
     }
     const bindings = extractBindingMap(content);
     const exportIndex = map.exportIndex ?? {};
+    const crossKitDropin = map.crossKitDropin ?? {};
     for (const [binding, kit] of bindings) {
       const entries = memberIndex[kit];
       if (!entries) continue;
@@ -96,6 +97,28 @@ export function scanProjectMembers(opts: MemberScanOptions): MemberScanResult {
         // aliases the import so `By.text` resolves to `On.text`. Skip the
         // redundant member finding to avoid double-reporting / a wrong splice.
         if (e.dep.exportName && exportIndex[`${kit}\0${e.dep.exportName}`]) continue;
+        // If this export has a cross-kit same-name drop-in (named export or a
+        // `export default` moved wholesale to another kit under the same name),
+        // the import-specifier rewrite already re-points the binding to the new
+        // kit. When the member chain is unchanged the member resolves on the
+        // re-pointed binding, so the member finding is redundant — suppress it
+        // (mirrors the exportIndex / aligned-kit-move suppression). A changed
+        // chain still needs a member-level splice (or a wiring change), so only
+        // suppress when the chains are identical.
+        if (e.dep.exportName && e.repl && e.repl.members && e.dep.members) {
+          const replMembers = e.repl.members;
+          const depMembers = e.dep.members;
+          const dropin =
+            crossKitDropin[`${kit}\0${e.dep.exportName}`] ??
+            crossKitDropin[`${kit}\0default`];
+          if (
+            dropin &&
+            replMembers.length === depMembers.length &&
+            depMembers.every((m, i) => m === replMembers[i])
+          ) {
+            continue;
+          }
+        }
         const members = e.dep.members!;
         const pattern = binding + "\\." + members.map(escapeRe).join("\\.");
         const re = new RegExp(`\\b${pattern}\\b`, "g");

@@ -667,6 +667,58 @@ test("rewrite: aligned kit move + member rename both apply", () => {
   }
 });
 
+/* cross-kit same-name drop-in: a named export or `export default` moved
+ * wholesale to another kit under the same name. The import-specifier rewrite
+ * (scanProjectCrossKitDropin) re-points the binding, so a member with an
+ * unchanged chain resolves on the new kit — the member finding is redundant
+ * and must be suppressed. A member whose chain changed still needs its own
+ * splice, so it is NOT suppressed. */
+
+function dropinMemberProject(): string {
+  return makeTree({
+    "page.ets": `
+import Want from '@ohos.application.Want';
+import { Configuration } from '@ohos.application.Configuration';
+Want.deviceId;            // default dropin, chain equal -> suppressed
+Configuration.language;   // named dropin, chain equal -> suppressed
+Want.renamed;             // default dropin but chain differs -> still reported
+`,
+  });
+}
+
+function dropinMemberMap(): DeprecationMap {
+  const crossKitDropin: DeprecationMap["crossKitDropin"] = {
+    "@ohos.application.Want\0default": "@ohos.app.ability.Want",
+    "@ohos.application.Configuration\0Configuration": "@ohos.app.ability.Configuration",
+  };
+  const e = (
+    kit: string, exportName: string, members: string[], repl: ReplSymbol, since = 9,
+  ): DeprecationEntry => ({
+    dep: { kit, exportName, members }, since, repl, kind: "member", source: { file: "", line: 0 },
+  });
+  return mapOf([
+    e("@ohos.application.Want", "Want", ["deviceId"], { kit: "@ohos.app.ability.Want", members: ["deviceId"] }),
+    e("@ohos.application.Configuration", "Configuration", ["language"], { kit: "@ohos.app.ability.Configuration", members: ["language"] }),
+    e("@ohos.application.Want", "Want", ["renamed"], { kit: "@ohos.app.ability.Want", members: ["newName"] }),
+  ], {}, {}, crossKitDropin);
+}
+
+test("scan: cross-kit dropin suppresses chain-equal member findings", () => {
+  const root = dropinMemberProject();
+  try {
+    const { findings } = scanProjectMembers({ projectRoot: root, map: dropinMemberMap() });
+    // default-export dropin, chain unchanged -> specifier rewrite covers it
+    assert.equal(bySymbol(findings, "Want.deviceId"), undefined);
+    // named-export dropin, chain unchanged -> specifier rewrite covers it
+    assert.equal(bySymbol(findings, "Configuration.language"), undefined);
+    // chain differs -> still needs a member splice, so still reported (manual)
+    const f = bySymbol(findings, "Want.renamed");
+    assert.equal(f?.rule, "manual");
+  } finally {
+    cleanup(root);
+  }
+});
+
 /* module-level */
 
 /* same-kit container-rename + nested-match overlap dedup:
