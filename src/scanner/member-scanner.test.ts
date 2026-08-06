@@ -107,16 +107,17 @@ test("describeMemberReplacement: no replacement is manual", () => {
   assert.equal(r.newSymbol, null);
 });
 
-test("describeMemberReplacement: no-op rename (same leaf) is manual", () => {
-  // Deprecation whose @useinstead points to an identical symbol name: splicing
-  // an identical string would be a confusing no-op, so it is left for review.
+test("describeMemberReplacement: no-op rename (same leaf) is suppressed", () => {
+  // Deprecation whose @useinstead points to an identical symbol name: the call
+  // site already targets the right symbol, so splicing would be a confusing
+  // no-op. Suppress it (no finding, no rewrite).
   const r = describeMemberReplacement("i18n", "@ohos.i18n", ["getSimpleDateTimeFormatByPattern"], {
     kit: "@ohos.i18n",
     members: ["getSimpleDateTimeFormatByPattern"],
   });
-  assert.equal(r.rule, "manual");
+  assert.equal(r.suppressed, true);
   assert.equal(r.replacement, undefined);
-  assert.ok(r.note.includes("identical"));
+  assert.ok(r.note.includes("self-referential"));
 });
 
 // --- kit-move alignment -------------------------------------------------

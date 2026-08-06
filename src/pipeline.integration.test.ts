@@ -9,7 +9,7 @@
  *    `@internal/**` skipping, and the bare-kit `@useinstead` resolution.
  * 2. Scanner (`scanProject` + `scanProjectMembers`) — every rule kind:
  *    rewrite-import, rename-member, override (all UIContext heads), and the
- *    manual family (no @useinstead, cross-kit non-override, no-op rename,
+ *    manual family (no @useinstead, cross-kit non-override,
  *    unresolved chain), plus `--since` filtering.
  * 3. Rewriter (`rewriteProject`) — dry-run vs --write, multiple edits applied
  *    bottom-up, custom UIContext expression, overload dedup.
@@ -445,7 +445,7 @@ i18n.registerFont({});              // override UIContext Font (get<Head>)
 animator.createAnimator({});        // override UIContext self-head
 snap.takePhoto();                   // cross-kit non-override -> manual
 dataRdb.getRdbStore({});            // cross-kit non-override -> manual
-same.foo();                         // no-op rename (leaf == old) -> manual
+same.foo();                         // no-op rename (leaf == old) -> suppressed
 noop.bar();                         // no @useinstead -> manual
 unresolved.deep.chain();            // multi-seg unresolved kit -> manual
 `,
@@ -541,13 +541,13 @@ test("scan: cross-kit non-override replacement is manual", () => {
   }
 });
 
-test("scan: no-op rename (same leaf) is manual, no splice", () => {
+test("scan: no-op rename (same leaf) is suppressed, no finding", () => {
   const root = memberProject();
   try {
     const { findings } = scanProjectMembers({ projectRoot: root, map: memberMap() });
-    const f = bySymbol(findings, "same.foo");
-    assert.equal(f?.rule, "manual");
-    assert.equal(f?.replacement, undefined);
+    // Self-referential replacement (repl === dep): the call site already
+    // targets the right symbol, so no member finding is emitted.
+    assert.equal(bySymbol(findings, "same.foo"), undefined);
   } finally {
     cleanup(root);
   }
@@ -955,7 +955,7 @@ test("rewrite: manual findings are never written", () => {
     assert.ok(out.includes("same.foo();"));
     assert.ok(out.includes("noop.bar();"));
     assert.ok(out.includes("unresolved.deep.chain();"));
-    assert.ok(res.skippedManual >= 5, "manuals counted as skipped");
+    assert.ok(res.skippedManual >= 4, "manuals counted as skipped");
   } finally {
     cleanup(root);
   }

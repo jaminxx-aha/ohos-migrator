@@ -231,8 +231,9 @@ export type KitMoveResolver = (depKit: string) => string | undefined;
  *   (`router.push` -> `router.pushUrl`), a container/mid-segment rename
  *   (`rpc.MessageParcel.create` -> `rpc.MessageSequence.create`), or both
  *   (`media.MediaErrorCode.MSERR_OK` -> `media.AVErrorCode.AVERR_OK`). When the
- *   full chain is identical the replacement is a no-op (self-referential) and is
- *   flagged for review.
+ *   full chain is identical the replacement is a no-op (self-referential): the
+ *   call site already targets the right symbol, so a splice would change
+ *   nothing — it is suppressed (no finding, no rewrite).
  * - A cross-kit replacement whose `repl.kit` equals the deprecated kit's
  *   indexed move target (`kitMove(dep.kit) === repl.kit`) is treated as
  *   same-kit too: `rewrite-import` re-points the binding to `repl.kit`, so the
@@ -283,7 +284,8 @@ export function describeMemberReplacement(
     return {
       newSymbol: `${binding}.${rMembers.join(".")}`,
       rule: "manual",
-      note: "replacement identical to deprecated symbol (review needed)",
+      note: "replacement identical to deprecated symbol (self-referential; no rewrite needed)",
+      suppressed: true,
     };
   }
   // Same-kit (or kit-move-aligned) chain rename at any depth. The matched
