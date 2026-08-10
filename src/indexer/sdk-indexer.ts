@@ -246,6 +246,19 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
     });
   }
 
+  // Resolve cross-kit member drop-in ambiguity. A deprecated symbol that maps
+  // to MORE than one replacement kit is ambiguous at the call site: the binding
+  // scanner matches the symbol only (e.g. `bluetoothManager.on`) and cannot
+  // read the event-name string arg that picks the target, so auto-rebinding
+  // would pick an arbitrary target and corrupt the call. The classic case is
+  // `@ohos.bluetoothManager.on` whose @useinstead splits by event into
+  // `@ohos.bluetooth.connection.on` / `.access.on` / `.socket.on`. Unflag every
+  // ambiguous entry (manual) — only symbols with a UNIQUE replacement kit stay
+  // drop-in. (Path-preserving 2-seg moves like `bluetoothManager.A2dpSource
+  // Profile.on` -> `bluetooth.a2dp.A2dpSourceProfile.on` are unaffected: the
+  // profile member determines the target, so all entries for that symbol agree.)
+  resolveCrossKitMemberAmbiguity(entries);
+
   return {
     apiVersion,
     sdkPath: sdkApiDir,
@@ -585,6 +598,49 @@ function verifyCrossKitMemberDropin(
   const set = kitTopLevelExports.get(repl.kit);
   if (!set) return false;
   return set.has(repl.members[0]);
+}
+
+/**
+ * Resolve cross-kit member drop-in AMBIGUITY across all flagged entries. A
+ * deprecated symbol (`dep.kit` + `dep.members`) whose @useinstead tokens split
+ * it across MORE than one replacement kit is ambiguous at the call site: the
+ * scanner matches the symbol (`bluetoothManager.on`) but cannot read the
+ * event-name string arg that selects the target, so auto-rebinding would pick
+ * an arbitrary target and corrupt the call. The classic case is
+ * `@ohos.bluetoothManager.on`, whose per-event @useinstead tokens resolve to
+ * `@ohos.bluetooth.connection.on` / `.access.on` / `.socket.on`. Unflag every
+ * ambiguous entry so it falls back to manual; only symbols mapping to a UNIQUE
+ * replacement kit remain drop-in. Path-preserving 2-seg moves (e.g.
+ * `bluetoothManager.A2dpSourceProfile.on` -> `bluetooth.a2dp.A2dpSourceProfile.on`)
+ * are unaffected: the profile member determines the target, so all entries for
+ * that symbol agree on one kit.
+ */
+function resolveCrossKitMemberAmbiguity(entries: DeprecationEntry[]): void {
+  // Build key -> set of target kits, considering only currently-flagged entries.
+  const targetsByKey = new Map<string, Set<string>>();
+  for (const e of entries) {
+    if (!e.crossKitMemberDropin) continue;
+    const depMembers = e.dep.members;
+    if (!depMembers?.length || !e.repl?.kit) continue;
+    const key = `${e.dep.kit}\0${depMembers.join(".")}`;
+    let set = targetsByKey.get(key);
+    if (!set) {
+      set = new Set<string>();
+      targetsByKey.set(key, set);
+    }
+    set.add(e.repl.kit);
+  }
+  // Unflag any entry whose key maps to more than one target kit.
+  for (const e of entries) {
+    if (!e.crossKitMemberDropin) continue;
+    const depMembers = e.dep.members;
+    if (!depMembers?.length || !e.repl?.kit) continue;
+    const key = `${e.dep.kit}\0${depMembers.join(".")}`;
+    const targets = targetsByKey.get(key);
+    if (targets && targets.size > 1) {
+      delete e.crossKitMemberDropin;
+    }
+  }
 }
 
 /**

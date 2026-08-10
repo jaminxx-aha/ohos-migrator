@@ -96,10 +96,22 @@ export function rewriteProject(
     // rename `rpc.MessageParcel` and its method `rpc.MessageParcel.create`
     // both match the same call site, and applying both corrupts the text
     // (`...createte()`). Keep the longest (most specific) match per span and
-    // discard any edit whose range it subsumes or overlaps.
+    // discard any edit whose range it subsumes or overlaps. A zero-length
+    // insertion (e.g. `inject-import`, start === end) consumes no characters
+    // and is NEVER dropped on overlap grounds — it can sit at the very start
+    // of a replacement span (call site immediately after the import block,
+    // where the inject anchor equals the rebind match offset) and must still
+    // be applied; the bottom-up pass orders the replacement before the
+    // insertion at that shared offset so neither corrupts the other.
     const deduped = dedupeOverlapping(edits);
 
-    deduped.sort((a, b) => b.start - a.start);
+    // Apply bottom-up (highest offset first) so earlier offsets stay valid.
+    // Tie-break by end descending so a replacement (start < end) at offset X
+    // applies before a zero-length insertion (start === end) at the same X:
+    // the replacement consumes the chars at [X, X+len], then the insertion
+    // injects at X. Reversing that order would shift the replacement's target
+    // and splice the wrong text.
+    deduped.sort((a, b) => b.start - a.start || b.end - a.end);
     let next = content;
     for (const e of deduped) {
       next = next.slice(0, e.start) + e.text + next.slice(e.end);
@@ -120,8 +132,10 @@ export function rewriteProject(
  * Remove edits whose range overlaps an earlier (longer / more specific) edit.
  * Edits are ordered by start ascending, then by end descending so the longest
  * match at a given offset wins. An edit is dropped when it starts before the
- * previous kept edit ends (containment or partial overlap). Touching ranges
- * (start == prev end) are kept — they are adjacent, independent edits.
+ * previous kept edit ends AND extends into that edit's span (containment or
+ * partial overlap of actual characters). Pure insertions (start === end) and
+ * touching ranges (start == prev end) are kept — they consume no characters
+ * and can sit at the boundary of a replacement without conflict.
  */
 function dedupeOverlapping<T extends { start: number; end: number }>(edits: T[]): T[] {
   const sorted = [...edits].sort((a, b) => a.start - b.start || b.end - a.end);
@@ -130,7 +144,14 @@ function dedupeOverlapping<T extends { start: number; end: number }>(edits: T[])
   for (const e of sorted) {
     const key = `${e.start}\0${e.end}`;
     if (seen.has(key)) continue; // duplicate exact span (keep first)
-    if (kept.length && e.start < kept[kept.length - 1].end) continue; // overlaps
+    if (kept.length) {
+      const prev = kept[kept.length - 1];
+      // Overlap requires e to start before prev ends AND to actually consume
+      // a character inside prev (e.end > prev.start). A zero-length insertion
+      // (e.start === e.end) never satisfies the second clause, so it survives
+      // even when it sits at prev's start boundary.
+      if (e.start < prev.end && e.end > prev.start) continue;
+    }
     seen.add(key);
     kept.push(e);
   }

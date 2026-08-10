@@ -83,6 +83,38 @@ test("toReplSymbol normalizes kit with leading @", () => {
   assert.deepEqual(r.members, ["pushUrl"]);
 });
 
+test("toReplSymbol strips name:value event-hint artifacts", () => {
+  // `@useinstead ohos.bluetooth.connection/connection.on#event:bluetoothDeviceFind`
+  // parses to exportName=`connection`, members=`["on","event:bluetoothDeviceFind"]`
+  // — the trailing `#event:<name>` is an event-name hint the parser cannot know
+  // isn't a real code member. A JS member name cannot contain a colon, so
+  // toReplSymbol drops every `:`-bearing segment — leaving the true chain
+  // `["on"]`, byte-identical to the deprecated chain and safe to rebind as a
+  // path-preserving cross-kit move.
+  const kits = new Set([...KITS, "ohos.bluetooth.connection", "ohos.bluetooth.access", "ohos.bluetooth.socket"]);
+  const parsed = parseUseinstead("ohos.bluetooth.connection/connection.on#event:bluetoothDeviceFind", kits);
+  assert.equal(parsed.exportName, "connection");
+  assert.deepEqual(parsed.members, ["on", "event:bluetoothDeviceFind"]);
+  const r = toReplSymbol(parsed);
+  assert.deepEqual(r.members, ["on"]);
+});
+
+test("toReplSymbol drops multiple colon-bearing segments, keeps clean ones", () => {
+  // A mid-chain artifact plus a clean leaf: only the artifact is stripped.
+  const parsed = parseUseinstead("ohos.router/Router.pushUrl", KITS);
+  // Manually craft a members array with an artifact mid-segment to confirm
+  // filtering is per-segment, not all-or-nothing.
+  const crafted = { kit: "@ohos.x", exportName: "x", members: ["a", "b:c", "d"] };
+  const r = toReplSymbol(crafted as never);
+  assert.deepEqual(r.members, ["a", "d"]);
+});
+
+test("toReplSymbol preserves a clean chain unchanged", () => {
+  // No `:` artifacts -> members pass through verbatim (no accidental stripping).
+  const r = toReplSymbol(parseUseinstead("ohos.router/Router.pushUrl", KITS));
+  assert.deepEqual(r.members, ["pushUrl"]);
+});
+
 test("describeReplacement renders kit/export/leaf", () => {
   const s = describeReplacement(parseUseinstead("ohos.router/Router.pushUrl", KITS));
   assert.equal(s, "@ohos.router/Router#pushUrl");

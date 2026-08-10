@@ -218,6 +218,17 @@ export function toReplSymbol(parsed: ParsedUseinstead): ReplSymbol {
   const r: ReplSymbol = {};
   if (parsed.kit) r.kit = parsed.kit; // already `@ohos.x.y`
   if (parsed.exportName) r.exportName = parsed.exportName;
-  if (parsed.members?.length) r.members = parsed.members;
+  if (parsed.members?.length) {
+    // Strip `name:value` parse artifacts. JS member names cannot contain a
+    // colon, so any segment with `:` is a leaked @useinstead hint, not a real
+    // code member — most often the trailing event-name hint on `on`/`off`
+    // event subscriptions (e.g. `ohos.bluetooth.connection/connection.on#event:bluetoothDeviceFind`
+    // parses to members `[on, event:bluetoothDeviceFind]`; the event name is
+    // already passed as a string arg at the call site, so the real replacement
+    // is just `on`). Dropping the artifact yields the true member chain, which
+    // is then byte-identical to the deprecated chain (a path-preserving
+    // cross-kit move) and safe to rebind.
+    r.members = parsed.members.filter((m) => !m.includes(":"));
+  }
   return r;
 }

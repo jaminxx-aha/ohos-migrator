@@ -379,8 +379,10 @@ test("indexer: cross-kit 2-seg path-preserving move flagged crossKitMemberDropin
 test("indexer: cross-kit move with @useinstead parse artifact stays manual", () => {
   // `bluetoothManager.BLE.on` has @useinstead `ohos.bluetooth.ble.on.event:BLEDeviceFind`
   // — the parser leaks a `name:value` event hint into the member chain
-  // (repl.members = ["on","event:BLEDeviceFind"]). Splicing that would emit
-  // invalid code, so the identifier guard must leave the entry unflagged (manual).
+  // (repl.members = ["on","event:BLEDeviceFind"]). `toReplSymbol` strips the
+  // colon-bearing segment, leaving repl.members = ["on"] (1-seg). The DEPRECATED
+  // chain is 2-seg (["BLE","on"]), so the equal-length gate rejects the move —
+  // a 2->1 flatten is a call-shape change (namespace -> instance), left manual.
   const sdk = makeTree(SDK_FILES);
   try {
     const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
@@ -388,7 +390,86 @@ test("indexer: cross-kit move with @useinstead parse artifact stays manual", () 
       (x) => x.dep.kit === "@ohos.bluetoothManager" && x.dep.members?.[0] === "BLE",
     );
     assert.ok(e, "bluetoothManager.BLE.on entry exists");
-    assert.notEqual(e!.crossKitMemberDropin, true, "artifact chain must NOT be flagged");
+    assert.notEqual(e!.crossKitMemberDropin, true, "2->1 length mismatch must NOT be flagged");
+  } finally {
+    cleanup(sdk);
+  }
+});
+
+test("indexer: ambiguous cross-kit member (one symbol -> many kits) stays manual", () => {
+  // `bluetoothManager.on` is deprecated with @useinstead tokens that split it
+  // across MULTIPLE replacement kits (connection / access / socket) — one entry
+  // per event. Each entry, in isolation, verifies (1-seg leaf, target kit has a
+  // top-level `on`). But the scanner matches the SYMBOL only and cannot read the
+  // event-name string arg that picks the target, so auto-rebinding would choose
+  // an arbitrary kit and corrupt the call. The ambiguity gate unflags every
+  // entry whose (dep.kit, dep.members) maps to >1 replacement kit — they fall
+  // back to manual. A UNIQUE-target entry at the same call shape stays flagged.
+  const sdk = makeTree({
+    "@ohos.bluetoothManager.d.ts": `
+declare namespace bluetoothManager {
+  /** @since 9 @deprecated since 10 @useinstead ohos.bluetooth.connection.on */
+  function on(e: string): void;
+  /** @since 9 @deprecated since 10 @useinstead ohos.bluetooth.access.on */
+  function on(e: string, cb: () => void): void;
+  /** @since 9 @deprecated since 10 @useinstead ohos.bluetooth.socket.on */
+  function on(e: string, cb: () => void, extra: number): void;
+}
+`,
+    "@ohos.bluetooth.connection.d.ts": `declare namespace connection { function on(e: string, cb: () => void): void; }`,
+    "@ohos.bluetooth.access.d.ts": `declare namespace access { function on(e: string, cb: () => void): void; }`,
+    "@ohos.bluetooth.socket.d.ts": `declare namespace socket { function on(e: string, cb: () => void): void; }`,
+    "@ohos.bluetooth.a2dp.d.ts": `declare namespace a2dp { interface A2dpSourceProfile { connect(): void; } }`,
+  });
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const onEntries = map.entries.filter(
+      (x) => x.dep.kit === "@ohos.bluetoothManager" && x.dep.members?.length === 1 && x.dep.members[0] === "on",
+    );
+    assert.ok(onEntries.length >= 3, "three on() overloads indexed");
+    // Every ambiguous entry is unflagged (would otherwise rebind to an arbitrary kit).
+    for (const e of onEntries) {
+      assert.notEqual(e.crossKitMemberDropin, true, "ambiguous on() must NOT be flagged");
+    }
+  } finally {
+    cleanup(sdk);
+  }
+});
+
+test("indexer: unique-target cross-kit member stays flagged alongside an ambiguous sibling", () => {
+  // Same fixture shape, but add a unique-target 2-seg move (A2dpSourceProfile.connect)
+  // alongside the ambiguous on(). The ambiguity gate must unflag ONLY the ambiguous
+  // symbol; the unique-target entry keeps its flag.
+  const sdk = makeTree({
+    "@ohos.bluetoothManager.d.ts": `
+declare namespace bluetoothManager {
+  /** @since 9 @deprecated since 10 @useinstead ohos.bluetooth.connection.on */
+  function on(e: string): void;
+  /** @since 9 @deprecated since 10 @useinstead ohos.bluetooth.access.on */
+  function on(e: string, cb: () => void): void;
+  namespace A2dpSourceProfile {
+    /** @since 8 @deprecated since 10 @useinstead ohos.bluetooth.a2dp.A2dpSourceProfile.connect */
+    function connect(): void;
+  }
+}
+`,
+    "@ohos.bluetooth.connection.d.ts": `declare namespace connection { function on(e: string, cb: () => void): void; }`,
+    "@ohos.bluetooth.access.d.ts": `declare namespace access { function on(e: string, cb: () => void): void; }`,
+    "@ohos.bluetooth.a2dp.d.ts": `declare namespace a2dp { interface A2dpSourceProfile { connect(): void; } }`,
+  });
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const onEntries = map.entries.filter(
+      (x) => x.dep.kit === "@ohos.bluetoothManager" && x.dep.members?.length === 1 && x.dep.members[0] === "on",
+    );
+    for (const e of onEntries) {
+      assert.notEqual(e.crossKitMemberDropin, true, "ambiguous on() unflagged");
+    }
+    const a2dp = map.entries.find(
+      (x) => x.dep.kit === "@ohos.bluetoothManager" && x.dep.members?.[0] === "A2dpSourceProfile",
+    );
+    assert.ok(a2dp, "A2dpSourceProfile.connect entry exists");
+    assert.equal(a2dp!.crossKitMemberDropin, true, "unique-target 2-seg stays flagged");
   } finally {
     cleanup(sdk);
   }
@@ -1129,6 +1210,33 @@ export function go() { bm.A2dpSourceProfile.connect(); }
     assert.ok(!out.includes("bm.A2dpSourceProfile.connect"));
   } finally {
     cleanup(sdk);
+    cleanup(root);
+  }
+});
+
+test("rewrite: inject-import + rebind at the same offset (call site right after the import)", () => {
+  // When the deprecated call site is the FIRST thing on the line immediately
+  // after the import block, the inject anchor (start of that line) COINCIDES
+  // with the rebind match offset. The zero-length inject edit must NOT be
+  // dropped as "overlapping" the rebind, and the bottom-up pass must apply the
+  // replacement (consuming [anchor, anchor+len]) BEFORE the insertion at the
+  // shared offset — reversing that order would splice the wrong text.
+  const root = makeTree({
+    "p.ts": `import * as bm from '@ohos.bluetoothManager';
+bm.A2dpSourceProfile.connect();
+`,
+  });
+  try {
+    const { findings } = scanProjectMembers({ projectRoot: root, map: crossKitMember2SegMap() });
+    assert.ok(findings.some((f) => f.rule === "inject-import"), "inject emitted");
+    const res = rewriteProject(root, findings, { write: true });
+    assert.equal(res.skippedManual, 0);
+    const out = readFileSync(join(root, "p.ts"), "utf8");
+    assert.ok(out.includes("import * as a2dp from '@ohos.bluetooth.a2dp';"), "import injected");
+    assert.ok(out.includes("a2dp.A2dpSourceProfile.connect();"), "rebind applied");
+    assert.ok(!out.includes("bm.A2dpSourceProfile.connect"), "old call site gone");
+    assert.ok(out.includes("import * as bm from '@ohos.bluetoothManager';"), "old import retained");
+  } finally {
     cleanup(root);
   }
 });
