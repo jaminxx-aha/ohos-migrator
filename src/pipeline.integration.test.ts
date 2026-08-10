@@ -475,6 +475,84 @@ declare namespace bluetoothManager {
   }
 });
 
+test("indexer: cross-kit leaf-rename to a module-level sibling function flagged crossKitMemberDropin", () => {
+  // `@system.file.move` -> `@ohos.file.fs.moveFile`. The target kit's file
+  // declares `declare namespace fileIo { ... }` for its OO API AND module-level
+  // `declare function moveFile` as a sibling of the namespace (its procedural
+  // API). `moveFile` is a top-level export reachable as `binding.moveFile`
+  // after `import * as binding from '@ohos.file.fs'`, but the previous
+  // collector only descended into the first namespace body and missed module-
+  // level siblings — so the safe rename stayed manual.
+  const sdk = makeTree({
+    "@system.file.d.ts": `
+declare namespace file {
+  /** @since 6 @deprecated since 9 @useinstead ohos.file.fs.moveFile */
+  function move(src: string, dest: string): void;
+}
+`,
+    "@ohos.file.fs.d.ts": `
+declare namespace fileIo { interface OpenMode { READ: number } }
+/** @since 9 */
+declare function moveFile(src: string, dest: string): void;
+`,
+  });
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const e = map.entries.find(
+      (x) => x.dep.kit === "@system.file" && x.dep.members?.[0] === "move",
+    );
+    assert.ok(e, "system.file.move entry exists");
+    assert.equal(e!.crossKitMemberDropin, true, "leaf-rename to module-level fn flagged");
+    assert.equal(e!.repl?.kit, "@ohos.file.fs");
+    assert.equal(e!.repl?.members?.[0], "moveFile");
+  } finally {
+    cleanup(sdk);
+  }
+});
+
+test("indexer: 1-seg semantic redirect whose leaf has a same-name export drop-in stays manual", () => {
+  // `@ohos.fileio`'s module-level `read` -> `@ohos.file.fs.read` is a same-name
+  // export drop-in (the authoritative replacement for the symbol `fileio.read`).
+  // The namespace function `fileio.read` -> `file.fs.listFile` is a DIFFERENT leaf
+  // — a semantic redirect, not a drop-in. For namespace usage `fileio.read(...)`,
+  // rebinding to `listFile` would splice the wrong leaf. The export-conflict gate
+  // unflags such 1-seg entries: the leaf collides with a same-name export drop-in
+  // whose target matches repl.kit, and the replacement leaf differs.
+  const sdk = makeTree({
+    "@ohos.fileio.d.ts": `
+/** @since 6 @deprecated since 9 @useinstead ohos.file.fs.read */
+declare function read(fd: number): void;
+declare namespace fileio {
+  /** @since 6 @deprecated since 9 @useinstead ohos.file.fs.listFile */
+  function read(path: string): void;
+}
+`,
+    "@ohos.file.fs.d.ts": `
+declare namespace fileIo {}
+declare function read(fd: number): void;
+declare function listFile(path: string): string[];
+`,
+  });
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    // The module-level `read` is a same-name export drop-in.
+    assert.equal(map.crossKitDropin?.["@ohos.fileio\0read"], "@ohos.file.fs");
+    // The namespace-function read -> listFile semantic redirect is NOT flagged
+    // (would splice the wrong leaf for namespace usage of the colliding `read`).
+    const nsRead = map.entries.find(
+      (x) =>
+        x.dep.kit === "@ohos.fileio" &&
+        x.dep.exportName === "fileio" &&
+        x.dep.members?.[0] === "read",
+    );
+    assert.ok(nsRead, "namespace function read entry exists");
+    assert.notEqual(nsRead!.crossKitMemberDropin, true, "semantic redirect must NOT be flagged");
+    assert.equal(nsRead!.repl?.members?.[0], "listFile");
+  } finally {
+    cleanup(sdk);
+  }
+});
+
 test("indexer + scan: default-export move rewrites a default import's specifier", () => {
   // `export default class Want` -> @ohos.app.ability.Want: a default import
   // `import Want from '@ohos.application.Want'` only needs its specifier
@@ -1186,6 +1264,88 @@ export function go() { bm.A2dpSourceProfile.connect(); }
     assert.ok(inj?.replacement!.includes("import * as a2dp2 from '@ohos.bluetooth.a2dp';"));
   } finally {
     cleanup(root);
+  }
+});
+
+/* Round-7 end-to-end: the indexer now collects module-level sibling functions
+ * (e.g. `declare function moveFile` alongside `declare namespace fileIo`),
+ * so `system.file.move -> @ohos.file.fs.moveFile` is correctly flagged
+ * crossKitMemberDropin and the scanner can rebind it. This exercises the full
+ * buildDeprecationMap -> scanProjectMembers -> rewriteProject pipeline against
+ * a real (synthetic) SDK tree rather than a hand-built map. */
+
+function systemFileMoveSdk(): string {
+  return makeTree({
+    "@system.file.d.ts": `
+declare namespace file {
+  /** @since 6 @deprecated since 9 @useinstead ohos.file.fs.moveFile */
+  function move(src: string, dest: string): void;
+}
+`,
+    "@ohos.file.fs.d.ts": `
+declare namespace fileIo { interface OpenMode { READ: number } }
+/** @since 9 */
+declare function moveFile(src: string, dest: string): void;
+`,
+  });
+}
+
+test("scan: real indexer flags system.file.move -> file.fs.moveFile (module-level fn)", () => {
+  const sdk = systemFileMoveSdk();
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const e = map.entries.find(
+      (x) => x.dep.kit === "@system.file" && x.dep.members?.[0] === "move",
+    );
+    assert.ok(e, "system.file.move entry exists");
+    assert.equal(e!.crossKitMemberDropin, true, "flagged via module-level collection");
+
+    const root = makeTree({
+      "p.ts": `import * as sf from '@system.file';
+export function go() { sf.move(a, b); sf.untouched(); }
+`,
+    });
+    try {
+      const { findings } = scanProjectMembers({ projectRoot: root, map });
+      const a = bySymbol(findings, "sf.move");
+      assert.equal(a?.rule, "rename-member");
+      assert.equal(a?.replacement, "fs.moveFile");
+      assert.ok(a?.note.includes("injected import"));
+      const injects = findings.filter((f) => f.rule === "inject-import");
+      assert.equal(injects.length, 1);
+      assert.ok(injects[0].replacement!.includes("import * as fs from '@ohos.file.fs';"));
+    } finally {
+      cleanup(root);
+    }
+  } finally {
+    cleanup(sdk);
+  }
+});
+
+test("rewrite: real indexer pipeline system.file.move -> fs.moveFile injects + rebinds", () => {
+  const sdk = systemFileMoveSdk();
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const root = makeTree({
+      "p.ts": `import * as sf from '@system.file';
+export function go() { sf.move(a, b); sf.untouched(); }
+`,
+    });
+    try {
+      const { findings } = scanProjectMembers({ projectRoot: root, map });
+      const res = rewriteProject(root, findings, { write: true });
+      assert.equal(res.skippedManual, 0);
+      const out = readFileSync(join(root, "p.ts"), "utf8");
+      assert.ok(out.includes("import * as fs from '@ohos.file.fs';"));
+      assert.ok(out.includes("fs.moveFile(a, b);"));
+      // old binding retained for the non-deprecated member
+      assert.ok(out.includes("sf.untouched();"));
+      assert.ok(!out.includes("sf.move("));
+    } finally {
+      cleanup(root);
+    }
+  } finally {
+    cleanup(sdk);
   }
 });
 

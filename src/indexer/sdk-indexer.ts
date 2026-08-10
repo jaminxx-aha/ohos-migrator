@@ -259,6 +259,23 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
   // profile member determines the target, so all entries for that symbol agree.)
   resolveCrossKitMemberAmbiguity(entries);
 
+  // Resolve cross-kit member drop-in vs. export-level same-name drop-in
+  // conflict. A 1-seg member move whose LEAF is itself a top-level export
+  // with a same-name cross-kit drop-in (e.g. `@ohos.fileio`'s module-level
+  // `read` -> `@ohos.file.fs.read`) is the authoritative replacement for the
+  // symbol `fileio.read`: the export-level rule re-points `import {read}` to
+  // the new kit under the SAME name. A member entry for the same symbol that
+  // rebinds to a DIFFERENT leaf (e.g. `Dir.read` -> `file.fs.listFile`, a
+  // semantic redirect) would, for namespace usage `fileio.read(...)`, splice
+  // the wrong leaf (`listFile`) and corrupt the call. Such 1-seg entries are
+  // semantic redirects, not drop-ins — unflag them so they fall back to
+  // manual. Only applies to 1-seg moves where the leaf collides with a
+  // same-name export drop-in AND the replacement leaf differs; 2-seg
+  // path-preserving moves (container as members[0]) are untouched — the
+  // member rebind's container/leaf are both unchanged, consistent with the
+  // export drop-in.
+  resolveCrossKitMemberExportConflict(entries, crossKitDropin);
+
   return {
     apiVersion,
     sdkPath: sdkApiDir,
@@ -527,38 +544,71 @@ function verifyInstanceSafe(
  * exist as a top-level export of `repl.kit` before the scanner injects a new
  * import and rebinds.
  *
- * Only the FIRST level of nesting is collected; members of nested classes /
- * namespaces are not top-level kit exports.
+ * Two correctness concerns, both arising from how SDK `.d.ts` files are
+ * authored:
+ *   1. Some kits declare top-level functions/constants OUTSIDE any namespace,
+ *      as module-level `declare function`/`declare const` siblings of a
+ *      `declare namespace` (e.g. `@ohos.file.fs` has `declare namespace fileIo`
+ *      for its OO API and module-level `declare function moveFile` for the
+ *      procedural API). Those siblings are top-level exports too
+ *      (`import * as fs` exposes `fs.moveFile`), but the previous code only
+ *      descended into the first namespace body and missed them entirely — so
+ *      the cross-kit verification of `system.file.move -> file.fs.moveFile`
+ *      wrongly failed and the safe rename stayed manual.
+ *   2. A kit's namespace may be declared across SEVERAL
+ *      `declare namespace X { ... }` blocks in one file (declaration merging).
+ *      Iterating only the first block would miss every name in the later
+ *      blocks. (Handled defensively even though the current SDK's kit files
+ *      each use a single block.)
+ *
+ * Therefore we iterate EVERY top-level statement: each `ModuleDeclaration`
+ * contributes the names in its body (first nesting level only — members of
+ * nested classes/namespaces are NOT kit top-level exports), and every other
+ * named statement (module-level `declare function`, `declare const`,
+ * `interface`, `class`, `enum`) contributes its own name. The kit namespace's
+ * own name is intentionally NOT added — `import * as b` exposes the namespace
+ * contents as `b.<member>`, not as `b.<namespaceName>`.
  */
 function collectKitTopLevelExports(sourceFile: Node): Set<string> {
   const names = new Set<string>();
   type Named = Node & { getName?: () => string | undefined };
-  const collectFrom = (nodes: Node[]): void => {
-    for (const child of nodes) {
-      try {
-        const name = (child as Named).getName?.();
-        if (name) names.add(name);
-        // VariableStatement carries the name on its first VariableDeclaration.
-        if (child.getKind() === SyntaxKind.VariableStatement) {
-          const decls = (child as unknown as {
-            getDeclarationList?: () => { getDeclarations?: () => Named[] };
-          }).getDeclarationList?.();
-          const first = decls?.getDeclarations?.()[0];
-          const vn = first?.getName?.();
-          if (vn) names.add(vn);
-        }
-      } catch {
-        // ignore non-nameable / unreadable nodes
+  const tryName = (child: Node): void => {
+    try {
+      const name = (child as Named).getName?.();
+      if (name) names.add(name);
+      // VariableStatement carries the name on its first VariableDeclaration.
+      if (child.getKind() === SyntaxKind.VariableStatement) {
+        const decls = (child as unknown as {
+          getDeclarationList?: () => { getDeclarations?: () => Named[] };
+        }).getDeclarationList?.();
+        const first = decls?.getDeclarations?.()[0];
+        const vn = first?.getName?.();
+        if (vn) names.add(vn);
       }
+    } catch {
+      // ignore non-nameable / unreadable nodes
     }
   };
-  // The outermost namespace/module body is the kit's top level.
-  const outer = sourceFile.getFirstChildByKind(SyntaxKind.ModuleDeclaration);
-  const body = outer?.getFirstChildByKind(SyntaxKind.ModuleBlock);
-  const stmts = (body as unknown as { getStatements?: () => Node[] } | undefined)?.getStatements?.();
-  if (stmts) collectFrom(stmts);
-  else if (outer) collectFrom(outer.getChildren());
-  else collectFrom(sourceFile.getChildren());
+  const collectBody = (md: Node): void => {
+    const body = md.getFirstChildByKind(SyntaxKind.ModuleBlock);
+    const stmts = (body as unknown as { getStatements?: () => Node[] } | undefined)?.getStatements?.();
+    if (stmts) for (const s of stmts) tryName(s);
+    else for (const c of md.getChildren()) tryName(c);
+  };
+  // `getStatements()` yields the file's top-level declarations (a .d.ts kit
+  // file may hold several `declare namespace X {}` blocks via declaration
+  // merging PLUS module-level `declare function`/`const` siblings). Descend
+  // into every namespace block's body; name everything else in place.
+  const topStmts =
+    (sourceFile as unknown as { getStatements?: () => Node[] }).getStatements?.() ??
+    sourceFile.getChildren();
+  for (const child of topStmts) {
+    if (child.getKind() === SyntaxKind.ModuleDeclaration) {
+      collectBody(child); // a kit namespace may span several blocks
+    } else {
+      tryName(child); // module-level declare function/const/class/enum
+    }
+  }
   return names;
 }
 
@@ -638,6 +688,43 @@ function resolveCrossKitMemberAmbiguity(entries: DeprecationEntry[]): void {
     const key = `${e.dep.kit}\0${depMembers.join(".")}`;
     const targets = targetsByKey.get(key);
     if (targets && targets.size > 1) {
+      delete e.crossKitMemberDropin;
+    }
+  }
+}
+
+/**
+ * Unflag 1-seg cross-kit member drop-ins whose leaf collides with a SAME-NAME
+ * export-level drop-in AND whose replacement leaf differs. Such entries are
+ * semantic redirects (the SDK's `@useinstead` points to a functionally
+ * different replacement), not drop-ins: the export-level rule already claims
+ * the symbol under its original name (e.g. `@ohos.fileio`'s module-level
+ * `read` -> `@ohos.file.fs.read`), so a member entry rebinding `fileio.read`
+ * to a different leaf (`Dir.read` -> `file.fs.listFile`) would, for namespace
+ * usage `fileio.read(...)`, splice the wrong leaf and corrupt the call.
+ *
+ * Conditions (all required):
+ *   - exactly 1-seg move (`dep.members.length === 1`);
+ *   - the leaf has a same-name export drop-in: `crossKitDropin[dep.kit\0leaf]`;
+ *   - the member replacement targets that SAME drop-in kit; AND
+ *   - the replacement leaf differs from the deprecated leaf.
+ * 2-seg path-preserving moves are skipped (members[0] is the container, and
+ * the rebind's container+leaf are unchanged — consistent with the drop-in).
+ */
+function resolveCrossKitMemberExportConflict(
+  entries: DeprecationEntry[],
+  crossKitDropin: CrossKitDropin,
+): void {
+  for (const e of entries) {
+    if (!e.crossKitMemberDropin) continue;
+    const depMembers = e.dep.members;
+    if (!depMembers || depMembers.length !== 1) continue;
+    const leaf = depMembers[0];
+    const dropin = crossKitDropin[`${e.dep.kit}\0${leaf}`];
+    if (!dropin) continue;
+    const repl = e.repl;
+    if (!repl?.kit || !repl.members?.length) continue;
+    if (repl.kit === dropin && repl.members[0] !== leaf) {
       delete e.crossKitMemberDropin;
     }
   }
