@@ -19,6 +19,7 @@ import { readFileSync } from "node:fs";
 import { relative, sep } from "node:path";
 import { walkFiles } from "../walk.js";
 import { findMemberOverride } from "../rewriter/overrides.js";
+import { extractImports } from "./import-extractor.js";
 import type { DeprecationEntry, DeprecationMap, Finding, ReplSymbol } from "../rules/types.js";
 
 /** Binding -> the kit specifier it was imported from. */
@@ -71,6 +72,10 @@ export function scanProjectMembers(opts: MemberScanOptions): MemberScanResult {
   const memberIndex = buildMemberIndex(map);
   const files = walkFiles(projectRoot, { extensions: [".ts", ".ets"] });
   const findings: Finding[] = [];
+  // Inject-import findings (zero-length spans at the import-block anchor) are
+  // collected separately and appended AFTER the member-span overlap filter,
+  // which would otherwise drop a zero-length span nested under a body match.
+  const injectFindings: Finding[] = [];
   // Dedupe by (file, line, oldSymbol): the SDK often has several deprecated
   // entries for the same symbol (overloads / repeated @useinstead), which
   // would otherwise emit duplicate findings for one call site. Prefer an
@@ -85,6 +90,46 @@ export function scanProjectMembers(opts: MemberScanOptions): MemberScanResult {
       continue;
     }
     const bindings = extractBindingMap(content);
+    // Reverse map (kit -> existing local binding) to REUSE a binding when the
+    // consumer already imports the cross-kit target, avoiding a redundant
+    // injected import; plus the set of local names already in use for
+    // collision-free allocation of new bindings.
+    const kitToBinding = new Map<string, string>();
+    const usedBindings = new Set<string>();
+    for (const [b, k] of bindings) {
+      usedBindings.add(b);
+      if (!kitToBinding.has(k)) kitToBinding.set(k, b);
+    }
+    // Newly allocated bindings for cross-kit targets the file does NOT yet
+    // import: kit -> { binding, planned }. planned marks that an
+    // `inject-import` finding must be emitted for this (file, kit).
+    const allocated = new Map<string, { binding: string; planned: true }>();
+    const pickBinding = (kit: string): { binding: string; injected: boolean } => {
+      const existing = kitToBinding.get(kit);
+      if (existing) return { binding: existing, injected: false };
+      const hit = allocated.get(kit);
+      if (hit) return { binding: hit.binding, injected: true };
+      // Derive a stable name from the kit's last segment, suffixing on
+      // collision with an existing or already-allocated local name.
+      const base = kit.split(".").pop() ?? "mod";
+      let name = base;
+      let n = 2;
+      while (usedBindings.has(name) || [...allocated.values()].some((a) => a.binding === name)) {
+        name = `${base}${n++}`;
+      }
+      usedBindings.add(name);
+      allocated.set(kit, { binding: name, planned: true });
+      return { binding: name, injected: true };
+    };
+    // Anchor offset for injecting new imports: start of the line after the
+    // last existing import (a file needing injection always has the old
+    // binding's import). Falls back to end-of-file.
+    const imps = extractImports(content);
+    const maxSpecEnd = imps.length ? Math.max(...imps.map((i) => i.specEnd)) : -1;
+    const anchor = maxSpecEnd >= 0
+      ? (() => { const nl = content.indexOf("\n", maxSpecEnd); return nl === -1 ? content.length : nl + 1; })()
+      : 0;
+
     const exportIndex = map.exportIndex ?? {};
     const crossKitDropin = map.crossKitDropin ?? {};
     for (const [binding, kit] of bindings) {
@@ -125,6 +170,35 @@ export function scanProjectMembers(opts: MemberScanOptions): MemberScanResult {
         for (const m of content.matchAll(re)) {
           if (m.index === undefined) continue;
           const matchEnd = m.index + m[0].length;
+          // Cross-kit equal-length member move verified at index time: instead
+          // of a manual finding, rebind the receiver to a (reused or injected)
+          // binding for repl.kit and keep/rename the chain. Covers 1-seg leaf
+          // moves (e.g. startBackgroundRunning) and 2-seg path-preserving moves
+          // (e.g. A2dpSourceProfile.connect). The call-site splice reuses the
+          // rename-member rewriter path; the import line is added by a single
+          // per-file inject-import finding emitted after the loop.
+          if (e.crossKitMemberDropin && e.repl?.kit && e.repl?.members?.length) {
+            const { binding: newBinding } = pickBinding(e.repl.kit);
+            const replChain = e.repl.members.join(".");
+            const replacement = `${newBinding}.${replChain}`;
+            const f: Finding = {
+              file: relative(projectRoot, file).split(sep).join("/"),
+              line: lineAt(content, m.index),
+              oldSymbol: `${binding}.${members.join(".")}`,
+              newSymbol: replacement,
+              since: e.since,
+              rule: "rename-member",
+              needsManual: false,
+              note: `cross-kit rebind -> ${e.repl.kit}.${replChain} (injected import)`,
+              matchStart: m.index,
+              matchEnd,
+              replacement,
+            };
+            const key = `${f.file}:${f.line}:${f.oldSymbol}`;
+            const prev = dedupe.get(key);
+            if (!prev || (prev.needsManual && !f.needsManual)) dedupe.set(key, f);
+            continue;
+          }
           const f = memberFinding(
             file, projectRoot, m.index, matchEnd, content, binding, members, e, ctx, kitMove,
           );
@@ -137,6 +211,28 @@ export function scanProjectMembers(opts: MemberScanOptions): MemberScanResult {
         }
       }
     }
+    // Emit one inject-import finding per file that allocated new bindings,
+    // combining all pending imports into a single insertion (avoids the
+    // exact-span dedup that would silently drop a second same-offset insert).
+    if (allocated.size > 0) {
+      const text =
+        [...allocated.entries()]
+          .map(([k, a]) => `import * as ${a.binding} from '${k}';`)
+          .join("\n") + "\n";
+      injectFindings.push({
+        file: relative(projectRoot, file).split(sep).join("/"),
+        line: lineAt(content, anchor),
+        oldSymbol: "",
+        newSymbol: null,
+        since: 0,
+        rule: "inject-import",
+        needsManual: false,
+        note: `inject ${allocated.size} import(s) for cross-kit member rebind`,
+        matchStart: anchor,
+        matchEnd: anchor,
+        replacement: text,
+      });
+    }
   }
 
   // Drop findings whose match span is subsumed by a longer match at the same
@@ -146,7 +242,7 @@ export function scanProjectMembers(opts: MemberScanOptions): MemberScanResult {
   // would double-report / produce overlapping rewriter edits. Keep the longer
   // (more specific) match per span.
   const deduped = dedupeOverlappingSpans([...dedupe.values()]);
-  return { findings: deduped, filesScanned: files.length };
+  return { findings: [...deduped, ...injectFindings], filesScanned: files.length };
 }
 
 /**
@@ -244,6 +340,21 @@ export interface MemberReplacement {
  * `rewrite-import` re-points the binding, the member lives on the same binding.
  */
 export type KitMoveResolver = (depKit: string) => string | undefined;
+
+/**
+ * Resolve a deprecated export's cross-kit same-name drop-in target kit, i.e.
+ * the kit the export moved to wholesale under the same name (named export or a
+ * `export default`). `map.crossKitDropin[\`${kit}\0${exportName}\`]` (or the
+ * `\0default` variant). Returns undefined when the export has no drop-in.
+ *
+ * Threaded into the instance scanners so an instance member whose *container*
+ * moved cross-kit via a drop-in can be suppressed: `rewrite-import` re-points
+ * the import specifier to the drop-in kit, so an unchanged member chain (e.g.
+ * `cfg.language` on a `Configuration` that moved to `@ohos.app.ability.
+ * Configuration`) already resolves on the re-pointed binding — the instance
+ * finding is redundant.
+ */
+export type ContainerDropinResolver = (depKit: string, exportName: string) => string | undefined;
 
 /**
  * Classify a deprecated member's replacement.
@@ -472,6 +583,9 @@ export function scanProjectInstanceMembers(opts: MemberScanOptions): InstanceSca
   const { projectRoot, map } = opts;
   const since = opts.since ?? 0;
   const kitMove: KitMoveResolver = (k) => map.kitIndex[k]?.newKit;
+  const dropinMap = map.crossKitDropin ?? {};
+  const containerDropin: ContainerDropinResolver = (k, n) =>
+    dropinMap[`${k}\0${n}`] ?? dropinMap[`${k}\0default`];
   const instanceIndex = buildInstanceIndex(map);
   const files = walkFiles(projectRoot, { extensions: [".ts", ".ets"] });
   const findings: Finding[] = [];
@@ -501,6 +615,7 @@ export function scanProjectInstanceMembers(opts: MemberScanOptions): InstanceSca
           const oldSymbol = `${varName}.${accessChain.join(".")}`;
           const f = instanceFinding(
             fileRel, m.index, matchEnd, content, varName, accessChain, e, kitMove,
+            containerDropin,
           );
           if (!f) continue; // suppressed (e.g. no-op)
           const key = `${f.file}:${f.line}:${f.oldSymbol}`;
@@ -524,6 +639,7 @@ export function instanceFinding(
   accessChain: string[],
   e: DeprecationEntry,
   kitMove: KitMoveResolver,
+  containerDropin?: ContainerDropinResolver,
 ): Finding | null {
   const oldSymbol = `${varName}.${accessChain.join(".")}`;
   const repl = e.repl;
@@ -533,6 +649,29 @@ export function instanceFinding(
       since: e.since, rule: "manual", needsManual: true,
       note: "no @useinstead replacement",
     };
+  }
+  // Container cross-kit drop-in coverage: when this member's enclosing export
+  // moved wholesale to another kit under the same name (a `crossKitDropin`),
+  // `rewrite-import` already re-points the import specifier to that kit. If the
+  // member's documented replacement kit matches the drop-in target AND the chain
+  // is unchanged (the member came along with the container), the instance
+  // access already resolves on the re-pointed binding — the finding is
+  // redundant. Mirrors the binding scanner's suppression in
+  // `scanProjectMembers`. NB: requires `repl.kit === dropin` (the member's
+  // @useinstead target lines up with where the container moved), which is a
+  // stronger guarantee than "any drop-in exists" — a member whose @useinstead
+  // points elsewhere did NOT travel with the container and is not covered.
+  if (e.dep.exportName && e.dep.members && containerDropin) {
+    const dropin = containerDropin(e.dep.kit, e.dep.exportName);
+    const replMembers = repl.members;
+    if (
+      dropin &&
+      repl.kit === dropin &&
+      e.dep.members.length === replMembers.length &&
+      e.dep.members.every((m, i) => m === replMembers[i])
+    ) {
+      return null; // suppress — covered by the import-specifier rewrite
+    }
   }
   const sameKit = !repl.kit || repl.kit === e.dep.kit;
   const aligned = !!(repl.kit && kitMove(e.dep.kit) === repl.kit);

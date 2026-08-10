@@ -36,6 +36,8 @@ import type {
 
 const DEPRECATED_RE = /@deprecated\s+since\s+(\d+)/;
 const USEINSTEAD_RE = /@useinstead\s+(\S+)/;
+/** A clean JS identifier — used to reject @useinstead parse artifacts. */
+const IDENT_RE = /^[A-Za-z_$][\w$]*$/;
 
 const NAMEABLE_KINDS = new Set<SyntaxKind>([
   SyntaxKind.ModuleDeclaration,
@@ -97,6 +99,26 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
   const nsImportKits = new Map<string, string>(); // nestedFile -> kit
   const namedReexports = new Map<string, string>(); // `${nestedFile}\0${exportName}` -> kit
   buildReexportMap(project, topLevelFiles, fileSet, nsImportKits, namedReexports);
+
+  // Per-kit top-level export-name set, used to verify cross-kit equal-length
+  // member moves: the replacement's first segment (the leaf for a 1-seg move,
+  // the container for a 2-seg path-preserving move) must be a top-level export
+  // of repl.kit for the scanner to safely inject `import * as <b> from
+  // '<repl.kit>'` and rebind the receiver. Built in a first pass so repl.kit
+  // (possibly a different file) is available regardless of iteration order.
+  const kitTopLevelExports = new Map<string, Set<string>>();
+  for (const f of topLevelFiles) {
+    let content: string;
+    try {
+      content = readFileSync(f, "utf8");
+    } catch {
+      continue;
+    }
+    const sf = getOrCreateSourceFile(project, f, content);
+    if (!sf) continue;
+    const set = collectKitTopLevelExports(sf);
+    if (set.size > 0) kitTopLevelExports.set("@" + kitFromFile(basename(f)), set);
+  }
 
   const entries: DeprecationEntry[] = [];
   const kitIndex: Record<string, KitDepInfo> = {};
@@ -165,6 +187,9 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
 
       const sourceLine = node.getStartLineNumber() ?? 0;
       const instanceSafe = verifyInstanceSafe(node, dep, repl, ownKit, kitIndex);
+      const isCrossKitMemberDropin = verifyCrossKitMemberDropin(
+        dep, repl, ownKit, kitIndex, kitTopLevelExports,
+      );
       entries.push({
         dep,
         since,
@@ -172,6 +197,7 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
         kind: isModuleMove ? "module-move" : "member",
         source: { file: filePath, line: sourceLine },
         ...(instanceSafe ? { instanceSafe: true } : {}),
+        ...(isCrossKitMemberDropin ? { crossKitMemberDropin: true } : {}),
       });
 
       // Same-kit export-name rename (e.g. @ohos.UiTest `By` -> `On`): a
@@ -477,6 +503,88 @@ function verifyInstanceSafe(
     if (m.getName?.() === newLeaf) return true;
   }
   return false;
+}
+
+/**
+ * Collect the names of declarations directly inside a kit file's outermost
+ * `declare namespace`/`declare module` body — the kit's top-level exports,
+ * i.e. the symbols reachable as `binding.<name>` after
+ * `import * as binding from '<kit>'`. Used to verify cross-kit equal-length
+ * member moves: the replacement's first segment (leaf or container) must
+ * exist as a top-level export of `repl.kit` before the scanner injects a new
+ * import and rebinds.
+ *
+ * Only the FIRST level of nesting is collected; members of nested classes /
+ * namespaces are not top-level kit exports.
+ */
+function collectKitTopLevelExports(sourceFile: Node): Set<string> {
+  const names = new Set<string>();
+  type Named = Node & { getName?: () => string | undefined };
+  const collectFrom = (nodes: Node[]): void => {
+    for (const child of nodes) {
+      try {
+        const name = (child as Named).getName?.();
+        if (name) names.add(name);
+        // VariableStatement carries the name on its first VariableDeclaration.
+        if (child.getKind() === SyntaxKind.VariableStatement) {
+          const decls = (child as unknown as {
+            getDeclarationList?: () => { getDeclarations?: () => Named[] };
+          }).getDeclarationList?.();
+          const first = decls?.getDeclarations?.()[0];
+          const vn = first?.getName?.();
+          if (vn) names.add(vn);
+        }
+      } catch {
+        // ignore non-nameable / unreadable nodes
+      }
+    }
+  };
+  // The outermost namespace/module body is the kit's top level.
+  const outer = sourceFile.getFirstChildByKind(SyntaxKind.ModuleDeclaration);
+  const body = outer?.getFirstChildByKind(SyntaxKind.ModuleBlock);
+  const stmts = (body as unknown as { getStatements?: () => Node[] } | undefined)?.getStatements?.();
+  if (stmts) collectFrom(stmts);
+  else if (outer) collectFrom(outer.getChildren());
+  else collectFrom(sourceFile.getChildren());
+  return names;
+}
+
+/**
+ * Verify a cross-kit equal-length member move is safe to auto-replace by
+ * injecting a new import and rebinding the receiver: the replacement chain
+ * must be the same length as the deprecated chain (call shape preserved) and
+ * its FIRST segment must be a top-level export of `repl.kit` (a different,
+ * real, non-aligned kit). For a 1-seg move that first segment is the leaf
+ * (e.g. `startBackgroundRunning`); for a 2-seg path-preserving move it is the
+ * container (e.g. `A2dpSourceProfile` in `bluetoothManager.A2dpSourceProfile.connect`
+ * -> `bluetooth.a2dp.A2dpSourceProfile.connect`). The remaining segments are
+ * trusted from @useinstead at the same trust level as the shipped 1-seg leaf.
+ * Without verification, the entry stays manual so the scanner never splices an
+ * unverified (possibly non-existent) target. Unequal-length moves are rejected
+ * (call-shape change: instance<->static, container flatten/extend).
+ */
+function verifyCrossKitMemberDropin(
+  dep: DepSymbol,
+  repl: ReplSymbol | null,
+  ownKit: string,
+  kitIndex: Record<string, KitDepInfo>,
+  kitTopLevelExports: Map<string, Set<string>>,
+): boolean {
+  if (!repl || !repl.members || repl.members.length === 0) return false;
+  if (!dep.members || dep.members.length !== repl.members.length) return false;
+  if (!repl.kit || repl.kit === ownKit) return false;
+  // A target that lines up with the deprecated kit's indexed module move is
+  // already covered by rewrite-import (the binding is re-pointed) — leave it.
+  if (kitIndex[ownKit]?.newKit === repl.kit) return false;
+  // Every repl segment must be a clean JS identifier. The first is verified
+  // against the kit's top-level exports below; the rest are trusted from
+  // @useinstead and must not carry parse artifacts (e.g. `on`'s @useinstead
+  // `ble.on.event:BLEDeviceFind` leaks a `name:value` event hint into the
+  // chain — splicing `ble.on.event:BLEDeviceFind` would emit invalid code).
+  if (!repl.members.every((m) => IDENT_RE.test(m))) return false;
+  const set = kitTopLevelExports.get(repl.kit);
+  if (!set) return false;
+  return set.has(repl.members[0]);
 }
 
 /**

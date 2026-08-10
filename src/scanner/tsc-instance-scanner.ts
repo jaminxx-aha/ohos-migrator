@@ -35,6 +35,7 @@ import {
   buildInstanceIndex,
   dedupeOverlappingSpans,
   instanceFinding,
+  type ContainerDropinResolver,
   type KitMoveResolver,
   type MemberScanOptions,
 } from "./member-scanner.js";
@@ -66,6 +67,9 @@ export function scanProjectInstanceMembersTsc(opts: MemberScanOptions): TscInsta
   const instanceIndex = buildInstanceIndex(map);
   if (instanceIndex.size === 0) return empty;
   const kitMove: KitMoveResolver = (k) => map.kitIndex[k]?.newKit;
+  const dropinMap = map.crossKitDropin ?? {};
+  const containerDropin: ContainerDropinResolver = (k, n) =>
+    dropinMap[`${k}\0${n}`] ?? dropinMap[`${k}\0default`];
 
   // Load the SDK ambient-module declarations + the project's .ts sources. The
   // SDK `.d.ts` are self-contained `declare module '@ohos.X'` blocks; loading
@@ -132,6 +136,7 @@ export function scanProjectInstanceMembersTsc(opts: MemberScanOptions): TscInsta
         const end = node.getEnd();
         const f = instanceFinding(
           fileRel, start, end, content, receiverText, accessChain, e, kitMove,
+          containerDropin,
         );
         if (!f) continue; // suppressed (no-op)
         const key = `${f.file}:${f.line}:${f.oldSymbol}`;

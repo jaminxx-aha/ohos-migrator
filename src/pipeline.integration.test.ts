@@ -234,6 +234,48 @@ export default class Want { bundle: string }
   "@ohos.app.ability.Want.d.ts": `
 declare namespace Want {}
 `,
+  // Cross-kit single-leaf member move: `particleAbility.startBackgroundRunning`
+  // -> `@ohos.resourceschedule.backgroundTaskManager.startBackgroundRunning`.
+  // The kit did NOT move as a whole; the indexer must verify the replacement
+  // leaf is a top-level export of the target kit and flag the entry
+  // `crossKitMemberDropin` so the scanner injects an import + rebinds.
+  "@ohos.ability.particleAbility.d.ts": `
+declare namespace particleAbility {
+  /** @since 7 @deprecated since 9 @useinstead ohos.resourceschedule.backgroundTaskManager.startBackgroundRunning */
+  function startBackgroundRunning(ctx: string): void;
+}
+`,
+  "@ohos.resourceschedule.backgroundTaskManager.d.ts": `
+declare namespace backgroundTaskManager {
+  /** @since 9 */
+  function startBackgroundRunning(ctx: string): void;
+}
+`,
+  // Cross-kit 2-segment path-preserving member move: the nested namespace
+  // A2dpSourceProfile (and its member connect) moved wholesale from
+  // bluetoothManager to bluetooth.a2dp. Only the receiver binding changes.
+  "@ohos.bluetoothManager.d.ts": `
+declare namespace bluetoothManager {
+  namespace A2dpSourceProfile {
+    /** @since 8 @deprecated since 10 @useinstead ohos.bluetooth.a2dp.A2dpSourceProfile.connect */
+    function connect(): void;
+  }
+  namespace BLE {
+    /** @since 8 @deprecated since 10 @useinstead ohos.bluetooth.ble.on.event:BLEDeviceFind */
+    function on(event: string): void;
+  }
+}
+`,
+  "@ohos.bluetooth.a2dp.d.ts": `
+declare namespace a2dp {
+  interface A2dpSourceProfile { connect(): void; }
+}
+`,
+  "@ohos.bluetooth.ble.d.ts": `
+declare namespace ble {
+  function on(event: string, cb: () => void): void;
+}
+`,
 };
 
 test("indexer: top-level entries + module-move + bare-kit useinstead", () => {
@@ -294,6 +336,64 @@ test("indexer: whole-export @useinstead (repl.exportName) surfaces as cross-kit 
   }
 });
 
+test("indexer: cross-kit single-leaf member move flagged crossKitMemberDropin", () => {
+  // `particleAbility.startBackgroundRunning` -> backgroundTaskManager's same-
+  // named top-level function. The replacement leaf is verified present in the
+  // target kit, so the entry is flagged for the scanner's import-injection
+  // path (rather than left as a plain cross-kit manual).
+  const sdk = makeTree(SDK_FILES);
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const e = map.entries.find(
+      (x) => x.dep.kit === "@ohos.ability.particleAbility" && x.dep.members?.[0] === "startBackgroundRunning",
+    );
+    assert.ok(e, "particleAbility.startBackgroundRunning entry exists");
+    assert.equal(e!.crossKitMemberDropin, true, "flagged crossKitMemberDropin");
+    assert.equal(e!.repl?.kit, "@ohos.resourceschedule.backgroundTaskManager");
+    assert.equal(e!.repl?.members?.[0], "startBackgroundRunning");
+  } finally {
+    cleanup(sdk);
+  }
+});
+
+test("indexer: cross-kit 2-seg path-preserving move flagged crossKitMemberDropin", () => {
+  // `bluetoothManager.A2dpSourceProfile.connect` -> `bluetooth.a2dp.A2dpSourceProfile.connect`:
+  // the nested namespace moved wholesale; the chain is byte-identical, only
+  // the kit changes. The container A2dpSourceProfile is verified as a
+  // top-level export of the target kit, so the entry is flagged.
+  const sdk = makeTree(SDK_FILES);
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const e = map.entries.find(
+      (x) => x.dep.kit === "@ohos.bluetoothManager" && x.dep.members?.[0] === "A2dpSourceProfile",
+    );
+    assert.ok(e, "bluetoothManager.A2dpSourceProfile.connect entry exists");
+    assert.equal(e!.crossKitMemberDropin, true, "2-seg path-preserving flagged");
+    assert.deepEqual(e!.repl?.members, ["A2dpSourceProfile", "connect"]);
+    assert.equal(e!.repl?.kit, "@ohos.bluetooth.a2dp");
+  } finally {
+    cleanup(sdk);
+  }
+});
+
+test("indexer: cross-kit move with @useinstead parse artifact stays manual", () => {
+  // `bluetoothManager.BLE.on` has @useinstead `ohos.bluetooth.ble.on.event:BLEDeviceFind`
+  // — the parser leaks a `name:value` event hint into the member chain
+  // (repl.members = ["on","event:BLEDeviceFind"]). Splicing that would emit
+  // invalid code, so the identifier guard must leave the entry unflagged (manual).
+  const sdk = makeTree(SDK_FILES);
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const e = map.entries.find(
+      (x) => x.dep.kit === "@ohos.bluetoothManager" && x.dep.members?.[0] === "BLE",
+    );
+    assert.ok(e, "bluetoothManager.BLE.on entry exists");
+    assert.notEqual(e!.crossKitMemberDropin, true, "artifact chain must NOT be flagged");
+  } finally {
+    cleanup(sdk);
+  }
+});
+
 test("indexer + scan: default-export move rewrites a default import's specifier", () => {
   // `export default class Want` -> @ohos.app.ability.Want: a default import
   // `import Want from '@ohos.application.Want'` only needs its specifier
@@ -314,6 +414,30 @@ test("indexer + scan: default-export move rewrites a default import's specifier"
     assert.ok(out.includes("import Want from '@ohos.app.ability.Want';"), "specifier rewritten");
     assert.ok(out.includes("new Want()"), "call site unchanged");
     assert.equal(res.skippedManual, 0);
+  } finally {
+    cleanup(sdk);
+    cleanup(root);
+  }
+});
+
+test("indexer + scan + rewrite: cross-kit member dropin injects import end-to-end", () => {
+  // Real indexer verifies the leaf in the target kit -> crossKitMemberDropin
+  // flag -> scanner emits rebind + inject-import -> rewriter applies both.
+  const sdk = makeTree(SDK_FILES);
+  const root = makeTree({
+    "p.ts": `import * as particleAbility from '@ohos.ability.particleAbility';
+export function go() { particleAbility.startBackgroundRunning('ctx'); }
+`,
+  });
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const { findings } = scanProjectMembers({ projectRoot: root, map });
+    assert.ok(findings.some((f) => f.rule === "inject-import"));
+    const res = rewriteProject(root, findings, { write: true });
+    assert.equal(res.skippedManual, 0);
+    const out = readFileSync(join(root, "p.ts"), "utf8");
+    assert.ok(out.includes("import * as backgroundTaskManager from '@ohos.resourceschedule.backgroundTaskManager';"));
+    assert.ok(out.includes("backgroundTaskManager.startBackgroundRunning('ctx');"));
   } finally {
     cleanup(sdk);
     cleanup(root);
@@ -715,6 +839,296 @@ test("scan: cross-kit dropin suppresses chain-equal member findings", () => {
     const f = bySymbol(findings, "Want.renamed");
     assert.equal(f?.rule, "manual");
   } finally {
+    cleanup(root);
+  }
+});
+
+/* The instance scanners (regex + tsc) must mirror the binding scanner's
+ * container drop-in suppression: when a member's container moved cross-kit
+ * via a same-name drop-in and the member chain is unchanged, the import-
+ * specifier rewrite already covers `cfg.language` on the re-pointed binding —
+ * the instance finding is redundant. Mirrors the fix for the
+ * `@ohos.application.Configuration.language` / `@ohos.application.Want.*`
+ * redundant manual findings (11 entries in the real API-24 map). */
+
+function dropinInstanceProject(): string {
+  return makeTree({
+    "page.ets": `
+import { Configuration } from '@ohos.application.Configuration';
+import { Want } from '@ohos.application.Want';
+let cfg: Configuration;
+let w: Want;
+cfg.language;    // named dropin, chain equal -> suppressed
+cfg.colorMode;   // (extra member, not in map -> not flagged at all)
+w.deviceId;      // named dropin, chain equal -> suppressed
+w.renamed;       // chain differs -> still reported (manual)
+`,
+  });
+}
+
+test("scan instance: cross-kit dropin suppresses chain-equal instance findings", () => {
+  const root = dropinInstanceProject();
+  try {
+    const map = dropinMemberMap();
+    // Add a second Configuration member + the Want.renamed (already in map) so
+    // both the suppressed and reported paths are exercised via instance access.
+    const e = (
+      kit: string, exportName: string, members: string[], repl: ReplSymbol, since = 9,
+    ): DeprecationEntry => ({
+      dep: { kit, exportName, members }, since, repl, kind: "member", source: { file: "", line: 0 },
+    });
+    const entries = map.entries.concat([
+      e("@ohos.application.Configuration", "Configuration", ["colorMode"], { kit: "@ohos.app.ability.Configuration", members: ["colorMode"] }),
+    ]);
+    const mapWithColor = { ...map, entries };
+    const { findings } = scanProjectInstanceMembers({ projectRoot: root, map: mapWithColor });
+    // named-export dropin, chain unchanged -> specifier rewrite covers it
+    assert.equal(bySymbol(findings, "cfg.language"), undefined);
+    assert.equal(bySymbol(findings, "cfg.colorMode"), undefined);
+    assert.equal(bySymbol(findings, "w.deviceId"), undefined);
+    // chain differs -> still needs a member splice, so still reported (manual)
+    const f = bySymbol(findings, "w.renamed");
+    assert.equal(f?.rule, "manual");
+  } finally {
+    cleanup(root);
+  }
+});
+
+/* cross-kit single-leaf member move (crossKitMemberDropin): the kit did NOT
+ * move as a whole, so rewrite-import can't rebind it. The scanner instead
+ * rebinds the receiver to a (reused or injected) binding for repl.kit and
+ * emits one per-file inject-import finding. Mirrors particleAbility ->
+ * backgroundTaskManager in the real SDK. */
+
+function crossKitMemberEntry(
+  kit: string,
+  members: string[],
+  repl: ReplSymbol,
+  since = 10,
+): DeprecationEntry {
+  return {
+    dep: { kit, exportName: "x", members },
+    since,
+    repl,
+    kind: "member",
+    source: { file: "", line: 0 },
+    crossKitMemberDropin: true,
+  };
+}
+
+function crossKitMemberMap(): DeprecationMap {
+  return mapOf([
+    // same-leaf dropin: startBackgroundRunning -> startBackgroundRunning
+    crossKitMemberEntry("@ohos.ability.particleAbility", ["startBackgroundRunning"],
+      { kit: "@ohos.resourceschedule.backgroundTaskManager", members: ["startBackgroundRunning"] }),
+    // leaf-rename: cancelBackgroundRunning -> stopBackgroundRunning
+    crossKitMemberEntry("@ohos.ability.particleAbility", ["cancelBackgroundRunning"],
+      { kit: "@ohos.resourceschedule.backgroundTaskManager", members: ["stopBackgroundRunning"] }),
+  ]);
+}
+
+function crossKitMemberProject(): string {
+  return makeTree({
+    "p.ts": `import * as particleAbility from '@ohos.ability.particleAbility';
+import * as other from '@ohos.something.else';
+export function go() {
+  particleAbility.startBackgroundRunning('ctx');
+  particleAbility.cancelBackgroundRunning();
+  particleAbility.untouchedMember();
+}
+`,
+  });
+}
+
+test("scan: cross-kit member dropin rebinds + emits one inject-import", () => {
+  const root = crossKitMemberProject();
+  try {
+    const { findings } = scanProjectMembers({ projectRoot: root, map: crossKitMemberMap() });
+    const a = bySymbol(findings, "particleAbility.startBackgroundRunning");
+    assert.equal(a?.rule, "rename-member");
+    assert.equal(a?.replacement, "backgroundTaskManager.startBackgroundRunning");
+    assert.ok(a?.note.includes("injected import"));
+    const b = bySymbol(findings, "particleAbility.cancelBackgroundRunning");
+    assert.equal(b?.replacement, "backgroundTaskManager.stopBackgroundRunning");
+    // exactly one inject-import finding for the file
+    const injects = findings.filter((f) => f.rule === "inject-import");
+    assert.equal(injects.length, 1);
+    assert.ok(injects[0].replacement!.includes("import * as backgroundTaskManager from '@ohos.resourceschedule.backgroundTaskManager';"));
+    assert.equal(injects[0].matchStart, injects[0].matchEnd); // zero-length insertion
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("rewrite: cross-kit member dropin injects import + rebinds receiver", () => {
+  const root = crossKitMemberProject();
+  try {
+    const { findings } = scanProjectMembers({ projectRoot: root, map: crossKitMemberMap() });
+    const res = rewriteProject(root, findings, { write: true });
+    assert.equal(res.skippedManual, 0);
+    const out = readFileSync(join(root, "p.ts"), "utf8");
+    assert.ok(out.includes("import * as backgroundTaskManager from '@ohos.resourceschedule.backgroundTaskManager';"));
+    assert.ok(out.includes("backgroundTaskManager.startBackgroundRunning('ctx');"));
+    assert.ok(out.includes("backgroundTaskManager.stopBackgroundRunning();"));
+    // old binding retained for the non-deprecated member
+    assert.ok(out.includes("particleAbility.untouchedMember();"));
+    assert.ok(!out.includes("particleAbility.startBackgroundRunning"));
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("scan: cross-kit member dropin reuses an existing target-kit import (no inject)", () => {
+  const root = makeTree({
+    "p.ts": `import * as particleAbility from '@ohos.ability.particleAbility';
+import * as backgroundTaskManager from '@ohos.resourceschedule.backgroundTaskManager';
+export function go() { particleAbility.startBackgroundRunning('ctx'); }
+`,
+  });
+  try {
+    const { findings } = scanProjectMembers({ projectRoot: root, map: crossKitMemberMap() });
+    const a = bySymbol(findings, "particleAbility.startBackgroundRunning");
+    assert.equal(a?.replacement, "backgroundTaskManager.startBackgroundRunning");
+    // target kit already imported -> no inject-import finding
+    assert.equal(findings.filter((f) => f.rule === "inject-import").length, 0);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("scan: cross-kit member dropin suffixes a colliding binding name", () => {
+  const root = makeTree({
+    "p.ts": `import * as particleAbility from '@ohos.ability.particleAbility';
+import * as backgroundTaskManager from '@ohos.totally.different';
+export function go() { particleAbility.startBackgroundRunning('ctx'); }
+`,
+  });
+  try {
+    const { findings } = scanProjectMembers({ projectRoot: root, map: crossKitMemberMap() });
+    const a = bySymbol(findings, "particleAbility.startBackgroundRunning");
+    // `backgroundTaskManager` is taken by a different kit -> allocate `2`
+    assert.equal(a?.replacement, "backgroundTaskManager2.startBackgroundRunning");
+    const inj = findings.find((f) => f.rule === "inject-import");
+    assert.ok(inj?.replacement!.includes("import * as backgroundTaskManager2 from '@ohos.resourceschedule.backgroundTaskManager';"));
+  } finally {
+    cleanup(root);
+  }
+});
+
+/* cross-kit 2-segment path-preserving member move (crossKitMemberDropin,
+ * multi-segment): the whole nested namespace moved to another kit, the member
+ * chain unchanged. The scanner rebinds the receiver to a (reused or injected)
+ * binding for repl.kit and splices the full chain `newBinding.Container.member`.
+ * Mirrors bluetoothManager.A2dpSourceProfile.connect -> bluetooth.a2dp... in the
+ * real SDK. */
+
+function crossKitMember2SegMap(): DeprecationMap {
+  return mapOf([
+    crossKitMemberEntry("@ohos.bluetoothManager", ["A2dpSourceProfile", "connect"],
+      { kit: "@ohos.bluetooth.a2dp", members: ["A2dpSourceProfile", "connect"] }),
+  ]);
+}
+
+test("scan: cross-kit 2-seg dropin rebinds full chain + emits one inject-import", () => {
+  const root = makeTree({
+    "p.ts": `import * as bm from '@ohos.bluetoothManager';
+import * as other from '@ohos.something.else';
+export function go() {
+  bm.A2dpSourceProfile.connect();
+  bm.untouchedMember();
+}
+`,
+  });
+  try {
+    const { findings } = scanProjectMembers({ projectRoot: root, map: crossKitMember2SegMap() });
+    const a = bySymbol(findings, "bm.A2dpSourceProfile.connect");
+    assert.equal(a?.rule, "rename-member");
+    assert.equal(a?.replacement, "a2dp.A2dpSourceProfile.connect");
+    assert.ok(a?.note.includes("injected import"));
+    const injects = findings.filter((f) => f.rule === "inject-import");
+    assert.equal(injects.length, 1);
+    assert.ok(injects[0].replacement!.includes("import * as a2dp from '@ohos.bluetooth.a2dp';"));
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("rewrite: cross-kit 2-seg dropin injects import + rebinds full chain", () => {
+  const root = makeTree({
+    "p.ts": `import * as bm from '@ohos.bluetoothManager';
+export function go() { bm.A2dpSourceProfile.connect(); bm.untouchedMember(); }
+`,
+  });
+  try {
+    const { findings } = scanProjectMembers({ projectRoot: root, map: crossKitMember2SegMap() });
+    const res = rewriteProject(root, findings, { write: true });
+    assert.equal(res.skippedManual, 0);
+    const out = readFileSync(join(root, "p.ts"), "utf8");
+    assert.ok(out.includes("import * as a2dp from '@ohos.bluetooth.a2dp';"));
+    assert.ok(out.includes("a2dp.A2dpSourceProfile.connect();"));
+    assert.ok(out.includes("bm.untouchedMember();"));
+    assert.ok(!out.includes("bm.A2dpSourceProfile.connect"));
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("scan: 2-seg dropin reuses an existing target-kit import (no inject)", () => {
+  const root = makeTree({
+    "p.ts": `import * as bm from '@ohos.bluetoothManager';
+import * as a2dp from '@ohos.bluetooth.a2dp';
+export function go() { bm.A2dpSourceProfile.connect(); }
+`,
+  });
+  try {
+    const { findings } = scanProjectMembers({ projectRoot: root, map: crossKitMember2SegMap() });
+    const a = bySymbol(findings, "bm.A2dpSourceProfile.connect");
+    assert.equal(a?.replacement, "a2dp.A2dpSourceProfile.connect");
+    assert.equal(findings.filter((f) => f.rule === "inject-import").length, 0);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("scan: 2-seg dropin suffixes a colliding binding name", () => {
+  const root = makeTree({
+    "p.ts": `import * as bm from '@ohos.bluetoothManager';
+import * as a2dp from '@ohos.totally.different';
+export function go() { bm.A2dpSourceProfile.connect(); }
+`,
+  });
+  try {
+    const { findings } = scanProjectMembers({ projectRoot: root, map: crossKitMember2SegMap() });
+    const a = bySymbol(findings, "bm.A2dpSourceProfile.connect");
+    assert.equal(a?.replacement, "a2dp2.A2dpSourceProfile.connect");
+    const inj = findings.find((f) => f.rule === "inject-import");
+    assert.ok(inj?.replacement!.includes("import * as a2dp2 from '@ohos.bluetooth.a2dp';"));
+  } finally {
+    cleanup(root);
+  }
+});
+
+test("indexer + scan + rewrite: cross-kit 2-seg dropin injects import end-to-end", () => {
+  // Real indexer verifies the container in the target kit -> crossKitMemberDropin
+  // -> scanner rebinds the full 2-seg chain + injects -> rewriter applies both.
+  const sdk = makeTree(SDK_FILES);
+  const root = makeTree({
+    "p.ts": `import * as bm from '@ohos.bluetoothManager';
+export function go() { bm.A2dpSourceProfile.connect(); }
+`,
+  });
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const { findings } = scanProjectMembers({ projectRoot: root, map });
+    assert.ok(findings.some((f) => f.rule === "inject-import"));
+    const res = rewriteProject(root, findings, { write: true });
+    assert.equal(res.skippedManual, 0);
+    const out = readFileSync(join(root, "p.ts"), "utf8");
+    assert.ok(out.includes("import * as a2dp from '@ohos.bluetooth.a2dp';"));
+    assert.ok(out.includes("a2dp.A2dpSourceProfile.connect();"));
+    assert.ok(!out.includes("bm.A2dpSourceProfile.connect"));
+  } finally {
+    cleanup(sdk);
     cleanup(root);
   }
 });

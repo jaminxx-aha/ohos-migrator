@@ -35,6 +35,16 @@ export interface DeprecationEntry {
    * splice `var.<leaf>` -> `var.<repl leaf>` safely; absent otherwise.
    */
   instanceSafe?: boolean;
+  /**
+   * True when this is a cross-kit single-leaf member move whose replacement
+   * leaf is verified at index time to be a top-level export of `repl.kit`
+   * (e.g. `@ohos.ability.particleAbility.startBackgroundRunning` ->
+   * `@ohos.resourceschedule.backgroundTaskManager.startBackgroundRunning`).
+   * The scanner then injects a new `import * as <binding> from '<repl.kit>'`
+   * and rebinds the receiver at each call site, instead of reporting manual.
+   * Only set for 1-seg dep -> 1-seg repl, cross-kit, non-aligned, verified.
+   */
+  crossKitMemberDropin?: boolean;
 }
 
 /** Per-kit summary used by the scanner for import-level matching. */
@@ -104,6 +114,7 @@ export type RuleKind =
   | "rename-export"
   | "override"
   | "signature-change"
+  | "inject-import"
   | "manual";
 
 /** A single scan finding. */

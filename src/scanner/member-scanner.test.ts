@@ -276,3 +276,66 @@ test("instanceFinding: single-leaf instanceSafe still auto-fixes", () => {
   assert.equal(f!.rule, "rename-member");
   assert.equal(f!.replacement, "rm.getStringValue");
 });
+
+// --- instanceFinding: container cross-kit drop-in coverage -----------------
+// An instance member whose *container* (exportName) moved cross-kit via a
+// same-name drop-in is covered by the import-specifier rewrite: after the
+// specifier is re-pointed, `cfg.language` resolves on the new Configuration.
+// The instance finding is redundant and must be suppressed.
+
+/** Resolver backed by a fixed { `${kit}\0${exportName}` -> targetKit } map. */
+const dropinFrom = (table: Record<string, string>) =>
+  (kit: string, exportName: string) => table[`${kit}\0${exportName}`];
+
+test("instanceFinding: member of a container that cross-kit drop-in moved -> suppressed", () => {
+  // Configuration.language: dep.kit=@ohos.application.Configuration, the
+  // container Configuration moved to @ohos.app.ability.Configuration (drop-in),
+  // and the member's @useinstead points to that same target with chain [language]
+  // unchanged -> the import rewrite already covers `cfg.language`.
+  const dropin = dropinFrom({
+    "@ohos.application.Configuration\0Configuration": "@ohos.app.ability.Configuration",
+  });
+  const e = instEntry("@ohos.application.Configuration", "Configuration", ["language"],
+    { kit: "@ohos.app.ability.Configuration", members: ["language"] });
+  const f = instanceFinding("p.ts", 0, 11, "cfg.language", "cfg", ["language"], e, noMove, dropin);
+  assert.equal(f, null); // suppressed — covered by rewrite-import
+});
+
+test("instanceFinding: member whose repl.kit differs from drop-in target -> NOT suppressed", () => {
+  // Container Configuration moved to kit A, but the member's @useinstead points
+  // to a *different* kit B -> the member did not travel with the container, so
+  // the import rewrite does NOT cover it. Must still report manual.
+  const dropin = dropinFrom({
+    "@ohos.application.Configuration\0Configuration": "@ohos.app.ability.Configuration",
+  });
+  const e = instEntry("@ohos.application.Configuration", "Configuration", ["language"],
+    { kit: "@ohos.some.other.kit", members: ["language"] });
+  const f = instanceFinding("p.ts", 0, 11, "cfg.language", "cfg", ["language"], e, noMove, dropin);
+  assert.ok(f);
+  assert.equal(f!.rule, "manual");
+  assert.equal(f!.needsManual, true);
+});
+
+test("instanceFinding: member whose repl chain differs -> NOT suppressed (shape changed)", () => {
+  // Container moved via drop-in, but the member's replacement chain renamed the
+  // leaf (language -> locale) -> the call shape changed; the import rewrite
+  // alone does not cover it. Must report manual.
+  const dropin = dropinFrom({
+    "@ohos.application.Configuration\0Configuration": "@ohos.app.ability.Configuration",
+  });
+  const e = instEntry("@ohos.application.Configuration", "Configuration", ["language"],
+    { kit: "@ohos.app.ability.Configuration", members: ["locale"] });
+  const f = instanceFinding("p.ts", 0, 11, "cfg.language", "cfg", ["language"], e, noMove, dropin);
+  assert.ok(f);
+  assert.equal(f!.rule, "manual");
+});
+
+test("instanceFinding: no resolver -> never suppressed (backward compatible)", () => {
+  // Without a containerDropin resolver, suppression is inert — a same-shape
+  // cross-kit member falls through to manual (pre-existing behavior).
+  const e = instEntry("@ohos.application.Configuration", "Configuration", ["language"],
+    { kit: "@ohos.app.ability.Configuration", members: ["language"] });
+  const f = instanceFinding("p.ts", 0, 11, "cfg.language", "cfg", ["language"], e, noMove);
+  assert.ok(f);
+  assert.equal(f!.rule, "manual");
+});
