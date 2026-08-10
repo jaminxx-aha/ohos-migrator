@@ -206,7 +206,22 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
       // The replacement name comes from either a member-chain repl
       // (`@useinstead ohos.x/Y`) or a whole-export repl
       // (`@useinstead ohos.x.x/Y` -> repl.exportName, no members).
-      if (isTopLevel(filePath) && !isNamespaceLevel && !dep.members?.length && dep.exportName && repl) {
+      //
+      // The declaration need NOT live in the kit's top-level file: many kits
+      // split their public API across re-exported nested `.d.ts` files (e.g.
+      // `@ohos.arkui.modifier` re-exports `NavigatorModifier` from
+      // `arkui/NavigatorModifier.d.ts`; `@ohos.ability.featureAbility` re-exports
+      // `ElementName`/`CustomizeData`/`ModuleInfo` from `bundle/*.d.ts`). Since
+      // `resolveOwnKit` only attributes a nested file to a kit when the kit
+      // re-exports from it, `ownKit` is a real importable kit (never the `@?`
+      // orphan sentinel) for exactly the re-exported declarations we want.
+      // Gate on `!ownKit.startsWith("@?")` (not `isTopLevel(filePath)`) so these
+      // nested-file exports get the same export-rename / cross-kit drop-in /
+      // cross-kit rename-export treatment as top-file exports, while genuine
+      // orphans (no re-exporter) stay out. Namespace-level declarations
+      // (`declare namespace X` inside a kit namespace, e.g. `BLE` inside
+      // `@ohos.bluetoothManager`) are still excluded by `!isNamespaceLevel`.
+      if (!ownKit.startsWith("@?") && !isNamespaceLevel && !dep.members?.length && dep.exportName && repl) {
         const newName = repl.members?.length === 1
           ? repl.members[0]
           : repl.exportName;

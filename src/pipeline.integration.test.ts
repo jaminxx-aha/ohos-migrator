@@ -680,6 +680,113 @@ test("indexer: export re-export statement binds a nested file to the kit", () =>
   }
 });
 
+/* Round 8: a kit's public API is frequently split across re-exported nested
+ * `.d.ts` files (e.g. @ohos.arkui.modifier re-exports NavigatorModifier from
+ * arkui/NavigatorModifier.d.ts; @ohos.ability.featureAbility re-exports
+ * ElementName/CustomizeData/ModuleInfo from bundle/*.d.ts). The export-rename,
+ * cross-kit same-name drop-in, and cross-kit rename-export rules must apply to
+ * these nested-file exports too — not only to declarations in the kit's
+ * top-level file. `resolveOwnKit` attributes a nested file to its kit only when
+ * the kit re-exports from it, so `ownKit` is a real importable kit (never the
+ * `@?` orphan sentinel); the indexer now gates on `!ownKit.startsWith("@?")`
+ * rather than `isTopLevel(filePath)`. */
+
+function nestedExportSdk(): string {
+  return makeTree({
+    // Same-kit export rename via a re-exported nested file.
+    "@ohos.mod.d.ts": `export { Thing } from './mod/thing';`,
+    "mod/thing.d.ts": `/** @since 9 @deprecated since 10 @useinstead ohos.mod.NewThing */ export declare class Thing {}`,
+    // Cross-kit same-name export drop-in (whole export moved to another kit).
+    "@ohos.settings.d.ts": `export { ResultSet } from './data/rdb/resultSet';`,
+    "data/rdb/resultSet.d.ts": `/** @since 6 @deprecated since 10 @useinstead ohos.data.relationalStore.ResultSet */ export declare class ResultSet {}`,
+    "@ohos.data.relationalStore.d.ts": `declare namespace relationalStore {}`,
+    // Cross-kit different-name export (rename-export, alias the binding).
+    "@ohos.ability.featureAbility.d.ts": `export { CustomizeData } from './bundle/customizeData'; export { ElementName } from './bundle/elementName';`,
+    "bundle/customizeData.d.ts": `/** @since 6 @deprecated since 9 @useinstead ohos.bundle.bundleManager.Metadata */ export declare class CustomizeData {}`,
+    "bundle/elementName.d.ts": `/** @since 6 @deprecated since 9 @useinstead ohos.bundle.bundleManager.ElementName */ export declare class ElementName {}`,
+    "@ohos.bundle.bundleManager.d.ts": `declare namespace bundleManager {}`,
+  });
+}
+
+test("indexer: nested-file export rename reaches exportIndex", () => {
+  const sdk = nestedExportSdk();
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    assert.equal(map.exportIndex?.["@ohos.mod\0Thing"], "NewThing");
+  } finally {
+    cleanup(sdk);
+  }
+});
+
+test("indexer: nested-file cross-kit same-name export reaches crossKitDropin", () => {
+  const sdk = nestedExportSdk();
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    assert.equal(map.crossKitDropin?.["@ohos.settings\0ResultSet"], "@ohos.data.relationalStore");
+  } finally {
+    cleanup(sdk);
+  }
+});
+
+test("indexer: nested-file cross-kit rename-export reaches crossKitRenameExport", () => {
+  const sdk = nestedExportSdk();
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    assert.equal(
+      map.crossKitRenameExport?.["@ohos.ability.featureAbility\0CustomizeData"],
+      "@ohos.bundle.bundleManager\0Metadata",
+    );
+  } finally {
+    cleanup(sdk);
+  }
+});
+
+test("indexer: orphan nested file (no re-exporter) stays out of export rules", () => {
+  // A nested file with NO re-exporter is attributed the `@?` synthetic kit and
+  // must NOT get a crossKitDropin entry — its repl.kit is not a real importable
+  // module for the project's import specifier, so rewriting the specifier would
+  // produce an invalid `from '@?...'`.
+  const sdk = makeTree({
+    "@ohos.target.d.ts": `declare namespace target {}`,
+    "orphan/standalone.d.ts": `/** @since 6 @deprecated since 9 @useinstead ohos.target.Standalone */ export declare class Standalone {}`,
+  });
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const e = map.entries.find((x) => x.dep.exportName === "Standalone" && (!x.dep.members || !x.dep.members.length));
+    assert.ok(e, "Standalone entry indexed");
+    assert.equal(e!.dep.kit, "@?standalone", "orphan kit attributed");
+    assert.equal(map.crossKitDropin?.["@?standalone\0Standalone"], undefined, "orphan excluded from dropin");
+  } finally {
+    cleanup(sdk);
+  }
+});
+
+test("scan+rewrite: nested-file export rename aliases a named import (real indexer map)", () => {
+  const sdk = nestedExportSdk();
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const root = makeTree({
+      "p.ts": `import { Thing } from '@ohos.mod';
+const x = new Thing();`,
+    });
+    try {
+      const { findings } = scanProjectExportRenames({ projectRoot: root, map });
+      const f = findings.find((x) => x.oldSymbol === "Thing");
+      assert.equal(f?.rule, "rename-export");
+      assert.equal(f?.replacement, "NewThing as Thing");
+      rewriteProject(root, findings, { write: true });
+      const out = readFileSync(join(root, "p.ts"), "utf8");
+      assert.ok(out.includes("import { NewThing as Thing } from '@ohos.mod';"), "import aliased");
+      // Body reference untouched (the alias keeps `Thing` resolving to NewThing).
+      assert.ok(out.includes("const x = new Thing();"));
+    } finally {
+      cleanup(root);
+    }
+  } finally {
+    cleanup(sdk);
+  }
+});
+
 test("indexer: .d.ets is indexed", () => {
   const sdk = makeTree(SDK_FILES);
   try {
