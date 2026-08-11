@@ -151,15 +151,16 @@ export function scanProjectMembers(opts: MemberScanOptions): MemberScanResult {
         // chain still needs a member-level splice (or a wiring change), so only
         // suppress when the chains are identical.
         if (e.dep.exportName && e.repl && e.repl.members && e.dep.members) {
-          const replMembers = e.repl.members;
-          const depMembers = e.dep.members;
           const dropin =
             crossKitDropin[`${kit}\0${e.dep.exportName}`] ??
             crossKitDropin[`${kit}\0default`];
           if (
-            dropin &&
-            replMembers.length === depMembers.length &&
-            depMembers.every((m, i) => m === replMembers[i])
+            memberCoveredByContainerDropin(
+              e.dep.exportName,
+              e.dep.members,
+              e.repl,
+              dropin,
+            )
           ) {
             continue;
           }
@@ -355,6 +356,48 @@ export type KitMoveResolver = (depKit: string) => string | undefined;
  * finding is redundant.
  */
 export type ContainerDropinResolver = (depKit: string, exportName: string) => string | undefined;
+
+/**
+ * Whether a member deprecation is already covered by its container's
+ * cross-kit same-name drop-in (the import-specifier rewrite re-points the
+ * binding to the container's new kit, so an unchanged member chain resolves on
+ * the re-pointed binding — the member finding is redundant). Two shapes,
+ * both requiring the member's `@useinstead` target kit to equal the drop-in
+ * target (the member traveled with the container):
+ *
+ *   - symmetric:  the container is a moved export in `dep.exportName` and the
+ *                 repl chain EQUALS the dep chain (container not restated) —
+ *                 e.g. `Configuration.language` -> repl `[language]`.
+ *   - asymmetric: the container is a moved class/interface in `dep.exportName`
+ *                 (its members live in `dep.members`), and the repl chain
+ *                 RESTATES the container as `members[0]` — e.g. `Stat.ino`
+ *                 (dep.exportName=Stat, dep.members=[ino]) -> repl
+ *                 `[Stat, ino]`. The container and leaf are unchanged; only
+ *                 the kit differs. (A class/interface member is reached via
+ *                 an instance `s.ino`, not `binding.Stat.ino`, so the binding
+ *                 scanner never matches it — but the instance scanner would
+ *                 otherwise emit a spurious "wiring changes" manual finding;
+ *                 suppressing mirrors the symmetric case.)
+ */
+function memberCoveredByContainerDropin(
+  exportName: string | undefined,
+  depMembers: string[],
+  repl: ReplSymbol | null,
+  dropin: string | undefined,
+): boolean {
+  if (!exportName || !dropin || !repl) return false;
+  const rm = repl.members;
+  if (!repl.kit || repl.kit !== dropin || !rm) return false;
+  // symmetric: container in exportName, repl chain == dep chain
+  if (rm.length === depMembers.length) {
+    return depMembers.every((m, i) => m === rm[i]);
+  }
+  // asymmetric: container in exportName, repl = [exportName, ...depMembers]
+  if (rm.length === depMembers.length + 1 && rm[0] === exportName) {
+    return depMembers.every((m, i) => m === rm[i + 1]);
+  }
+  return false;
+}
 
 /**
  * Classify a deprecated member's replacement.
@@ -663,12 +706,13 @@ export function instanceFinding(
   // points elsewhere did NOT travel with the container and is not covered.
   if (e.dep.exportName && e.dep.members && containerDropin) {
     const dropin = containerDropin(e.dep.kit, e.dep.exportName);
-    const replMembers = repl.members;
     if (
-      dropin &&
-      repl.kit === dropin &&
-      e.dep.members.length === replMembers.length &&
-      e.dep.members.every((m, i) => m === replMembers[i])
+      memberCoveredByContainerDropin(
+        e.dep.exportName,
+        e.dep.members,
+        repl,
+        dropin,
+      )
     ) {
       return null; // suppress — covered by the import-specifier rewrite
     }

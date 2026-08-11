@@ -1160,6 +1160,88 @@ test("scan instance: cross-kit dropin suppresses chain-equal instance findings",
   }
 });
 
+/* Asymmetric 1->2 container drop-in: the container (a class/interface) lives
+ * in `dep.exportName` and the leaf in `dep.members` (1 seg), but the
+ * replacement RESTATES the container as `repl.members[0]` — e.g.
+ * `fileio.Stat.ino` -> `file.fs.Stat.ino` (dep.exportName=Stat,
+ * dep.members=[ino], repl.members=[Stat, ino]). The container moved wholesale
+ * via a same-name cross-kit drop-in, so `rewrite-import` re-points the import
+ * specifier; the member chain is unchanged (only the kit differs), so the
+ * finding is redundant — suppress it. This is the real shape of the ~66
+ * `Stat`/`Stream`/`Watcher`/`ResultSet` instance members in the API-24 map,
+ * which are reached via instance access (`s.ino`), not `binding.Stat.ino`
+ * (interface static access is invalid in value position — dormant for the
+ * binding scanner). The instance scanner would otherwise emit a spurious
+ * "wiring changes" manual finding for each. */
+
+function asymmetricDropinMap(): DeprecationMap {
+  const crossKitDropin: DeprecationMap["crossKitDropin"] = {
+    "@ohos.fileio\0Stat": "@ohos.file.fs",
+  };
+  const e = (
+    kit: string, exportName: string, members: string[], repl: ReplSymbol, since = 9,
+  ): DeprecationEntry => ({
+    dep: { kit, exportName, members }, since, repl, kind: "member", source: { file: "", line: 0 },
+  });
+  return mapOf([
+    // asymmetric: container in exportName, repl = [container, leaf], kit matches dropin -> suppress
+    e("@ohos.fileio", "Stat", ["ino"], { kit: "@ohos.file.fs", members: ["Stat", "ino"] }),
+    // control: repl kit differs from dropin (member did NOT travel with container) -> report
+    e("@ohos.fileio", "Stat", ["dev"], { kit: "@ohos.some.other", members: ["Stat", "dev"] }),
+  ], {}, {}, crossKitDropin);
+}
+
+function asymmetricBindingProject(): string {
+  return makeTree({
+    "page.ets": `
+import fileio from '@ohos.fileio';
+fileio.ino;    // asymmetric, kit matches dropin -> suppressed
+fileio.dev;    // repl kit != dropin -> still reported (manual)
+`,
+  });
+}
+
+test("scan: asymmetric 1->2 container dropin suppresses binding member findings", () => {
+  const root = asymmetricBindingProject();
+  try {
+    const { findings } = scanProjectMembers({ projectRoot: root, map: asymmetricDropinMap() });
+    // container moved via same-name dropin, repl = [Stat, ino] restates it,
+    // repl.kit === dropin -> the import-specifier rewrite covers it -> suppress
+    assert.equal(bySymbol(findings, "fileio.ino"), undefined);
+    // repl.kit != dropin (member's @useinstead points elsewhere) -> still manual
+    assert.equal(bySymbol(findings, "fileio.dev")?.rule, "manual");
+  } finally {
+    cleanup(root);
+  }
+});
+
+function asymmetricInstanceProject(): string {
+  return makeTree({
+    "page.ets": `
+import { Stat } from '@ohos.fileio';
+let s: Stat;
+s.ino;     // asymmetric, kit matches dropin -> suppressed
+s.dev;     // repl kit != dropin -> still reported (manual)
+`,
+  });
+}
+
+test("scan instance: asymmetric 1->2 container dropin suppresses instance findings", () => {
+  const root = asymmetricInstanceProject();
+  try {
+    const { findings } = scanProjectInstanceMembers({ projectRoot: root, map: asymmetricDropinMap() });
+    // instance access on a moved container: the import-specifier rewrite
+    // re-points `Stat` to @ohos.file.fs, so `s.ino` already resolves on the
+    // re-pointed binding — the finding is redundant -> suppress (no spurious
+    // "wiring changes" manual finding)
+    assert.equal(bySymbol(findings, "s.ino"), undefined);
+    // repl.kit != dropin -> member did not travel with the container -> manual
+    assert.equal(bySymbol(findings, "s.dev")?.rule, "manual");
+  } finally {
+    cleanup(root);
+  }
+});
+
 /* cross-kit single-leaf member move (crossKitMemberDropin): the kit did NOT
  * move as a whole, so rewrite-import can't rebind it. The scanner instead
  * rebinds the receiver to a (reused or injected) binding for repl.kit and
