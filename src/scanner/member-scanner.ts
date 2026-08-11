@@ -165,6 +165,13 @@ export function scanProjectMembers(opts: MemberScanOptions): MemberScanResult {
             continue;
           }
         }
+        // A NO-`@useinstead` member whose enclosing kit relocated (or whose
+        // enclosing export dropped in cross-kit) AND whose member chain is
+        // verified to still exist in the new kit: the import-specifier rewrite
+        // (or named-import drop-in) already re-points the binding to where the
+        // member lives, so this finding is redundant. Members NOT preserved
+        // (genuinely removed) are left unflagged and still emit a manual finding.
+        if (e.memberPreservedByMove) continue;
         const members = e.dep.members!;
         const pattern = binding + "\\." + members.map(escapeRe).join("\\.");
         const re = new RegExp(`\\b${pattern}\\b`, "g");
@@ -687,6 +694,10 @@ export function instanceFinding(
   const oldSymbol = `${varName}.${accessChain.join(".")}`;
   const repl = e.repl;
   if (!repl || !repl.members || repl.members.length === 0) {
+    // Suppressed when the member is verified preserved in the new kit after an
+    // enclosing kit relocation / container drop-in: the import rewrite already
+    // re-points the binding, so the instance access resolves unchanged.
+    if (e.memberPreservedByMove) return null;
     return {
       file, line: lineAt(content, offset), oldSymbol, newSymbol: null,
       since: e.since, rule: "manual", needsManual: true,

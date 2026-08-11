@@ -45,6 +45,19 @@ export interface DeprecationEntry {
    * Only set for 1-seg dep -> 1-seg repl, cross-kit, non-aligned, verified.
    */
   crossKitMemberDropin?: boolean;
+  /**
+   * True when this is a NO-`@useinstead` member (the SDK marks it deprecated
+   * but gives no replacement) whose enclosing kit was relocated wholesale
+   * (`kitIndex[dep.kit].newKit`) OR whose enclosing export moved as a
+   * cross-kit same-name drop-in (`crossKitDropin`), AND whose full member chain
+   * is verified at index time to still exist in the new kit/container. The
+   * import-specifier rewrite (kit move) or named-import drop-in already
+   * re-points the binding to where the member lives, so the member finding is
+   * redundant — the scanners suppress it. Members NOT preserved in the new
+   * location (genuinely removed) stay manual: the binding would point at a kit
+   * that no longer declares them, so the call site still needs a human fix.
+   */
+  memberPreservedByMove?: boolean;
 }
 
 /** Per-kit summary used by the scanner for import-level matching. */

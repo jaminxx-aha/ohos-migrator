@@ -20,7 +20,7 @@
 
 import { basename, dirname, relative, resolve, sep } from "node:path";
 import { readFileSync } from "node:fs";
-import { Project, SyntaxKind, type Node, type ImportDeclaration, type ExportDeclaration } from "ts-morph";
+import { Project, SyntaxKind, type Node, type SourceFile, type ImportDeclaration, type ExportDeclaration } from "ts-morph";
 import { walkFiles } from "../walk.js";
 import { parseUseinstead, toReplSymbol } from "./useinstead-parser.js";
 import type {
@@ -107,6 +107,10 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
   // '<repl.kit>'` and rebind the receiver. Built in a first pass so repl.kit
   // (possibly a different file) is available regardless of iteration order.
   const kitTopLevelExports = new Map<string, Set<string>>();
+  // Parallel map: a kit's parsed SourceFile, so post-loop verifiers can
+  // descend into a kit's container declarations (e.g. check that a moved
+  // member is still declared in the new kit's `Flags` enum / `Stat` interface).
+  const kitSourceFiles = new Map<string, SourceFile>();
   for (const f of topLevelFiles) {
     let content: string;
     try {
@@ -117,7 +121,9 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
     const sf = getOrCreateSourceFile(project, f, content);
     if (!sf) continue;
     const set = collectKitTopLevelExports(sf);
-    if (set.size > 0) kitTopLevelExports.set("@" + kitFromFile(basename(f)), set);
+    const kitKey = "@" + kitFromFile(basename(f));
+    if (set.size > 0) kitTopLevelExports.set(kitKey, set);
+    kitSourceFiles.set(kitKey, sf);
   }
 
   const entries: DeprecationEntry[] = [];
@@ -291,6 +297,22 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
   // member rebind's container/leaf are both unchanged, consistent with the
   // export drop-in.
   resolveCrossKitMemberExportConflict(entries, crossKitDropin);
+
+  // Flag NO-`@useinstead` members that are nonetheless covered by an
+  // enclosing kit relocation (`kitIndex[dep.kit].newKit`) or a cross-kit
+  // same-name export drop-in (`crossKitDropin`), PROVIDED the member chain is
+  // verified to still exist in the new kit/container. The import-specifier
+  // rewrite (or named-import drop-in) already re-points the binding to where
+  // the member lives, so the member finding is redundant. Members that were
+  // removed (not preserved) are left unflagged -> manual: the re-pointed binding
+  // would reference a kit that no longer declares them. This distinguishes, in
+  // the same relocated kit, preserved members (suppress) from removed ones
+  // (manual) — e.g. `wantConstant.Flags.FLAG_AUTH_READ_URI_PERMISSION` is
+  // preserved in the new `Flags` enum (suppress), while
+  // `wantConstant.Action.ACTION_HOME` is not (`Action` was dropped — manual).
+  verifyMembersPreservedByMove(
+    entries, kitIndex, crossKitDropin, kitTopLevelExports, kitSourceFiles,
+  );
 
   return {
     apiVersion,
@@ -717,6 +739,179 @@ function verifyCrossKitMemberDropin(
   const set = kitTopLevelExports.get(repl.kit);
   if (!set) return false;
   return set.has(repl.members[0]);
+}
+
+/**
+ * Collect the names of the DIRECT members of a top-level container declaration
+ * named `containerName` in a kit source file. The container may be an enum
+ * (enum members), an interface/class (property + method signatures), or a
+ * namespace (its body's direct declaration names). Declaration merging may
+ * spread a namespace across several blocks, so members are unioned across all
+ * declarations with a matching name. Used by `verifyMembersPreservedByMove`
+ * to confirm a deprecated member still exists in the new kit/container after a
+ * wholesale kit relocation or a container drop-in.
+ */
+function collectContainerMembers(sf: SourceFile, containerName: string): Set<string> {
+  const names = new Set<string>();
+  type Named = Node & { getName?: () => string | undefined };
+  const add = (n: Named | undefined | null): void => {
+    const nm = n?.getName?.();
+    if (nm) names.add(nm);
+  };
+  // Search declarations of any container kind, anywhere in the file, named
+  // `containerName` (kits rarely reuse a name at different depths, so a broad
+  // descendant scan is precise enough and tolerates declaration merging).
+  const candidates =
+    (sf as unknown as { getDescendantsOfKind?: (k: SyntaxKind) => Node[] }).getDescendantsOfKind?.(
+      SyntaxKind.EnumDeclaration,
+    ) ?? [];
+  const ifaces =
+    (sf as unknown as { getDescendantsOfKind?: (k: SyntaxKind) => Node[] }).getDescendantsOfKind?.(
+      SyntaxKind.InterfaceDeclaration,
+    ) ?? [];
+  const classes =
+    (sf as unknown as { getDescendantsOfKind?: (k: SyntaxKind) => Node[] }).getDescendantsOfKind?.(
+      SyntaxKind.ClassDeclaration,
+    ) ?? [];
+  const modules =
+    (sf as unknown as { getDescendantsOfKind?: (k: SyntaxKind) => Node[] }).getDescendantsOfKind?.(
+      SyntaxKind.ModuleDeclaration,
+    ) ?? [];
+  for (const d of [...candidates, ...ifaces, ...classes, ...modules]) {
+    if ((d as Named).getName?.() !== containerName) continue;
+    collectMembersOfContainer(d, names, add);
+  }
+  return names;
+}
+
+function collectMembersOfContainer(
+  d: Node,
+  names: Set<string>,
+  add: (n: (Node & { getName?: () => string | undefined }) | undefined | null) => void,
+): void {
+  type Named = Node & { getName?: () => string | undefined };
+  switch (d.getKind()) {
+    case SyntaxKind.EnumDeclaration: {
+      const ms =
+        (d as unknown as { getMembers?: () => Named[] }).getMembers?.() ?? [];
+      for (const m of ms) add(m);
+      break;
+    }
+    case SyntaxKind.InterfaceDeclaration:
+    case SyntaxKind.ClassDeclaration: {
+      const props =
+        (d as unknown as { getProperties?: () => Named[] }).getProperties?.() ?? [];
+      for (const p of props) add(p);
+      const methods =
+        (d as unknown as { getMethods?: () => Named[] }).getMethods?.() ?? [];
+      for (const m of methods) add(m);
+      break;
+    }
+    case SyntaxKind.ModuleDeclaration: {
+      const body = d.getFirstChildByKind(SyntaxKind.ModuleBlock);
+      const stmts =
+        (body as unknown as { getStatements?: () => Named[] } | undefined)?.getStatements?.();
+      if (stmts) for (const s of stmts) add(s);
+      break;
+    }
+  }
+}
+
+/**
+ * Does `member` resolve as a direct child of `containerName` in `kit`? When
+ * `containerName` is undefined, `member` must be a top-level export of the kit
+ * (a direct member of the kit namespace). Used to verify a deprecated member
+ * chain still exists in the new kit after a kit/container move.
+ */
+function memberResolvesInKit(
+  kit: string,
+  containerName: string | undefined,
+  member: string,
+  kitTopLevelExports: Map<string, Set<string>>,
+  kitSourceFiles: Map<string, SourceFile>,
+): boolean {
+  const top = kitTopLevelExports.get(kit);
+  if (!top) return false;
+  if (!containerName) return top.has(member);
+  if (!top.has(containerName)) return false;
+  const sf = kitSourceFiles.get(kit);
+  if (!sf) return false;
+  return collectContainerMembers(sf, containerName).has(member);
+}
+
+/**
+ * Set `memberPreservedByMove` on every NO-`@useinstead` member entry whose
+ * enclosing kit was relocated wholesale (`kitIndex[dep.kit].newKit`) OR whose
+ * enclosing export moved as a cross-kit same-name drop-in, PROVIDED the member
+ * chain is verified to still exist in the new kit/container. Run after the full
+ * index loop so `kitIndex` and `crossKitDropin` are complete (they are populated
+ * per-kit during the loop, so they are not reliably available at entry-push
+ * time). Mirrors the post-loop fixups `resolveCrossKitMemberAmbiguity` /
+ * `resolveCrossKitMemberExportConflict`.
+ *
+ * Two move shapes, each verified against the new kit's declarations:
+ *   - kit move:   the whole kit relocated to `newKit`. The member chain is
+ *                 relative to the kit namespace, so a 1-seg member is a
+ *                 top-level export of `newKit`; a 2-seg member's first segment
+ *                 is a top-level container and the leaf is its direct member.
+ *   - drop-in:    the export `dep.exportName` moved cross-kit to `newKit`.
+ *                 The container is `dep.exportName`; the leaf is the (single)
+ *                 member. The container must be a top-level export of `newKit`
+ *                 and the leaf its direct member.
+ *
+ * Members NOT preserved (genuinely removed in the new kit) are left unflagged
+ * so the scanners still report them as manual — the re-pointed binding would
+ * reference a kit that no longer declares them, so a human fix is still needed.
+ * Deeper-than-2-seg kit-move chains and 2+-seg drop-in chains are left
+ * unflagged (rare; the 1- and 2-seg shapes cover the SDK's actual cases).
+ */
+function verifyMembersPreservedByMove(
+  entries: DeprecationEntry[],
+  kitIndex: Record<string, KitDepInfo>,
+  crossKitDropin: CrossKitDropin,
+  kitTopLevelExports: Map<string, Set<string>>,
+  kitSourceFiles: Map<string, SourceFile>,
+): void {
+  for (const e of entries) {
+    // Only NO-`@useinstead` members (no resolved repl chain) are candidates.
+    if (e.repl && e.repl.members && e.repl.members.length > 0) continue;
+    const d = e.dep;
+    if (!d.members || d.members.length === 0) continue;
+    const ownKit = d.kit;
+    let newKit: string | undefined;
+    let container: string | undefined;
+    let member: string | undefined;
+    const kitNew = kitIndex[ownKit]?.newKit;
+    if (kitNew) {
+      // Kit relocated wholesale: member chain is relative to the kit namespace.
+      newKit = kitNew;
+      if (d.members.length === 1) {
+        container = undefined;
+        member = d.members[0];
+      } else if (d.members.length === 2) {
+        container = d.members[0];
+        member = d.members[1];
+      } else {
+        continue; // deeper chains: leave for a future round
+      }
+    } else {
+      // Else look for a cross-kit same-name drop-in of the enclosing export.
+      const dropin = crossKitDropin[`${ownKit}\0${d.exportName}`] ??
+        crossKitDropin[`${ownKit}\0default`];
+      if (!dropin) continue;
+      if (d.members.length === 1) {
+        newKit = dropin;
+        container = d.exportName;
+        member = d.members[0];
+      } else {
+        continue; // 2+-seg drop-in: leave for a future round
+      }
+    }
+    if (!newKit || !member) continue;
+    if (memberResolvesInKit(newKit, container, member, kitTopLevelExports, kitSourceFiles)) {
+      e.memberPreservedByMove = true;
+    }
+  }
 }
 
 /**

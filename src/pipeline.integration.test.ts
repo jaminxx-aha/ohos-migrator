@@ -2466,3 +2466,158 @@ test("scan + rewrite: asymmetric instance-method rename auto-fixes (B2)", () => 
   } finally { cleanup(sdk); cleanup(root); }
 });
 
+/**
+ * Round 11 — a relocated kit (kit move) where the new kit PRESERVES some
+ * members (no @useinstead: the kit-move import rewrite already covers them)
+ * but DROPS others. The verifier must flag only the preserved ones; dropped
+ * members stay manual (the re-pointed binding would reference a kit that no
+ * longer declares them). Encodes the trap found during investigation: a naive
+ * "suppress every no-repl member under a relocated kit" would corrupt call
+ * sites of removed members (e.g. wantConstant.Action.ACTION_HOME, where the
+ * Action enum was dropped from the new kit).
+ */
+function movedSdk(): string {
+  return makeTree({
+    "@ohos.ability.fakeConst.d.ts": `
+/**
+ * @since 9 @deprecated since 9
+ * @useinstead ohos.app.ability.fakeConst
+ */
+declare namespace fakeConst {
+    export enum Action {
+        /** @since 9 @deprecated since 10 */
+        A = 1,
+        /** @since 9 @deprecated since 10 */
+        B = 2,
+    }
+    export enum Flags {
+        /** @since 9 @deprecated since 10 */
+        F1 = 1,
+        /** @since 9 @deprecated since 10 */
+        F2 = 2,
+        /** @since 9 @deprecated since 10 */
+        F3 = 4,
+    }
+}
+`,
+    // New kit: `Flags` survives WITH F1 and F3 (F2 dropped); `Action` is gone.
+    "@ohos.app.ability.fakeConst.d.ts": `
+declare namespace fakeConst {
+    export enum Flags {
+        F1 = 1,
+        F3 = 4,
+    }
+}
+`,
+  });
+}
+
+/**
+ * Round 11 (drop-in shape) — an interface moved cross-kit under the same name
+ * (`Stat` @ohos.fileio -> @ohos.file.fs) where the new interface PRESERVES some
+ * properties and DROPS others. The named-import drop-in re-points `import
+ * {Stat}` to the new kit, so a preserved property's instance access already
+ * resolves on the re-pointed binding (suppress); a dropped property stays
+ * manual.
+ */
+function dropinMovedSdk(): string {
+  return makeTree({
+    // `Stat` is a MODULE-LEVEL `declare interface` (matching the real
+    // `@ohos.fileio.d.ts`): export-level, so its @useinstead registers a
+    // cross-kit same-name drop-in. Its properties `dev`/`nlink` are separate
+    // member entries (exportName=Stat, members=[dev|nlink]).
+    "@ohos.fileio.d.ts": `
+/** @since 9 @deprecated since 10 @useinstead ohos.file.fs.Stat */
+declare interface Stat {
+    /** @since 9 @deprecated since 10 */
+    dev: number;
+    /** @since 9 @deprecated since 10 */
+    nlink: number;
+}
+`,
+    // New kit: `Stat` survives WITH `nlink` (preserved) but WITHOUT `dev`.
+    "@ohos.file.fs.d.ts": `
+declare namespace fs {
+    export interface Stat {
+        ino: bigint;
+        nlink: number;
+    }
+}
+`,
+  });
+}
+
+test("indexer: relocated-kit member flagged memberPreservedByMove only when preserved (B3 trap guard)", () => {
+  const sdk = movedSdk();
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const get = (chain: string) => map.entries.find(
+      (x) => x.dep.kit === "@ohos.ability.fakeConst" && x.dep.members?.join(".") === chain,
+    );
+    // Preserved in the new kit -> flagged (covered by the kit-move import rewrite).
+    assert.equal(get("Flags.F1")?.memberPreservedByMove, true, "Flags.F1 preserved -> flagged");
+    assert.equal(get("Flags.F3")?.memberPreservedByMove, true, "Flags.F3 preserved -> flagged");
+    // Dropped in the new kit -> NOT flagged (stays manual: re-pointed binding
+    // would reference a kit that no longer declares the member).
+    assert.notEqual(get("Flags.F2")?.memberPreservedByMove, true, "Flags.F2 dropped -> NOT flagged");
+    // The whole `Action` enum was dropped from the new kit -> its members stay manual.
+    assert.notEqual(get("Action.A")?.memberPreservedByMove, true, "Action.A (enum dropped) -> NOT flagged");
+    assert.notEqual(get("Action.B")?.memberPreservedByMove, true, "Action.B (enum dropped) -> NOT flagged");
+  } finally { cleanup(sdk); }
+});
+
+test("scan + rewrite: preserved member suppressed, removed member still reported (kit move)", () => {
+  const sdk = movedSdk();
+  const root = makeTree({
+    "p.ts":
+      `import { fakeConst } from '@ohos.ability.fakeConst';\n` +
+      `fakeConst.Flags.F1;\n` +   // preserved -> suppressed (kit-move rewrite covers it)
+      `fakeConst.Flags.F2;\n` +   // removed -> manual finding
+      `fakeConst.Action.A;\n`,    // removed -> manual finding
+  });
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const { findings } = scanProjectMembers({ projectRoot: root, map });
+    // F1 is preserved: NO member finding (the kit-move import rewrite handles it).
+    assert.ok(!bySymbol(findings as any, "fakeConst.Flags.F1"), "F1 preserved -> no member finding");
+    // F2 and Action.A were dropped: manual findings still surface them.
+    const f2 = bySymbol(findings as any, "fakeConst.Flags.F2");
+    assert.equal(f2?.rule, "manual");
+    assert.equal(f2?.needsManual, true);
+    const aa = bySymbol(findings as any, "fakeConst.Action.A");
+    assert.equal(aa?.rule, "manual");
+    assert.equal(aa?.needsManual, true);
+  } finally { cleanup(sdk); cleanup(root); }
+});
+
+test("indexer: container drop-in member flagged memberPreservedByMove only when preserved", () => {
+  const sdk = dropinMovedSdk();
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const get = (leaf: string) => map.entries.find(
+      (x) => x.dep.kit === "@ohos.fileio" && x.dep.exportName === "Stat" && x.dep.members?.[0] === leaf,
+    );
+    assert.equal(get("nlink")?.memberPreservedByMove, true, "Stat.nlink preserved in new kit -> flagged");
+    assert.notEqual(get("dev")?.memberPreservedByMove, true, "Stat.dev dropped from new kit -> NOT flagged");
+  } finally { cleanup(sdk); }
+});
+
+test("scan + rewrite: preserved instance member suppressed, removed one still reported (drop-in)", () => {
+  const sdk = dropinMovedSdk();
+  const root = makeTree({
+    "p.ts":
+      `import { Stat } from '@ohos.fileio';\n` +
+      `let s: Stat = {} as Stat;\n` +
+      `s.nlink;\n` +   // preserved -> suppressed (drop-in re-points `import {Stat}`)
+      `s.dev;\n`,      // removed -> manual finding
+  });
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const { findings } = scanProjectInstanceMembers({ projectRoot: root, map });
+    assert.ok(!bySymbol(findings as any, "s.nlink"), "s.nlink preserved -> no instance finding");
+    const dev = bySymbol(findings as any, "s.dev");
+    assert.equal(dev?.rule, "manual");
+    assert.equal(dev?.needsManual, true);
+  } finally { cleanup(sdk); cleanup(root); }
+});
+
