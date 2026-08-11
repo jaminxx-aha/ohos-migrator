@@ -157,9 +157,10 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
       if (since === undefined) return;
 
       const { dep, isNamespaceLevel } = computeIdentity(node, ownKit);
-      const repl = useToken
+      const rawRepl = useToken
         ? toReplSymbol(parseUseinstead(useToken, knownKits, ownKit, kitLookup))
         : null;
+      const repl = normalizeRedundantNamespacePrefix(dep, rawRepl);
 
       // Only top-level kits can drive import-level module moves; nested files
       // never produce kitIndex entries (they are re-exported, not imported).
@@ -505,12 +506,60 @@ function computeIdentity(
  *   - single-leaf:  `repl = [newLeaf]`                  (e.g. getString->getStringValue)
  *   - type+leaf:    `repl = [Type, newLeaf]`, Type===dep.members[0]
  *                   (e.g. Window.show -> Window.showWindow)
+ *   - asymmetric:   dep = `[leaf]` (1-seg, the container/class is `dep.exportName`),
+ *                   `repl = [Type, newLeaf]`, Type===dep.exportName
+ *                   (e.g. Router.getLength -> Router.getStackSize, where the
+ *                   `Router` export holds both the deprecated `getLength` and the
+ *                   new `getStackSize` as sibling members)
  *
  * Conservative: only same-kit (or kit-move-aligned) renames on a directly-
- * enclosing named type whose name matches dep.members[0]. Multi-seg repls that
- * change the type, deeper chains, and cross-kit targets are left unverified
- * (the scanner reports them manual rather than risk a bad splice).
+ * enclosing named type whose name matches the receiver type (`typeHead`:
+ * `dep.members[0]` for the symmetric shapes, `dep.exportName` for the
+ * asymmetric shape). Multi-seg repls that change the type, deeper chains, and
+ * cross-kit targets are left unverified (the scanner reports them manual
+ * rather than risk a bad splice).
  */
+/**
+ * Strip a redundant kit-namespace prefix from a 2-segment replacement.
+ *
+ * Some `@useinstead` targets are authored as `ohos.<kit>.<namespace>#<member>`
+ * (JSDoc `Class#member` notation), e.g. `ohos.pasteboard.pasteboard#createData`
+ * or `ohos.router.router#pushUrl`. The parser resolves the kit
+ * (`@ohos.pasteboard` / `@ohos.router`) and keeps the `#`-stripped remainder as
+ * `repl.members = [<namespace>, <member>]`. But when `<namespace>` is the kit's
+ * OWN namespace name (== `repl.kit`'s last segment) and the deprecated symbol
+ * is also namespace-level (`dep.exportName === <namespace>`, `dep.members`
+ * 1-seg — a namespace function, not a class method), that leading segment is
+ * NOT a member: it is the binding itself (implied by the import). Keeping it
+ * makes the repl a 2-seg chain, so the same-kit leaf rename lands in the
+ * chain-length-mismatch bucket instead of the same-kit rename-member path.
+ *
+ * Stripping `members[0]` yields a 1-seg repl the binding scanner's same-kit
+ * same-length branch handles (e.g. `pasteboard.createHtmlData` ->
+ * `pasteboard.createData`, `router.push` -> `router.pushUrl`). This is purely a
+ * shape normalization — the same trust level as same-kit leaf renames already
+ * auto-fixed; no new assumption is made about call shapes (the @useinstead
+ * asserts the replacement, as it does for every other auto path).
+ *
+ * NOT applied when `members[0]` is a genuine class/interface name (it differs
+ * from the kit's last segment), e.g. `ohos.arkui.UIContext.Router#getStackSize`
+ * (kit UIContext, members[0]=Router != UIContext) — that is an instance-method
+ * rename handled by `verifyInstanceSafe` (the asymmetric branch), left 2-seg.
+ */
+function normalizeRedundantNamespacePrefix(
+  dep: DepSymbol,
+  repl: ReplSymbol | null,
+): ReplSymbol | null {
+  if (!repl || !repl.members || repl.members.length !== 2 || !repl.kit) return repl;
+  const kitLast = repl.kit.split(".").pop();
+  if (!kitLast || repl.members[0] !== kitLast) return repl;
+  // Only namespace-level symbols (dep.exportName is the namespace, 1-seg leaf):
+  // a 2-seg dep means members[0] is a real nested class, not the kit namespace.
+  if (!dep.exportName || dep.exportName !== repl.members[0]) return repl;
+  if (dep.members?.length !== 1) return repl;
+  return { ...repl, members: [repl.members[1]] };
+}
+
 function verifyInstanceSafe(
   node: Node,
   dep: DepSymbol,
@@ -519,13 +568,18 @@ function verifyInstanceSafe(
   kitIndex: Record<string, KitDepInfo>,
 ): boolean {
   if (!repl || !repl.members || repl.members.length === 0) return false;
-  if (!dep.members || dep.members.length < 2 || !dep.exportName) return false;
+  if (!dep.members || dep.members.length === 0 || !dep.exportName) return false;
+  // The receiver type: for a symmetric 2-seg dep `[Type, leaf]` it is
+  // `dep.members[0]`; for an asymmetric 1-seg dep `[leaf]` the container/class
+  // lives in `dep.exportName` (e.g. `Router.getLength` where `Router` is the
+  // export and `getLength` the leaf, repl `[Router, getStackSize]`).
+  const typeHead = dep.members.length >= 2 ? dep.members[0] : dep.exportName;
   // Resolve the replacement leaf: either a single-segment repl, or a
   // two-segment repl whose first segment restates the (unchanged) type.
   let newLeaf: string;
   if (repl.members.length === 1) {
     newLeaf = repl.members[0];
-  } else if (repl.members.length === 2 && repl.members[0] === dep.members[0]) {
+  } else if (repl.members.length === 2 && repl.members[0] === typeHead) {
     newLeaf = repl.members[1];
   } else {
     return false;
@@ -535,14 +589,14 @@ function verifyInstanceSafe(
   const sameKit = !repl.kit || repl.kit === ownKit;
   const aligned = !!(repl.kit && kitIndex[ownKit]?.newKit === repl.kit);
   if (!sameKit && !aligned) return false;
-  // Nearest enclosing interface/class; its name must match dep.members[0]
-  // (the type the deprecated method lives on).
+  // Nearest enclosing interface/class; its name must match the receiver type
+  // (`typeHead` — dep.members[0] for symmetric, dep.exportName for asymmetric).
   const typeAncestor =
     node.getFirstAncestorByKind(SyntaxKind.InterfaceDeclaration) ??
     node.getFirstAncestorByKind(SyntaxKind.ClassDeclaration);
   if (!typeAncestor) return false;
   type Named = Node & { getName?: () => string | undefined };
-  if (typeAncestor.getName?.() !== dep.members[0]) return false;
+  if (typeAncestor.getName?.() !== typeHead) return false;
   const members = (typeAncestor as unknown as { getMembers?: () => Named[] }).getMembers?.() ?? [];
   for (const m of members) {
     if (m.getName?.() === newLeaf) return true;

@@ -2354,3 +2354,115 @@ function f(m: fake.Mgr) { m.old(); m.op(); }
     assert.equal(res.skippedManual, 1);
   } finally { cleanup(root); }
 });
+
+/* 8. Asymmetric @useinstead shapes authored as `ohos.<kit>.<namespace>#<member>`
+ * (JSDoc Class#member notation). Two sub-cases:
+ *   B1 — namespace-function rename: `<namespace>` == the kit's own namespace
+ *        (== kit last segment); the leading repl segment is the binding itself,
+ *        not a member. Stripping it yields a 1-seg same-kit leaf rename the
+ *        binding scanner auto-fixes (e.g. pasteboard.createHtmlData ->
+ *        pasteboard.createData).
+ *   B2 — instance-method rename: `<namespace>` is a real class/interface
+ *        (differs from the kit last segment); repl stays 2-seg and is handled
+ *        by the instance scanner once verifyInstanceSafe's asymmetric branch
+ *        confirms the new leaf is a sibling member (e.g. Router.getLength ->
+ *        Router.getStackSize). */
+/* ------------------------------------------------------------------ */
+
+function asymmetricSdk(): string {
+  return makeTree({
+    "@ohos.pasteboard.d.ts": `
+declare namespace pasteboard {
+  /** @since 7 @deprecated since 9 @useinstead ohos.pasteboard.pasteboard#createData */
+  function createHtmlData(htmlText: string): PasteData;
+  function createData(): PasteData;
+  export interface PasteData { data: string }
+}
+`,
+    "@ohos.arkui.UIContext.d.ts": `
+declare namespace UIContext {}
+export class Router {
+  /** @since 9 @deprecated since 10 @useinstead ohos.arkui.UIContext.Router#getStackSize */
+  getLength(): string;
+  getStackSize(): number;
+}
+/** control: the new leaf is NOT a sibling member -> instanceSafe stays unset */
+export class Lone {
+  /** @since 9 @deprecated since 10 @useinstead ohos.arkui.UIContext.Lone#newMethod */
+  oldMethod(): void;
+}
+`,
+  });
+}
+
+test("indexer: redundant kit-namespace prefix stripped from #member repl (B1)", () => {
+  const sdk = asymmetricSdk();
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const e = map.entries.find(
+      (x) => x.dep.kit === "@ohos.pasteboard" && x.dep.members?.[0] === "createHtmlData",
+    );
+    assert.ok(e, "createHtmlData indexed");
+    assert.deepEqual(e!.repl?.members, ["createData"], "redundant `pasteboard` prefix stripped -> 1-seg");
+    assert.equal(e!.repl?.kit, "@ohos.pasteboard", "kit preserved");
+  } finally { cleanup(sdk); }
+});
+
+test("indexer + scan + rewrite: namespace-function #member rename auto-fixes (B1)", () => {
+  const sdk = asymmetricSdk();
+  const root = makeTree({
+    "p.ets": `import pasteboard from '@ohos.pasteboard';\npasteboard.createHtmlData('x');\n`,
+  });
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const { findings } = scanProjectMembers({ projectRoot: root, map });
+    const f = bySymbol(findings, "pasteboard.createHtmlData");
+    assert.equal(f?.rule, "rename-member");
+    assert.equal(f?.replacement, "pasteboard.createData");
+    assert.equal(f?.needsManual, false);
+    const res = rewriteProject(root, findings, { write: true });
+    const out = readFileSync(join(root, "p.ets"), "utf8");
+    assert.ok(out.includes("pasteboard.createData('x')"), "renamed");
+    assert.ok(!out.includes("pasteboard.createHtmlData"), "old symbol gone");
+    assert.equal(res.skippedManual, 0);
+  } finally { cleanup(sdk); cleanup(root); }
+});
+
+test("indexer: asymmetric 1->2 instance-method repl flagged instanceSafe (B2)", () => {
+  const sdk = asymmetricSdk();
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const e = map.entries.find(
+      (x) => x.dep.kit === "@ohos.arkui.UIContext" && x.dep.exportName === "Router" && x.dep.members?.[0] === "getLength",
+    );
+    assert.ok(e, "Router.getLength indexed");
+    assert.deepEqual(e!.repl?.members, ["Router", "getStackSize"], "repl stays 2-seg (class, not stripped)");
+    assert.equal(e!.instanceSafe, true, "asymmetric sibling-verified -> instanceSafe");
+    // control: Lone.oldMethod -> newMethod, but newMethod is not a sibling member
+    const lone = map.entries.find(
+      (x) => x.dep.exportName === "Lone" && x.dep.members?.[0] === "oldMethod",
+    );
+    assert.ok(lone, "Lone.oldMethod indexed");
+    assert.notEqual(lone!.instanceSafe, true, "no sibling -> NOT instanceSafe (stays manual)");
+  } finally { cleanup(sdk); }
+});
+
+test("scan + rewrite: asymmetric instance-method rename auto-fixes (B2)", () => {
+  const sdk = asymmetricSdk();
+  const root = makeTree({
+    "p.ts": `import { Router } from '@ohos.arkui.UIContext';\nlet r: Router = {} as Router;\nr.getLength();\n`,
+  });
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const { findings } = scanProjectInstanceMembers({ projectRoot: root, map });
+    const f = bySymbol(findings, "r.getLength");
+    assert.equal(f?.rule, "rename-member");
+    assert.equal(f?.replacement, "r.getStackSize");
+    assert.equal(f?.needsManual, false);
+    rewriteProject(root, findings, { write: true });
+    const out = readFileSync(join(root, "p.ts"), "utf8");
+    assert.ok(out.includes("r.getStackSize()"), "instance method renamed");
+    assert.ok(!out.includes("r.getLength()"), "old call gone");
+  } finally { cleanup(sdk); cleanup(root); }
+});
+
