@@ -842,14 +842,15 @@ function memberResolvesInKit(
 /**
  * Set `memberPreservedByMove` on every NO-`@useinstead` member entry whose
  * enclosing kit was relocated wholesale (`kitIndex[dep.kit].newKit`) OR whose
- * enclosing export moved as a cross-kit same-name drop-in, PROVIDED the member
- * chain is verified to still exist in the new kit/container. Run after the full
+ * enclosing export moved as a cross-kit same-name drop-in OR whose enclosing
+ * container was renamed in place within the same kit, PROVIDED the member chain
+ * is verified to still exist in the new kit/container. Run after the full
  * index loop so `kitIndex` and `crossKitDropin` are complete (they are populated
  * per-kit during the loop, so they are not reliably available at entry-push
  * time). Mirrors the post-loop fixups `resolveCrossKitMemberAmbiguity` /
  * `resolveCrossKitMemberExportConflict`.
  *
- * Two move shapes, each verified against the new kit's declarations:
+ * Three move shapes, each verified against the new kit's declarations:
  *   - kit move:   the whole kit relocated to `newKit`. The member chain is
  *                 relative to the kit namespace, so a 1-seg member is a
  *                 top-level export of `newKit`; a 2-seg member's first segment
@@ -858,6 +859,15 @@ function memberResolvesInKit(
  *                 The container is `dep.exportName`; the leaf is the (single)
  *                 member. The container must be a top-level export of `newKit`
  *                 and the leaf its direct member.
+ *   - same-kit    the parent container `[C]` (a 1-seg sibling entry) has a
+ *     rename:    SAME-KIT 1-seg rename repl `[C']`. For a 2-seg member `[C, M]`
+ *                we verify `M` is a direct member of `C'` in the own kit. The
+ *                container rename's own repl auto-rewrites the type/import
+ *                binding, so a preserved member needs no access-site splice;
+ *                a member removed/renamed in `C'` stays manual. (This is the
+ *                common trap: huks.HuksErrorCode.HUKS_* -> a new enum using the
+ *                HUKS_ERR_CODE_* naming, or AudioEncoder.DEFAULT whose target
+ *                CodecMimeType has no DEFAULT member.)
  *
  * Members NOT preserved (genuinely removed in the new kit) are left unflagged
  * so the scanners still report them as manual — the re-pointed binding would
@@ -872,6 +882,16 @@ function verifyMembersPreservedByMove(
   kitTopLevelExports: Map<string, Set<string>>,
   kitSourceFiles: Map<string, SourceFile>,
 ): void {
+  // Signature -> entry lookup so a 2-seg member can find its 1-seg parent
+  // (e.g. `huks.HuksResult.outData` finds parent `huks.HuksResult`) without a
+  // second pass. First write wins; the indexer never emits two entries with the
+  // same kit+export+member signature.
+  const bySig = new Map<string, DeprecationEntry>();
+  for (const e of entries) {
+    const d = e.dep;
+    const key = `${d.kit}\0${d.exportName}\0${(d.members ?? []).join(".")}`;
+    if (!bySig.has(key)) bySig.set(key, e);
+  }
   for (const e of entries) {
     // Only NO-`@useinstead` members (no resolved repl chain) are candidates.
     if (e.repl && e.repl.members && e.repl.members.length > 0) continue;
@@ -898,14 +918,36 @@ function verifyMembersPreservedByMove(
       // Else look for a cross-kit same-name drop-in of the enclosing export.
       const dropin = crossKitDropin[`${ownKit}\0${d.exportName}`] ??
         crossKitDropin[`${ownKit}\0default`];
-      if (!dropin) continue;
-      if (d.members.length === 1) {
-        newKit = dropin;
-        container = d.exportName;
-        member = d.members[0];
-      } else {
-        continue; // 2+-seg drop-in: leave for a future round
+      if (dropin) {
+        if (d.members.length === 1) {
+          newKit = dropin;
+          container = d.exportName;
+          member = d.members[0];
+        } else {
+          continue; // 2+-seg drop-in: leave for a future round
+        }
       }
+    }
+    if (!newKit || !member) {
+      // Third move shape: same-kit container rename. A 2-seg no-`@useinstead`
+      // member `[C, M]` whose parent `[C]` has a SAME-KIT 1-seg rename repl
+      // `[C']` (repl.kit absent or === ownKit). The container rename's own
+      // 1-seg repl auto-rewrites the type/import binding; a member whose name
+      // is preserved in `C'` needs no splice at its access site, so we flag it
+      // for suppression. A member removed/renamed in `C'` (the common case —
+      // e.g. huks.HuksErrorCode.HUKS_* -> HuksExceptionErrCode.HUKS_ERR_CODE_*,
+      // or AudioEncoder.DEFAULT -> CodecMimeType which has no DEFAULT) stays
+      // unflagged and remains manual. Mirrors the kitmove/dropin verification
+      // discipline: trust only what the new container actually declares.
+      if (d.members.length !== 2) continue;
+      const parentKey = `${ownKit}\0${d.exportName}\0${d.members[0]}`;
+      const parent = bySig.get(parentKey);
+      const pr = parent?.repl;
+      if (!pr || !pr.members || pr.members.length !== 1) continue;
+      if (pr.kit && pr.kit !== ownKit) continue;
+      newKit = pr.kit ?? ownKit;
+      container = pr.members[0];
+      member = d.members[1];
     }
     if (!newKit || !member) continue;
     if (memberResolvesInKit(newKit, container, member, kitTopLevelExports, kitSourceFiles)) {

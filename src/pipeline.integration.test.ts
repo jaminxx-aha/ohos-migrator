@@ -2590,6 +2590,76 @@ test("scan + rewrite: preserved member suppressed, removed member still reported
   } finally { cleanup(sdk); cleanup(root); }
 });
 
+/**
+ * Round 12 (same-kit container-rename shape) — a container declared in a kit is
+ * `@deprecated` with a SAME-KIT `@useinstead` pointing to a renamed container
+ * (mirrors `huks.HuksResult` -> `HuksReturnResult`, or `huks.HuksErrorCode` ->
+ * `HuksExceptionErrCode`). Its members are separate no-`@useinstead` 2-seg
+ * entries. The container rename's own 1-seg repl auto-rewrites the binding
+ * (`import {ErrorCode}` -> `import {ErrorCode2}`), so a member PRESERVED in the
+ * new container needs no access-site splice (suppress); a member removed or
+ * renamed in the new container stays manual. This is also the classic trap:
+ * `huks.HuksErrorCode.HUKS_*` whose target `HuksExceptionErrCode` uses the
+ * `HUKS_ERR_CODE_*` naming — none preserved, so all stay manual.
+ */
+function sameKitRenameSdk(): string {
+  return makeTree({
+    "@ohos.sec.fake.d.ts": `
+declare namespace fake {
+    /**
+     * @since 9 @deprecated since 10
+     * @useinstead ohos.sec.fake.ErrorCode2
+     */
+    export enum ErrorCode {
+        /** @since 9 @deprecated since 10 */
+        SUCCESS = 0,
+        /** @since 9 @deprecated since 10 */
+        FAILURE = 1,
+    }
+    export enum ErrorCode2 {
+        SUCCESS = 0,
+        FAILURE2 = 1,
+    }
+}
+`,
+  });
+}
+
+test("indexer: same-kit container-rename member flagged memberPreservedByMove only when preserved", () => {
+  const sdk = sameKitRenameSdk();
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const get = (leaf: string) => map.entries.find(
+      (x) => x.dep.kit === "@ohos.sec.fake" && x.dep.members?.join(".") === `ErrorCode.${leaf}`,
+    );
+    // Preserved in the renamed container -> flagged (the 1-seg container rename
+    // covers it).
+    assert.equal(get("SUCCESS")?.memberPreservedByMove, true, "ErrorCode.SUCCESS preserved -> flagged");
+    // Renamed away in the new container (FAILURE -> FAILURE2) -> NOT flagged.
+    assert.notEqual(get("FAILURE")?.memberPreservedByMove, true, "ErrorCode.FAILURE not in ErrorCode2 -> NOT flagged");
+  } finally { cleanup(sdk); }
+});
+
+test("scan + rewrite: same-kit preserved member suppressed, renamed member still reported", () => {
+  const sdk = sameKitRenameSdk();
+  const root = makeTree({
+    "p.ts":
+      `import { fake } from '@ohos.sec.fake';\n` +
+      `fake.ErrorCode.SUCCESS;\n` +   // preserved -> suppressed (container rename covers it)
+      `fake.ErrorCode.FAILURE;\n`,   // renamed (FAILURE2) -> manual finding
+  });
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const { findings } = scanProjectMembers({ projectRoot: root, map });
+    // SUCCESS is preserved: NO member finding (the container rename handles it).
+    assert.ok(!bySymbol(findings as any, "fake.ErrorCode.SUCCESS"), "SUCCESS preserved -> no member finding");
+    // FAILURE was renamed away: manual finding still surfaces it.
+    const f = bySymbol(findings as any, "fake.ErrorCode.FAILURE");
+    assert.equal(f?.rule, "manual");
+    assert.equal(f?.needsManual, true);
+  } finally { cleanup(sdk); cleanup(root); }
+});
+
 test("indexer: container drop-in member flagged memberPreservedByMove only when preserved", () => {
   const sdk = dropinMovedSdk();
   try {
