@@ -567,6 +567,20 @@ function computeIdentity(
  * from the kit's last segment), e.g. `ohos.arkui.UIContext.Router#getStackSize`
  * (kit UIContext, members[0]=Router != UIContext) — that is an instance-method
  * rename handled by `verifyInstanceSafe` (the asymmetric branch), left 2-seg.
+ *
+ * Cross-kit shape (round 13): the redundant prefix is the NEW kit's own
+ * namespace, which DIFFERS from the OLD export name (a kit + namespace rename,
+ * e.g. `@system.router.Router.push` -> `@ohos.router:router.push` where `router`
+ * is the new kit's namespace, not the old `Router` export). Stripping yields a
+ * 1-seg cross-kit repl the `crossKitMemberDropin` path then verifies against the
+ * new kit's top-level exports and auto-rebinds (`Router.push` ->
+ * `router.push` via an injected `import * as router from '@ohos.router'`).
+ * Gated to the LEAF-PRESERVED case (`members[1] === dep.members[0]`): a renamed
+ * leaf on a cross-kit move often coincides with a signature change (e.g.
+ * `storage.getStorageSync` -> `preferences.getPreferences` adds a `Context`
+ * arg and turns sync into async), which a 1-seg rebind would mis-splice; those
+ * stay 2-seg chain-mismatch (manual). Leaf-preserved cross-kit rebind is
+ * strictly safer than the leaf-RENAMED cross-kit drops already shipped (round 3).
  */
 function normalizeRedundantNamespacePrefix(
   dep: DepSymbol,
@@ -575,11 +589,19 @@ function normalizeRedundantNamespacePrefix(
   if (!repl || !repl.members || repl.members.length !== 2 || !repl.kit) return repl;
   const kitLast = repl.kit.split(".").pop();
   if (!kitLast || repl.members[0] !== kitLast) return repl;
-  // Only namespace-level symbols (dep.exportName is the namespace, 1-seg leaf):
-  // a 2-seg dep means members[0] is a real nested class, not the kit namespace.
-  if (!dep.exportName || dep.exportName !== repl.members[0]) return repl;
   if (dep.members?.length !== 1) return repl;
-  return { ...repl, members: [repl.members[1]] };
+  // Same-kit (or cross-kit same-namespace-name) shape: the redundant prefix
+  // matches the OLD export name. Strip -> 1-seg same-kit leaf rename.
+  if (dep.exportName && dep.exportName === repl.members[0]) {
+    return { ...repl, members: [repl.members[1]] };
+  }
+  // Cross-kit shape: the redundant prefix is the NEW kit's own namespace
+  // (differs from the OLD export name). Only strip when the leaf is preserved —
+  // see the doc comment above for the signature-change gate.
+  if (repl.kit !== dep.kit && repl.members[1] === dep.members[0]) {
+    return { ...repl, members: [repl.members[1]] };
+  }
+  return repl;
 }
 
 function verifyInstanceSafe(

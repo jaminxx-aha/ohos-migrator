@@ -2660,6 +2660,85 @@ test("scan + rewrite: same-kit preserved member suppressed, renamed member still
   } finally { cleanup(sdk); cleanup(root); }
 });
 
+/**
+ * Round 13 (cross-kit redundant-namespace-prefix strip, leaf-preserved) — an
+ * `@useinstead` authored as `ohos.<newKit>.<newNamespace>#<leaf>` where the
+ * new namespace is the new kit's OWN namespace (e.g.
+ * `@system.router.Router.push` -> `@ohos.router:router.push`). The redundant
+ * `router` prefix differs from the OLD export name `Router`, so round 10's
+ * same-kit strip (which requires `repl[0]===dep.exportName`) left it a 2-seg
+ * chain-mismatch. Round 13 strips it when the leaf is PRESERVED, yielding a
+ * 1-seg cross-kit dropin the existing verifier+scanner auto-rebinds
+ * (`Router.push` -> `router.push` via injected `import * as router`).
+ *
+ * The leaf-RENAMED sibling (`getStorageSync` -> `getPreferences`, mirroring the
+ * real `storage.getStorageSync` -> `preferences.getPreferences` which adds a
+ * `Context` arg and turns sync into async) is NOT stripped — a renamed leaf on
+ * a cross-kit move coincides with signature changes, so a 1-seg rebind would
+ * mis-splice. It stays 2-seg chain-mismatch (manual).
+ */
+function crossKitRenameSdk(): string {
+  return makeTree({
+    "@system.fakeRouter.d.ts": `
+declare namespace fakeRouter {
+    /** @since 9 @deprecated since 10 @useinstead ohos.fake.router.router#push */
+    export function push(options: object): void;
+    /** @since 9 @deprecated since 10 @useinstead ohos.fake.router.router#getPreferences */
+    export function getStorageSync(name: string): void;
+}
+`,
+    "@ohos.fake.router.d.ts": `
+declare namespace router {
+    export function push(options: object): void;
+    export function getPreferences(context: object, name: string): void;
+}
+`,
+  });
+}
+
+test("indexer: cross-kit redundant-namespace-prefix strip only when leaf preserved", () => {
+  const sdk = crossKitRenameSdk();
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const get = (leaf: string) => map.entries.find(
+      (x) => x.dep.kit === "@system.fakeRouter" && x.dep.members?.[0] === leaf,
+    );
+    // push: leaf preserved (push->push) -> redundant `router` prefix stripped ->
+    // 1-seg cross-kit dropin, verified against the new kit's top-level exports.
+    const push = get("push");
+    assert.equal(push?.crossKitMemberDropin, true, "push leaf-preserved -> stripped + flagged");
+    assert.deepEqual(push?.repl?.members, ["push"], "redundant router prefix stripped");
+    // getStorageSync: leaf renamed (->getPreferences) -> NOT stripped (signature-
+    // change risk), stays 2-seg chain-mismatch, not flagged.
+    const sync = get("getStorageSync");
+    assert.notEqual(sync?.crossKitMemberDropin, true, "getStorageSync leaf-renamed -> NOT flagged");
+    assert.deepEqual(sync?.repl?.members, ["router", "getPreferences"], "leaf-renamed repl stays 2-seg");
+  } finally { cleanup(sdk); }
+});
+
+test("scan + rewrite: cross-kit prefix-strip rebinds Router.push -> router.push (leaf-renamed stays manual)", () => {
+  const sdk = crossKitRenameSdk();
+  const root = makeTree({
+    "p.ts":
+      `import { fakeRouter } from '@system.fakeRouter';\n` +
+      `fakeRouter.push({});\n` +          // leaf-preserved -> auto rebind
+      `fakeRouter.getStorageSync('k');\n`, // leaf-renamed -> manual finding
+  });
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const { findings } = scanProjectMembers({ projectRoot: root, map });
+    // push is auto: one rename-member rebind + one inject-import.
+    const push = bySymbol(findings as any, "fakeRouter.push");
+    assert.equal(push?.rule, "rename-member");
+    assert.ok(push?.replacement?.includes("router.push"), push?.replacement);
+    assert.ok(findings.some((f) => f.rule === "inject-import" && f.replacement?.includes("@ohos.fake.router")));
+    // getStorageSync is leaf-renamed -> manual (signature change).
+    const sync = bySymbol(findings as any, "fakeRouter.getStorageSync");
+    assert.equal(sync?.rule, "manual");
+    assert.equal(sync?.needsManual, true);
+  } finally { cleanup(sdk); cleanup(root); }
+});
+
 test("indexer: container drop-in member flagged memberPreservedByMove only when preserved", () => {
   const sdk = dropinMovedSdk();
   try {
