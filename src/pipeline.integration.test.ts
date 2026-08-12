@@ -3071,3 +3071,117 @@ test("scan + rewrite: kit-move instance rename spliced, preserved suppressed, re
   } finally { cleanup(sdk); cleanup(root); }
 });
 
+/**
+ * Round 17 — the body of the new kit's container lives in a NESTED file that
+ * re-export attribution assigns to a DIFFERENT kit (first-writer-wins: the
+ * `launcher` kit has a namespace import of the body, so `kitToSourceFiles[manager]`
+ * lacks it). The `manager` kit re-exports the container via a NAMED-import type
+ * alias: `import { Stuff as _Stuff } from './manager/Stuff'; export type Stuff = _Stuff;`.
+ * Without alias-following, `containerHasMemberInKit(manager, "Stuff", leaf)` searches
+ * only `manager.d.ts`, finds a TypeAlias (not an interface body) -> false -> manual.
+ * `addTypeAliasReExportedFiles` follows the `export type Stuff = _Stuff` alias to the
+ * body file (resolving the named import's module specifier and local binding), adds
+ * it to `kitToSourceFiles[manager]`, so `verifyInstanceSafeOnKitMove` now verifies
+ * the new leaf against the real interface body and sets `instanceSafe`. Mirrors the
+ * real `@ohos.bundle.bundleManager` -> `export type ApplicationInfo = _ApplicationInfo`
+ * case where `bundleManager/ApplicationInfo.d.ts` is attributed to
+ * `@ohos.bundle.launcherBundleManager`.
+ */
+function kitmoveAliasReExportSdk(): string {
+  return makeTree({
+    // Old kit: whole-kit move to `@ohos.fakelib.manager`; each `Stuff` instance
+    // property's @useinstead restates `Stuff` and names the new leaf.
+    "@ohos.fakelib.d.ts": `
+/** @since 9 @deprecated since 10 @useinstead ohos.fakelib.manager */
+declare namespace fakelib {
+    export interface Stuff {
+        /** @since 9 @deprecated since 10 @useinstead ohos.fakelib.manager.Stuff.exported */
+        isVisible: boolean;
+        /** @since 9 @deprecated since 10 @useinstead ohos.fakelib.manager.Stuff.oldProp */
+        oldProp: string;
+        /** @since 9 @deprecated since 10 @useinstead ohos.fakelib.manager.Stuff.goneProp */
+        goneProp: number;
+    }
+}
+`,
+    // Launcher kit: NAMESPACE import of the body -> first-writer-wins attributes
+    // the body file to THIS kit, so `manager` does not directly own the body.
+    "@ohos.fakelib.launcher.d.ts": `
+import * as _Stuff from './manager/Stuff';
+declare namespace launcher { export type Stuff = _Stuff.Stuff; }
+`,
+    // New kit: re-exports `Stuff` via a NAMED-import type alias. The interface
+    // body is NOT in this file (only the alias), so `manager`'s attributed
+    // SourceFile set cannot resolve members without alias-following.
+    "@ohos.fakelib.manager.d.ts": `
+import { Stuff as _Stuff } from './manager/Stuff';
+declare namespace manager { export type Stuff = _Stuff; }
+`,
+    // The body: declared `export interface Stuff` (a nested file attributed to
+    // `launcher` via the namespace import above). `exported` is the renamed
+    // successor of `isVisible`; `oldProp` survives; `goneProp` is removed.
+    "manager/Stuff.d.ts": `
+export interface Stuff {
+    exported: boolean;
+    oldProp: string;
+}
+`,
+  });
+}
+
+test("indexer: type-alias-re-exported container body followed so kit-move instance leaf verified", () => {
+  const sdk = kitmoveAliasReExportSdk();
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const get = (leaf: string) => map.entries.find(
+      (x) => x.dep.kit === "@ohos.fakelib" && x.dep.exportName === "fakelib" &&
+        x.dep.members?.[0] === "Stuff" && x.dep.members?.[1] === leaf,
+    );
+    // RENAMED leaf (isVisible -> exported): the body file (attributed to
+    // `launcher`, re-exported by `manager` via `export type Stuff = _Stuff`) is
+    // only reachable through alias-following; once added, `exported` is verified
+    // a member of the new Stuff -> instanceSafe.
+    assert.equal(get("isVisible")?.instanceSafe, true,
+      "isVisible -> exported verified via alias-followed body -> instanceSafe");
+    assert.deepEqual(get("isVisible")?.repl?.members, ["Stuff", "exported"]);
+    // PRESERVED leaf (oldProp): verified present in the alias-followed body ->
+    // instanceSafe (instance scanner suppresses the leaf-equal no-op).
+    assert.equal(get("oldProp")?.instanceSafe, true,
+      "oldProp preserved (verified via alias-followed body) -> instanceSafe");
+    // REMOVED leaf (goneProp): NOT in the body -> NOT flagged (stays manual).
+    assert.notEqual(get("goneProp")?.instanceSafe, true,
+      "goneProp removed from body -> NOT instanceSafe");
+  } finally { cleanup(sdk); }
+});
+
+test("scan + rewrite: alias-re-exported kit-move instance rename spliced, preserved suppressed", () => {
+  const sdk = kitmoveAliasReExportSdk();
+  const root = makeTree({
+    "p.ts":
+      `import { Stuff } from '@ohos.fakelib';\n` +
+      `let ai: Stuff = {} as Stuff;\n` +
+      `ai.isVisible;\n` +   // renamed -> auto splice ai.isVisible -> ai.exported
+      `ai.oldProp;\n` +     // preserved (leaf-equal) -> suppressed, no finding
+      `ai.goneProp;\n`,      // removed -> manual finding
+  });
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const { findings } = scanProjectInstanceMembers({ projectRoot: root, map });
+    const vis = bySymbol(findings as any, "ai.isVisible");
+    assert.equal(vis?.rule, "rename-member");
+    assert.equal(vis?.needsManual, false);
+    assert.equal(vis?.replacement, "ai.exported");
+    assert.ok(!bySymbol(findings as any, "ai.oldProp"), "ai.oldProp preserved -> no finding");
+    const gone = bySymbol(findings as any, "ai.goneProp");
+    assert.equal(gone?.rule, "manual");
+    assert.equal(gone?.needsManual, true);
+    const res = rewriteProject(root, findings, { write: true });
+    assert.equal(res.skippedManual, 1);
+    const out = readFileSync(join(root, "p.ts"), "utf8");
+    assert.ok(out.includes("ai.exported;"), "ai.isVisible -> ai.exported spliced");
+    assert.ok(!out.includes("ai.isVisible;"), "old call site gone");
+    assert.ok(out.includes("ai.goneProp;"), "manual goneProp left untouched");
+    assert.ok(out.includes("ai.oldProp;"), "preserved oldProp left untouched (no-op)");
+  } finally { cleanup(sdk); cleanup(root); }
+});
+

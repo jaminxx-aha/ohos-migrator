@@ -367,6 +367,16 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
   // (manual) — e.g. `wantConstant.Flags.FLAG_AUTH_READ_URI_PERMISSION` is
   // preserved in the new `Flags` enum (suppress), while
   // `wantConstant.Action.ACTION_HOME` is not (`Action` was dropped — manual).
+  // Extend each kit's attributed SourceFile set with container body files
+  // reached via EXPORTED type-alias re-exports (`export type C = _local`). A
+  // body file attributed to a DIFFERENT kit (first-writer-wins) but re-exported
+  // as a type alias by this kit is part of this kit's public surface, so its
+  // members must be discoverable here — e.g. `bundleManager/ApplicationInfo.d.ts`
+  // (attributed to `launcherBundleManager`) re-exported by `bundleManager` via
+  // `export type ApplicationInfo = _ApplicationInfo`. Run before the `verify*`
+  // post-passes so both see the added body files.
+  addTypeAliasReExportedFiles(kitToSourceFiles, fileSet, project);
+
   verifyMembersPreservedByMove(
     entries, kitIndex, crossKitDropin, kitTopLevelExports, kitToSourceFiles,
   );
@@ -511,6 +521,18 @@ function hasDefaultModifier(node: Node): boolean {
   try {
     const mods = (node as WithModifiers).getModifiers?.() ?? [];
     return mods.some((m) => m.getKind() === SyntaxKind.DefaultKeyword);
+  } catch {
+    return false;
+  }
+}
+
+/** True when the node is an exported declaration (`export ...`). Mirrors
+ * `hasDefaultModifier`'s defensive-cast style. */
+function hasExportModifier(node: Node): boolean {
+  type WithModifiers = Node & { getModifiers?: () => { getKind: () => SyntaxKind }[] };
+  try {
+    const mods = (node as WithModifiers).getModifiers?.() ?? [];
+    return mods.some((m) => m.getKind() === SyntaxKind.ExportKeyword);
   } catch {
     return false;
   }
@@ -974,6 +996,109 @@ function containerHasMemberInKit(
     if (collectContainerMembers(sf, containerName).has(member)) return true;
   }
   return false;
+}
+
+/**
+ * Extend each kit's attributed `SourceFile` set with body files reached via
+ * EXPORTED type-alias re-exports (`export type C = _local` or `export type C =
+ * _local.C`). The alias's RHS references a locally-imported name (a namespace
+ * import `import * as _X` or a named import `import { C as _C }`); resolving
+ * that import's module specifier yields the file where the container body
+ * (`interface C { ... }`) actually lives. That body file is attributed to a
+ * DIFFERENT kit when the first writer of one of its re-exports belongs to
+ * another kit — e.g. `bundleManager/ApplicationInfo.d.ts` is attributed to
+ * `@ohos.bundle.launcherBundleManager`, so
+ * `kitToSourceFiles['@ohos.bundle.bundleManager']` lacks it, yet `bundleManager`
+ * re-exports `ApplicationInfo` as `export type ApplicationInfo = _ApplicationInfo`
+ * and its instance members are exactly what `verifyInstanceSafeOnKitMove` must
+ * check after the `@ohos.bundle` -> `@ohos.bundle.bundleManager` relocation.
+ *
+ * Following only EXPORTED aliases whose leading identifier is a locally-imported
+ * name keeps this bounded: internal type aliases and non-re-exported imports are
+ * not followed, so no inflation from private surface. Run before the `verify*`
+ * post-passes so both `verifyMembersPreservedByMove` and
+ * `verifyInstanceSafeOnKitMove` see the added body files. One level of alias
+ * following (the body files are leaf interface/enum/class declarations and do
+ * not themselves re-export further containers in practice).
+ */
+function addTypeAliasReExportedFiles(
+  kitToSourceFiles: Map<string, SourceFile[]>,
+  fileSet: Set<string>,
+  project: Project,
+): void {
+  type Named = Node & { getName?: () => string | undefined };
+  type TypeAlias = Node & { getTypeNode?: () => { getText?: () => string } | undefined };
+  type ImportDecl = Node & {
+    getModuleSpecifierValue?: () => string | undefined;
+    getNamespaceImport?: () => Named | undefined;
+    getNamedImports?: () => Named[];
+  };
+  for (const sfs of kitToSourceFiles.values()) {
+    // Snapshot the currently-attributed files; newly-added body files are leaf
+    // declarations and are not re-processed this pass.
+    const snapshot = sfs.slice();
+    const existing = new Set(
+      snapshot.map((sf) => (sf as { getFilePath?: () => string }).getFilePath?.() ?? ""),
+    );
+    for (const sf of snapshot) {
+      const importerPath = (sf as { getFilePath?: () => string }).getFilePath?.();
+      if (!importerPath) continue;
+      // Build local-import-name -> module-specifier for this file.
+      const localToSpec = new Map<string, string>();
+      const imports =
+        (sf as unknown as { getDescendantsOfKind?: (k: SyntaxKind) => Node[] }).getDescendantsOfKind?.(
+          SyntaxKind.ImportDeclaration,
+        ) ?? [];
+      for (const imp of imports as ImportDecl[]) {
+        const spec = imp.getModuleSpecifierValue?.();
+        if (!spec) continue;
+        const ns = imp.getNamespaceImport?.();
+        if (ns) {
+          const nm = ns.getName?.();
+          if (nm) localToSpec.set(nm, spec);
+          continue;
+        }
+        for (const nis of imp.getNamedImports?.() ?? []) {
+          // The alias RHS uses the LOCAL binding name (`_ApplicationInfo` for
+          // `import { ApplicationInfo as _ApplicationInfo }`), which is the
+          // alias node when present, else the source name. `getName()` returns
+          // the SOURCE name, so resolve the local name via the alias node.
+          const aliasId = (nis as {
+            getAliasNode?: () => { getText?: () => string } | undefined;
+          }).getAliasNode?.();
+          const nm = aliasId?.getText?.() ?? nis.getName?.();
+          if (nm) localToSpec.set(nm, spec);
+        }
+      }
+      const aliases =
+        (sf as unknown as { getDescendantsOfKind?: (k: SyntaxKind) => Node[] }).getDescendantsOfKind?.(
+          SyntaxKind.TypeAliasDeclaration,
+        ) ?? [];
+      for (const a of aliases as TypeAlias[]) {
+        // EXPORTED aliases only — private `type C = ...` is not public surface.
+        if (!hasExportModifier(a)) continue;
+        const rhs = a.getTypeNode?.()?.getText?.();
+        if (!rhs) continue;
+        // Leading identifier of the alias RHS (`_ApplicationInfo` from
+        // `_ApplicationInfo` or `_AbilityInfo.AbilityInfo`).
+        const m = rhs.match(/^([A-Za-z_$][\w$]*)/);
+        if (!m) continue;
+        const spec = localToSpec.get(m[1]);
+        if (!spec) continue;
+        const target = resolveRelative(importerPath, spec, fileSet);
+        if (!target || existing.has(target)) continue;
+        let body: SourceFile | undefined;
+        try {
+          body = getOrCreateSourceFile(project, target, readFileSync(target, "utf8"));
+        } catch {
+          body = undefined;
+        }
+        if (!body) continue;
+        existing.add(target);
+        sfs.push(body);
+      }
+    }
+  }
 }
 
 /**
