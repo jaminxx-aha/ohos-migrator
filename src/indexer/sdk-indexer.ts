@@ -111,6 +111,14 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
   // descend into a kit's container declarations (e.g. check that a moved
   // member is still declared in the new kit's `Flags` enum / `Stat` interface).
   const kitSourceFiles = new Map<string, SourceFile>();
+  // All SourceFiles attributed to a kit (top-level file PLUS re-export-attributed
+  // nested files), so post-loop verifiers can find a container's body even when
+  // the kit's top-level file only re-exports it as a type alias from a nested
+  // file (e.g. `@ohos.bundle.bundleManager`'s `export type AbilityInfo =
+  // _AbilityInfo.AbilityInfo` — the `interface AbilityInfo { ... }` body lives in
+  // `bundleManager/AbilityInfo.d.ts`, attributed to the same kit via re-export
+  // tracing). Built during the main loop below.
+  const kitToSourceFiles = new Map<string, SourceFile[]>();
   for (const f of topLevelFiles) {
     let content: string;
     try {
@@ -156,6 +164,14 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
     if (!sourceFile) continue;
     const ownKit = resolveOwnKit(filePath, nsImportKits, namedReexports);
     fileKit[toRelPath(filePath, sdkApiDir)] = ownKit;
+    // Collect every SourceFile attributed to a kit (top-level + nested), for
+    // post-loop verifiers that must descend into a container body declared in a
+    // re-exported nested file (see `kitToSourceFiles` comment above).
+    if (!ownKit.startsWith("@?")) {
+      const arr = kitToSourceFiles.get(ownKit);
+      if (arr) arr.push(sourceFile);
+      else kitToSourceFiles.set(ownKit, [sourceFile]);
+    }
 
     sourceFile.forEachDescendant((node) => {
       if (!isNameable(node)) return;
@@ -352,8 +368,22 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
   // preserved in the new `Flags` enum (suppress), while
   // `wantConstant.Action.ACTION_HOME` is not (`Action` was dropped — manual).
   verifyMembersPreservedByMove(
-    entries, kitIndex, crossKitDropin, kitTopLevelExports, kitSourceFiles,
+    entries, kitIndex, crossKitDropin, kitTopLevelExports, kitToSourceFiles,
   );
+
+  // Flag INSTANCE-MEMBER renames whose enclosing kit was relocated wholesale
+  // (the @useinstead target kit === `kitIndex[dep.kit].newKit`) where the
+  // replacement restates the unchanged container type. `verifyInstanceSafe`
+  // verifies the new leaf against the OLD kit's enclosing interface, but under
+  // a kit move the new leaf lives in the NEW kit's container (often in a
+  // re-exported nested file). This post-pass verifies the new leaf against the
+  // new kit's container and sets `instanceSafe`; the instance scanner then
+  // splices `var.<oldLeaf>` -> `var.<newLeaf>` (renamed) or suppresses (leaf
+  // preserved no-op). The classic case is `@ohos.bundle` ->
+  // `@ohos.bundle.bundleManager`: `AbilityInfo.isVisible` ->
+  // `[AbilityInfo, exported]`, `AbilityInfo.bundleName` -> `[AbilityInfo,
+  // bundleName]`. Members not in the new container stay manual.
+  verifyInstanceSafeOnKitMove(entries, kitIndex, kitToSourceFiles);
 
   // Flag SAME-KIT 1->2 nested-container INSERTS whose inserted container is a
   // verified top-level export and whose leaf is a verified STATIC method of
@@ -894,21 +924,56 @@ function collectMembersOfContainer(
  * `containerName` is undefined, `member` must be a top-level export of the kit
  * (a direct member of the kit namespace). Used to verify a deprecated member
  * chain still exists in the new kit after a kit/container move.
+ *
+ * Searches EVERY SourceFile attributed to the kit (top-level file PLUS
+ * re-export-attributed nested files), because a kit's top-level file often
+ * only re-exports a container as a type alias (e.g. `export type AbilityInfo =
+ * _AbilityInfo.AbilityInfo`) while the actual `interface AbilityInfo { ... }`
+ * body — and thus the member being verified — lives in a nested file
+ * attributed to the same kit. Searching only the top-level file would miss the
+ * body and wrongly fail verification.
  */
 function memberResolvesInKit(
   kit: string,
   containerName: string | undefined,
   member: string,
   kitTopLevelExports: Map<string, Set<string>>,
-  kitSourceFiles: Map<string, SourceFile>,
+  kitToSourceFiles: Map<string, SourceFile[]>,
 ): boolean {
   const top = kitTopLevelExports.get(kit);
   if (!top) return false;
   if (!containerName) return top.has(member);
   if (!top.has(containerName)) return false;
-  const sf = kitSourceFiles.get(kit);
-  if (!sf) return false;
-  return collectContainerMembers(sf, containerName).has(member);
+  const sfs = kitToSourceFiles.get(kit);
+  if (!sfs || sfs.length === 0) return false;
+  for (const sf of sfs) {
+    if (collectContainerMembers(sf, containerName).has(member)) return true;
+  }
+  return false;
+}
+
+/**
+ * Does `containerName` declare a direct member named `member` in ANY SourceFile
+ * attributed to `kit`? Like `memberResolvesInKit` but WITHOUT requiring the
+ * container to be a top-level export of the kit (the container may be reached
+ * via a type-alias re-export that `collectKitTopLevelExports` picks up, but we
+ * don't rely on that here). Used by `verifyInstanceSafeOnKitMove` to verify a
+ * renamed/preserved instance leaf is a real member of the container in the NEW
+ * kit after a wholesale kit relocation. Searches every attributed file so a
+ * container body in a re-exported nested file is found.
+ */
+function containerHasMemberInKit(
+  kit: string,
+  containerName: string,
+  member: string,
+  kitToSourceFiles: Map<string, SourceFile[]>,
+): boolean {
+  const sfs = kitToSourceFiles.get(kit);
+  if (!sfs || sfs.length === 0) return false;
+  for (const sf of sfs) {
+    if (collectContainerMembers(sf, containerName).has(member)) return true;
+  }
+  return false;
 }
 
 /**
@@ -952,7 +1017,7 @@ function verifyMembersPreservedByMove(
   kitIndex: Record<string, KitDepInfo>,
   crossKitDropin: CrossKitDropin,
   kitTopLevelExports: Map<string, Set<string>>,
-  kitSourceFiles: Map<string, SourceFile>,
+  kitToSourceFiles: Map<string, SourceFile[]>,
 ): void {
   // Signature -> entry lookup so a 2-seg member can find its 1-seg parent
   // (e.g. `huks.HuksResult.outData` finds parent `huks.HuksResult`) without a
@@ -1022,9 +1087,81 @@ function verifyMembersPreservedByMove(
       member = d.members[1];
     }
     if (!newKit || !member) continue;
-    if (memberResolvesInKit(newKit, container, member, kitTopLevelExports, kitSourceFiles)) {
+    if (memberResolvesInKit(newKit, container, member, kitTopLevelExports, kitToSourceFiles)) {
       e.memberPreservedByMove = true;
     }
+  }
+}
+
+/**
+ * Flag instance-member renames whose enclosing kit was relocated wholesale
+ * (`kitIndex[dep.kit].newKit === repl.kit`) — the "aligned kit-move" case —
+ * where the @useinstead restates the (unchanged) container type in the
+ * replacement chain. The existing `verifyInstanceSafe` verifies the new leaf
+ * against the deprecated symbol's OWN (old-kit) enclosing interface/class, but
+ * under a kit move the new leaf lives in the NEW kit's container, which is in
+ * a different file `verifyInstanceSafe` cannot see. This post-pass closes that
+ * gap: it resolves the new leaf against the new kit's container (across every
+ * re-export-attributed nested file) and sets `instanceSafe`, reusing the
+ * already-shipped instance-scanner branch (`instanceFinding` line ~785: an
+ * `instanceSafe && aligned` entry splices `var.<oldLeaf>` -> `var.<newLeaf>`;
+ * line ~780: a leaf-equal entry is a no-op and is suppressed).
+ *
+ * The classic SDK case is `@ohos.bundle` -> `@ohos.bundle.bundleManager`, where
+ * each `AbilityInfo`/`BundleInfo`/`HapModuleInfo` instance property's
+ * @useinstead restates the container: `AbilityInfo.isVisible` ->
+ * `[AbilityInfo, exported]` (a verified member of the new `AbilityInfo`), or
+ * `AbilityInfo.bundleName` -> `[AbilityInfo, bundleName]` (leaf preserved,
+ * verified present) — both auto: the former splices, the latter suppresses. Members whose new
+ * leaf is NOT in the new container (removed, or a cross-container redirect)
+ * stay manual: the gate trusts only what the new container actually declares
+ * (mirrors the verifyMembersPreservedByMove / verifyNestedContainerInsert
+ * discipline).
+ *
+ * Shapes verified (mirroring `verifyInstanceSafe` + `instanceFinding`):
+ *   - dep `[leaf]` (1-seg), container = `dep.exportName`
+ *   - dep `[Type, leaf]` (2-seg), container = `dep.members[0]`
+ *   - repl single-segment `[newLeaf]`, OR type-preserving 2-seg `[Type, newLeaf]`
+ *     with `Type === container` (the @useinstead restates the unchanged type).
+ * A repl whose first segment differs from the container (a cross-container
+ * redirect, e.g. `BundleInfo.type` -> `[ApplicationInfo, bundleType]`) is NOT
+ * type-preserving and is left manual.
+ *
+ * Run after the index loop so `kitIndex` and `kitToSourceFiles` are complete.
+ * Does not clobber entries already flagged `instanceSafe` by `verifyInstanceSafe`.
+ */
+function verifyInstanceSafeOnKitMove(
+  entries: DeprecationEntry[],
+  kitIndex: Record<string, KitDepInfo>,
+  kitToSourceFiles: Map<string, SourceFile[]>,
+): void {
+  for (const e of entries) {
+    if (e.instanceSafe) continue; // already verified by verifyInstanceSafe
+    const d = e.dep, r = e.repl;
+    if (!d.members || d.members.length === 0 || !d.exportName) continue;
+    if (!r || !r.members || r.members.length === 0 || !r.kit) continue;
+    // Only the aligned kit-move case: the @useinstead target kit is exactly the
+    // deprecated kit's wholesale relocation target (rewrite-import re-points the
+    // binding, so the member is reached on the re-pointed binding).
+    const newKit = kitIndex[d.kit]?.newKit;
+    if (!newKit || newKit !== r.kit) continue;
+    // Container = the receiver type (dep.members[0] for 2-seg, dep.exportName
+    // for 1-seg). newLeaf = single-seg repl, or the type-preserving 2-seg leaf.
+    const container = d.members.length >= 2 ? d.members[0] : d.exportName;
+    let newLeaf: string | undefined;
+    if (r.members.length === 1) {
+      newLeaf = r.members[0];
+    } else if (r.members.length === 2 && r.members[0] === container) {
+      newLeaf = r.members[1];
+    } else {
+      continue; // not type-preserving (cross-container redirect) -> manual
+    }
+    // Verify the new leaf is a real direct member of the container in the NEW
+    // kit (searching every re-export-attributed nested file for the body).
+    if (!containerHasMemberInKit(newKit, container, newLeaf, kitToSourceFiles)) {
+      continue; // removed / not declared -> manual
+    }
+    e.instanceSafe = true;
   }
 }
 

@@ -2962,3 +2962,112 @@ test("scan + rewrite: preserved instance member suppressed, removed one still re
   } finally { cleanup(sdk); cleanup(root); }
 });
 
+/**
+ * Round 16 — an interface whose enclosing kit was relocated wholesale
+ * (`@ohos.fakelib` -> `@ohos.fakelib.manager`), where each instance property's
+ * @useinstead RESTATES the (unchanged) container type in the replacement chain
+ * (`Stuff.isVisible` -> `[Stuff, exported]`). `verifyInstanceSafe` checks the
+ * OLD kit's interface for the new leaf and fails (the new leaf lives in the NEW
+ * kit's container, in a different file); `verifyInstanceSafeOnKitMove` verifies
+ * the new leaf against the new kit's container and sets `instanceSafe`, so the
+ * instance scanner splices a renamed leaf (`isVisible` -> `exported`) and
+ * suppresses a preserved one (`oldProp`, a leaf-equal no-op). A property whose
+ * new leaf is NOT in the new container (`goneProp`, removed) stays manual.
+ *
+ * Mirrors the real `@ohos.bundle` -> `@ohos.bundle.bundleManager` migration:
+ * `AbilityInfo.isVisible` -> `[AbilityInfo, exported]` (verified member of the
+ * new `AbilityInfo`), `AbilityInfo.bundleName` -> `[AbilityInfo, bundleName]`
+ * (leaf preserved, verified present).
+ */
+function kitmoveInstanceSdk(): string {
+  return makeTree({
+    // Old kit: the namespace is deprecated as a whole-kit move to
+    // `@ohos.fakelib.manager`; its `Stuff` interface's properties each have a
+    // @useinstead that restates `Stuff` and names the new leaf.
+    "@ohos.fakelib.d.ts": `
+/** @since 9 @deprecated since 10 @useinstead ohos.fakelib.manager */
+declare namespace fakelib {
+    export interface Stuff {
+        /** @since 9 @deprecated since 10 @useinstead ohos.fakelib.manager.Stuff.exported */
+        isVisible: boolean;
+        /** @since 9 @deprecated since 10 @useinstead ohos.fakelib.manager.Stuff.oldProp */
+        oldProp: string;
+        /** @since 9 @deprecated since 10 @useinstead ohos.fakelib.manager.Stuff.goneProp */
+        goneProp: number;
+    }
+}
+`,
+    // New kit: `Stuff` survives WITH `exported` (renamed from `isVisible`) and
+    // `oldProp` (preserved), but WITHOUT `goneProp` (removed).
+    "@ohos.fakelib.manager.d.ts": `
+declare namespace manager {
+    export interface Stuff {
+        exported: boolean;
+        oldProp: string;
+    }
+}
+`,
+  });
+}
+
+test("indexer: kit-move instance rename flagged instanceSafe only when new leaf is in the new container", () => {
+  const sdk = kitmoveInstanceSdk();
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    // `Stuff` is nested in `declare namespace fakelib`, so each member entry is
+    // 2-seg: exportName="fakelib" (the namespace), members=["Stuff", <leaf>].
+    const get = (leaf: string) => map.entries.find(
+      (x) => x.dep.kit === "@ohos.fakelib" && x.dep.exportName === "fakelib" &&
+        x.dep.members?.[0] === "Stuff" && x.dep.members?.[1] === leaf,
+    );
+    // RENAMED leaf (isVisible -> exported): new leaf is a member of the new
+    // Stuff -> instanceSafe (instance scanner splices ai.isVisible -> ai.exported).
+    assert.equal(get("isVisible")?.instanceSafe, true, "isVisible -> exported (verified in new Stuff) -> instanceSafe");
+    assert.deepEqual(get("isVisible")?.repl?.members, ["Stuff", "exported"]);
+    // PRESERVED leaf (oldProp -> oldProp): the new leaf equals the old leaf and
+    // IS in the new Stuff -> instanceSafe (instance scanner suppresses the no-op).
+    assert.equal(get("oldProp")?.instanceSafe, true, "oldProp preserved (verified in new Stuff) -> instanceSafe");
+    // REMOVED leaf (goneProp -> goneProp): the new leaf is NOT in the new Stuff
+    // -> NOT flagged (stays manual; the re-pointed binding would reference a
+    // member the new container no longer declares).
+    assert.notEqual(get("goneProp")?.instanceSafe, true, "goneProp removed from new Stuff -> NOT instanceSafe");
+  } finally { cleanup(sdk); }
+});
+
+test("scan + rewrite: kit-move instance rename spliced, preserved suppressed, removed manual", () => {
+  const sdk = kitmoveInstanceSdk();
+  const root = makeTree({
+    "p.ts":
+      `import { Stuff } from '@ohos.fakelib';\n` +
+      `let ai: Stuff = {} as Stuff;\n` +
+      `ai.isVisible;\n` +   // renamed -> auto splice ai.isVisible -> ai.exported
+      `ai.oldProp;\n` +     // preserved (leaf-equal) -> suppressed, no finding
+      `ai.goneProp;\n`,      // removed -> manual finding
+  });
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const { findings } = scanProjectInstanceMembers({ projectRoot: root, map });
+    // Renamed leaf: auto rename-member splice.
+    const vis = bySymbol(findings as any, "ai.isVisible");
+    assert.equal(vis?.rule, "rename-member");
+    assert.equal(vis?.needsManual, false);
+    assert.equal(vis?.replacement, "ai.exported");
+    // Preserved leaf: no instance finding (suppress).
+    assert.ok(!bySymbol(findings as any, "ai.oldProp"), "ai.oldProp preserved -> no finding");
+    // Removed leaf: manual finding.
+    const gone = bySymbol(findings as any, "ai.goneProp");
+    assert.equal(gone?.rule, "manual");
+    assert.equal(gone?.needsManual, true);
+    // Rewrite: the renamed access site is spliced (instance scanner's job).
+    // The kit-move import re-point is the binding scanner's job (tested
+    // separately), so it is not asserted here. goneProp is skipped (manual).
+    const res = rewriteProject(root, findings, { write: true });
+    assert.equal(res.skippedManual, 1);
+    const out = readFileSync(join(root, "p.ts"), "utf8");
+    assert.ok(out.includes("ai.exported;"), "ai.isVisible -> ai.exported spliced");
+    assert.ok(!out.includes("ai.isVisible;"), "old call site gone");
+    assert.ok(out.includes("ai.goneProp;"), "manual goneProp left untouched");
+    assert.ok(out.includes("ai.oldProp;"), "preserved oldProp left untouched (no-op)");
+  } finally { cleanup(sdk); cleanup(root); }
+});
+
