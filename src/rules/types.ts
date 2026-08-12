@@ -58,6 +58,23 @@ export interface DeprecationEntry {
    * that no longer declares them, so the call site still needs a human fix.
    */
   memberPreservedByMove?: boolean;
+  /**
+   * True when this is a SAME-KIT 1-seg -> 2-seg member move that INSERTS a
+   * container segment in front of a preserved leaf, where the inserted
+   * container is a verified top-level export of `dep.kit` and the leaf is a
+   * verified STATIC method of that container (a nested class). The scanner
+   * splices `binding.<leaf>` -> `binding.<container>.<leaf>` and reuses the
+   * existing kit binding (no import injection). The classic case is
+   * `@ohos.i18n.is24HourClock` -> `i18n.System.is24HourClock` (the `System`
+   * nested class gained the old top-level static methods). Instance methods
+   * (`process.ProcessManager.isAppUid` — would call an instance method on the
+   * class), type-only interfaces (`worker.WorkerEventTarget.*`), non-container
+   * restate-leaf shapes (`contact.addContact.addContact`), stale `@useinstead`
+   * pointing at a method the class doesn't declare, and AMBIGUOUS symbols
+   * (`UiTest.click` -> both `Component.click` and `Driver.click`) are rejected
+   * by the verification gates and stay manual.
+   */
+  nestedContainerInsert?: boolean;
 }
 
 /** Per-kit summary used by the scanner for import-level matching. */

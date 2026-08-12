@@ -314,6 +314,15 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
     entries, kitIndex, crossKitDropin, kitTopLevelExports, kitSourceFiles,
   );
 
+  // Flag SAME-KIT 1->2 nested-container INSERTS whose inserted container is a
+  // verified top-level export and whose leaf is a verified STATIC method of
+  // that (nested-class) container — e.g. `i18n.is24HourClock` ->
+  // `i18n.System.is24HourClock`. The scanner splices `binding.<leaf>` ->
+  // `binding.<container>.<leaf>` and reuses the kit binding (no inject).
+  // Instance-method, interface, restate-leaf, stale-@useinstead, and ambiguous
+  // shapes are rejected by the gates (see `verifyNestedContainerInsert`).
+  verifyNestedContainerInsert(entries, kitTopLevelExports, kitSourceFiles, exportIndex);
+
   return {
     apiVersion,
     sdkPath: sdkApiDir,
@@ -975,6 +984,130 @@ function verifyMembersPreservedByMove(
     if (memberResolvesInKit(newKit, container, member, kitTopLevelExports, kitSourceFiles)) {
       e.memberPreservedByMove = true;
     }
+  }
+}
+
+/**
+ * Is `member` a STATIC method of a class named `containerName` declared in
+ * `sf`? This is the sound drop-in gate for a same-kit nested-container INSERT
+ * (`binding.<leaf>` -> `binding.<container>.<leaf>`): calling an instance
+ * method on the class itself (`binding.ProcessManager.isAppUid()`) is broken,
+ * so the leaf must be `static`. A class that doesn't declare the method (a
+ * stale `@useinstead`) returns false. Non-class containers (interface / enum /
+ * namespace / function) are out of scope for this gate — the verified safe
+ * shape in the SDK is a nested class with static methods (e.g. `i18n.System`).
+ * Mirrors the `hasDefaultModifier` defensive-cast style for ts-morph nodes.
+ */
+function memberIsStaticMethodOfClass(
+  sf: SourceFile,
+  containerName: string,
+  member: string,
+): boolean {
+  type Named = Node & { getName?: () => string | undefined };
+  type WithMethods = Node & {
+    getMethods?: () => Array<
+      Node & {
+        getName?: () => string | undefined;
+        getModifiers?: () => { getKind: () => SyntaxKind }[];
+      }
+    >;
+  };
+  const classes =
+    (sf as unknown as { getDescendantsOfKind?: (k: SyntaxKind) => Node[] })
+      .getDescendantsOfKind?.(SyntaxKind.ClassDeclaration) ?? [];
+  for (const cls of classes) {
+    if ((cls as Named).getName?.() !== containerName) continue;
+    const methods = (cls as WithMethods).getMethods?.() ?? [];
+    for (const m of methods) {
+      if (m.getName?.() !== member) continue;
+      const mods = m.getModifiers?.() ?? [];
+      return mods.some((mod) => mod.getKind() === SyntaxKind.StaticKeyword);
+    }
+    return false; // class found, but the leaf isn't among its methods
+  }
+  return false; // no class named containerName in this file
+}
+
+/**
+ * Flag SAME-KIT 1-seg -> 2-seg member moves that INSERT a container segment
+ * in front of a preserved leaf, when the inserted container is a verified
+ * top-level export of `dep.kit` and the leaf is a verified STATIC method of
+ * that container (a nested class). Run after the index loop so the kit's
+ * top-level exports and source files are fully collected. The scanner then
+ * splices `binding.<leaf>` -> `binding.<container>.<leaf>` and reuses the
+ * existing kit binding (no import injection).
+ *
+ * Gates (each rejects a real trap observed in the SDK):
+ *  - same-kit, 1-seg -> 2-seg, leaf preserved (`repl[1] === dep.members[0]`):
+ *    the only shape change is an inserted container segment. A renamed leaf
+ *    on a cross-kit move (`storage.getStorageSync` -> `preferences.getPreferences`,
+ *    sync->async + a Context arg) is a signature change, not an insert.
+ *  - clean-ident container (rejects parse artifacts like `brightness/brightness`).
+ *  - non-ambiguous: the deprecated symbol maps to exactly ONE container.
+ *    `UiTest.click` -> both `Component.click` and `Driver.click` is ambiguous
+ *    (the scanner matches the symbol only and can't tell which receiver the
+ *    call targets).
+ *  - container is a top-level export of `dep.kit` (rejects restate-leaf shapes
+ *    like `contact.addContact.addContact`, where `addContact` is a function,
+ *    not a container with members).
+ *  - container is a CLASS and the leaf is a STATIC method: rejects instance
+ *    methods (`process.ProcessManager.isAppUid` — calling an instance method
+ *    on the class is broken) and type-only interfaces (`worker.
+ *    WorkerEventTarget.*` — interfaces have no runtime value). Also rejects a
+ *    stale `@useinstead` that names a method the class doesn't declare
+ *    (`i18n.set24HourClock` -> `System.set24HourClock` — `System` has no
+ *    `set24HourClock`).
+ */
+function verifyNestedContainerInsert(
+  entries: DeprecationEntry[],
+  kitTopLevelExports: Map<string, Set<string>>,
+  kitSourceFiles: Map<string, SourceFile>,
+  exportIndex: ExportIndex,
+): void {
+  const cands: Array<{ e: DeprecationEntry; container: string; leaf: string; symKey: string }> = [];
+  // Symbol -> set of replacement containers, for the ambiguity gate. Built
+  // over same-kit 1->2 leaf-preserved candidates only (the shape this lever
+  // handles); a cross-kit repl of a different shape is another lever's concern.
+  const containersBySymbol = new Map<string, Set<string>>();
+  for (const e of entries) {
+    const d = e.dep, r = e.repl;
+    if (!d.members || d.members.length !== 1) continue;
+    if (!r || !r.members || r.members.length !== 2) continue;
+    // Same-kit only. A REPL WITH NO RESOLVED KIT (e.g. the SDK's malformed
+    // `ohos.System.getDisplayCountry` short form for `i18n.System.
+    // getDisplayCountry` — `ohos.System` is not a kit) still expresses a
+    // same-kit intent; the top-level-export gate below verifies the container
+    // really lives in `dep.kit`, so a genuinely cross-kit unresolvable repl is
+    // still rejected there.
+    if (r.kit && r.kit !== d.kit) continue;
+    if (r.members[1] !== d.members[0]) continue; // leaf preserved (insert only)
+    if (!IDENT_RE.test(r.members[0])) continue; // clean container ident
+    const container = r.members[0];
+    const leaf = r.members[1];
+    const symKey = `${d.kit}\0${d.members[0]}`;
+    cands.push({ e, container, leaf, symKey });
+    let set = containersBySymbol.get(symKey);
+    if (!set) { set = new Set(); containersBySymbol.set(symKey, set); }
+    set.add(container);
+  }
+  for (const { e, container, leaf, symKey } of cands) {
+    // Ambiguity: the deprecated symbol must map to exactly ONE container.
+    if ((containersBySymbol.get(symKey)?.size ?? 1) > 1) continue;
+    // If the enclosing container (`dep.exportName`) already has a same-kit
+    // EXPORT rename (e.g. `UiDriver` -> `Driver` in @ohos.UiTest), the
+    // rename-export rule re-points the import binding to the new container and
+    // the member finding is suppressed at scan time (`exportIndex` guard) — the
+    // `nestedContainerInsert` flag would be dead weight here, so skip it. This
+    // leaves only the kit-namespace-namespace shape (e.g. `i18n.is24HourClock`
+    // -> `i18n.System.is24HourClock`, where `i18n` is the kit namespace, not a
+    // renamed export) for this lever.
+    if (exportIndex[`${e.dep.kit}\0${e.dep.exportName}`]) continue;
+    const top = kitTopLevelExports.get(e.dep.kit);
+    if (!top || !top.has(container)) continue;
+    const sf = kitSourceFiles.get(e.dep.kit);
+    if (!sf) continue;
+    if (!memberIsStaticMethodOfClass(sf, container, leaf)) continue;
+    e.nestedContainerInsert = true;
   }
 }
 

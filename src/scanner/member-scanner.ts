@@ -207,6 +207,36 @@ export function scanProjectMembers(opts: MemberScanOptions): MemberScanResult {
             if (!prev || (prev.needsManual && !f.needsManual)) dedupe.set(key, f);
             continue;
           }
+          // Same-kit 1-seg -> 2-seg nested-container INSERT, verified at index
+          // time: the inserted container is a top-level export of this kit and
+          // the leaf is a STATIC method of that (nested-class) container. Splice
+          // `binding.<leaf>` -> `binding.<container>.<leaf>` and REUSE the
+          // existing kit binding — no import injection (unlike crossKitMemberDropin).
+          // E.g. `i18n.is24HourClock` -> `i18n.System.is24HourClock`,
+          // `UiTest.create` -> `UiTest.Driver.create`. Instance-method /
+          // interface / restate-leaf / stale-@useinstead / ambiguous shapes were
+          // rejected at index time and never carry this flag.
+          if (e.nestedContainerInsert && e.repl?.members && e.repl.members.length > 1) {
+            const replChain = e.repl.members.join(".");
+            const replacement = `${binding}.${replChain}`;
+            const f: Finding = {
+              file: relative(projectRoot, file).split(sep).join("/"),
+              line: lineAt(content, m.index),
+              oldSymbol: `${binding}.${members.join(".")}`,
+              newSymbol: replacement,
+              since: e.since,
+              rule: "rename-member",
+              needsManual: false,
+              note: `nested container insert -> ${binding}.${replChain}`,
+              matchStart: m.index,
+              matchEnd,
+              replacement,
+            };
+            const key = `${f.file}:${f.line}:${f.oldSymbol}`;
+            const prev = dedupe.get(key);
+            if (!prev || (prev.needsManual && !f.needsManual)) dedupe.set(key, f);
+            continue;
+          }
           const f = memberFinding(
             file, projectRoot, m.index, matchEnd, content, binding, members, e, ctx, kitMove,
           );

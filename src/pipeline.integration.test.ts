@@ -2739,6 +2739,135 @@ test("scan + rewrite: cross-kit prefix-strip rebinds Router.push -> router.push 
   } finally { cleanup(sdk); cleanup(root); }
 });
 
+/**
+ * Round 14 (same-kit 1->2 nested-container INSERT) — a deprecated top-level
+ * function whose `@useinstead` points at a STATIC method of a nested class in
+ * the SAME kit (e.g. `@ohos.i18n.is24HourClock` -> `i18n.System.is24HourClock`,
+ * `@ohos.UiTest.create` -> `UiTest.Driver.create`). The shape change is purely
+ * an inserted container segment in front of a preserved leaf, so the scanner
+ * splices `binding.<leaf>` -> `binding.<container>.<leaf>` and REUSES the
+ * existing kit binding (no import injection).
+ *
+ * Five traps the verification gates must reject:
+ *  - INSTANCE method (`process.ProcessManager.isAppUid` — calling an instance
+ *    method on the class is broken): the leaf must be `static`.
+ *  - INTERFACE container (`worker.WorkerEventTarget.*` — interfaces are
+ *    type-only, no runtime value to call on): only a CLASS container qualifies.
+ *  - STALE `@useinstead` naming a method the class doesn't declare
+ *    (`i18n.set24HourClock` -> `System.set24HourClock`, but System has no
+ *    setter): the method must actually exist on the class.
+ *  - RESTATE-LEAF / non-container (`contact.addContact.addContact`): the
+ *    container must be a real top-level export of the kit.
+ *  - AMBIGUOUS symbol (`UiTest.click` -> both Component.click and Driver.click):
+ *    the symbol must map to exactly one container.
+ *
+ * The fixture also covers the SDK's malformed short form `ohos.System.X` (no
+ * resolvable kit) — repl.kit ends up undefined, but the same-kit intent holds
+ * and the top-level-export gate verifies the container in dep.kit regardless.
+ */
+function nestedInsertSdk(): string {
+  return makeTree({
+    "@ohos.fakelib.d.ts": `
+declare namespace fakelib {
+    /** @since 9 @deprecated since 10 @useinstead ohos.fakelib/fakelib.System#is24HourClock */
+    export function is24HourClock(): boolean;
+    /** @since 9 @deprecated since 10 @useinstead ohos.System.getDisplayCountry */
+    export function getDisplayCountry(country: string): string;
+    /** @since 9 @deprecated since 10 @useinstead ohos.fakelib/fakelib.ProcessManager#isAppUid */
+    export function isAppUid(v: number): boolean;
+    /** @since 9 @deprecated since 10 @useinstead ohos.fakelib/fakelib.WorkerEventTarget#addEventListener */
+    export function addEventListener(type: string): void;
+    /** @since 9 @deprecated since 10 @useinstead ohos.fakelib/fakelib.System#set24HourClock */
+    export function set24HourClock(option: boolean): void;
+
+    export class System {
+        static is24HourClock(): boolean;
+        static getDisplayCountry(country: string): string;
+    }
+    export class ProcessManager {
+        isAppUid(v: number): boolean;
+    }
+    export interface WorkerEventTarget {
+        addEventListener(type: string): void;
+    }
+}
+`,
+  });
+}
+
+test("indexer: same-kit nested static-method insert flagged, traps rejected", () => {
+  const sdk = nestedInsertSdk();
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const get = (leaf: string) => map.entries.find(
+      (x) => x.dep.kit === "@ohos.fakelib" && x.dep.members?.[0] === leaf,
+    );
+    // Full-form @useinstead (repl.kit resolved) + static -> flagged.
+    assert.equal(get("is24HourClock")?.nestedContainerInsert, true, "static System.is24HourClock -> flagged");
+    assert.deepEqual(get("is24HourClock")?.repl?.members, ["System", "is24HourClock"]);
+    // Malformed short form `ohos.System.X` (repl.kit undefined) + static -> flagged
+    // (same-kit intent; the top-level-export gate verifies System in dep.kit).
+    assert.equal(get("getDisplayCountry")?.nestedContainerInsert, true, "malformed-short-form static -> flagged");
+    assert.equal(get("getDisplayCountry")?.repl?.kit, undefined, "short form leaves kit unresolved");
+    // INSTANCE method -> NOT flagged (calling an instance method on the class breaks).
+    assert.notEqual(get("isAppUid")?.nestedContainerInsert, true, "instance ProcessManager.isAppUid -> NOT flagged");
+    // INTERFACE container -> NOT flagged (type-only, no runtime value).
+    assert.notEqual(get("addEventListener")?.nestedContainerInsert, true, "interface WorkerEventTarget -> NOT flagged");
+    // STALE @useinstead (System has no set24HourClock) -> NOT flagged.
+    assert.notEqual(get("set24HourClock")?.nestedContainerInsert, true, "stale @useinstead -> NOT flagged");
+  } finally { cleanup(sdk); }
+});
+
+test("scan: nested insert splices binding.leaf -> binding.container.leaf (no inject)", () => {
+  const sdk = nestedInsertSdk();
+  const root = makeTree({
+    "p.ts":
+      `import { fakelib } from '@ohos.fakelib';\n` +
+      `fakelib.is24HourClock();\n` +        // static -> auto insert
+      `fakelib.getDisplayCountry('US');\n` + // static (short form) -> auto insert
+      `fakelib.isAppUid(1);\n` +            // instance -> manual
+      `fakelib.set24HourClock(true);\n`,    // stale -> manual
+  });
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const { findings } = scanProjectMembers({ projectRoot: root, map });
+    // Both static leaves are auto: rename-member, no manual.
+    const clock = bySymbol(findings as any, "fakelib.is24HourClock");
+    assert.equal(clock?.rule, "rename-member");
+    assert.equal(clock?.needsManual, false);
+    assert.equal(clock?.replacement, "fakelib.System.is24HourClock");
+    const country = bySymbol(findings as any, "fakelib.getDisplayCountry");
+    assert.equal(country?.rule, "rename-member");
+    assert.equal(country?.replacement, "fakelib.System.getDisplayCountry");
+    // Instance + stale are manual.
+    assert.equal(bySymbol(findings as any, "fakelib.isAppUid")?.rule, "manual");
+    assert.equal(bySymbol(findings as any, "fakelib.set24HourClock")?.rule, "manual");
+    // No import injection: the existing kit binding is reused.
+    assert.ok(!findings.some((f) => f.rule === "inject-import"), "no inject-import for same-kit insert");
+  } finally { cleanup(sdk); cleanup(root); }
+});
+
+test("rewrite: nested insert splices in place + retains the kit binding (no inject)", () => {
+  const sdk = nestedInsertSdk();
+  const root = makeTree({
+    "p.ts":
+      `import { fakelib } from '@ohos.fakelib';\n` +
+      `export function go() { fakelib.is24HourClock(); fakelib.getDisplayCountry('US'); }\n`,
+  });
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const { findings } = scanProjectMembers({ projectRoot: root, map });
+    const res = rewriteProject(root, findings, { write: true });
+    assert.equal(res.skippedManual, 0);
+    const out = readFileSync(join(root, "p.ts"), "utf8");
+    assert.ok(out.includes("fakelib.System.is24HourClock();"), "is24HourClock -> System.is24HourClock");
+    assert.ok(out.includes("fakelib.System.getDisplayCountry('US');"), "getDisplayCountry -> System.getDisplayCountry");
+    assert.ok(!out.includes("fakelib.is24HourClock("), "old call site gone");
+    assert.ok(!out.includes("import * as"), "no injected namespace import");
+    assert.ok(out.includes("import { fakelib } from '@ohos.fakelib';"), "old binding retained");
+  } finally { cleanup(sdk); cleanup(root); }
+});
+
 test("indexer: container drop-in member flagged memberPreservedByMove only when preserved", () => {
   const sdk = dropinMovedSdk();
   try {
