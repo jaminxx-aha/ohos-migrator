@@ -131,6 +131,18 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
   const exportIndex: ExportIndex = {};
   const crossKitDropin: CrossKitDropin = {};
   const crossKitRenameExport: CrossKitRenameExport = {};
+  // Deferred cross-kit rename-export candidates. The rename-export rule aliases
+  // a named import `import {Old} from 'k1'` -> `import {New as Old} from 'k2'`,
+  // which is only sound for LEAF exports (a function/const/type moving to a
+  // same-shape leaf). A CONTAINER export (interface/class/namespace that ALSO
+  // has member-level deprecation entries, e.g. `@ohos.fileio.Dir` with member
+  // `Dir.read`) moving to a differently-named leaf (e.g. `listFile`) is a SHAPE
+  // change: aliasing `Dir = listFile` (a function value) breaks `let d: Dir`
+  // type usage and `Dir.read()` member access. Such candidates are collected
+  // here and filtered against the container set in a post-pass once all entries
+  // are known (member entries are emitted by the same descendant loop, so the
+  // container set is unavailable inline).
+  const renameExportCandidates: Array<{ key: string; replKit: string; newName: string }> = [];
   const fileKit: Record<string, string> = {};
 
   for (const filePath of files) {
@@ -261,11 +273,40 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
           // such binding (`stat as fstat`) when every binding moves to the same
           // target kit. Same skip for module-level moves.
           if (repl.kit && repl.kit !== ownKit && newName !== dep.exportName && !kitIndex[ownKit]?.newKit) {
-            crossKitRenameExport[`${ownKit}\0${dep.exportName}`] = `${repl.kit}\0${newName}`;
+            // Defer: a container export (one with member-level entries) moving
+            // to a differently-named target is a shape change, not a leaf
+            // rename — filtered against the container set in the post-pass.
+            renameExportCandidates.push({
+              key: `${ownKit}\0${dep.exportName}`,
+              replKit: repl.kit,
+              newName,
+            });
           }
         }
       }
     });
+  }
+
+  // Post-pass: materialize crossKitRenameExport from the deferred candidates,
+  // skipping CONTAINER exports — interfaces/classes/namespaces that also have
+  // member-level deprecation entries. For a container, aliasing its named
+  // import to a differently-named target (`import {Dir}` -> `import {listFile
+  // as Dir}`) binds a container name to a leaf function value, breaking type
+  // usage (`let d: Dir`) and member access (`Dir.read()`); such moves are shape
+  // changes that stay manual. Same-name drop-ins (crossKitDropin) and same-kit
+  // export renames (exportIndex) are unaffected: they relocate or rename a
+  // container under a name that still denotes a container, preserving shape.
+  // Leaf exports (no member entries) like `@ohos.fileio.fstat` ->
+  // `@ohos.file.fs.stat` are the canonical sound case and pass through.
+  const containerExports = new Set<string>();
+  for (const e of entries) {
+    if (e.dep.members && e.dep.members.length > 0 && e.dep.exportName) {
+      containerExports.add(`${e.dep.kit}\0${e.dep.exportName}`);
+    }
+  }
+  for (const c of renameExportCandidates) {
+    if (containerExports.has(c.key)) continue;
+    crossKitRenameExport[c.key] = `${c.replKit}\0${c.newName}`;
   }
 
   // Resolve cross-kit member drop-in ambiguity. A deprecated symbol that maps

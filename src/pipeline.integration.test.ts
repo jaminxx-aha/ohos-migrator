@@ -276,6 +276,43 @@ declare namespace ble {
   function on(event: string, cb: () => void): void;
 }
 `,
+  // Container-export rename guard: `Dir` is a top-level INTERFACE (a
+  // container — it has a member-level entry `Dir.read`), deprecated with
+  // @useinstead `ohos.file.fs.listFile` (a leaf function). Aliasing
+  // `import {Dir}` -> `import {listFile as Dir}` would bind a type name to a
+  // function value (breaks `let d: Dir` and `Dir.read()`), so
+  // crossKitRenameExport must NOT carry `Dir`. The leaf `fstat` (no member
+  // entries) -> `stat` is the canonical sound case and MUST be carried.
+  // Mirrors the real @ohos.fileio layout: top-level `declare function fstat`
+  // and `declare interface Dir`, re-exported by the kit namespace.
+  "@ohos.fileio.d.ts": `
+declare namespace fileio {
+  export { fstat };
+  export { Dir };
+}
+/**
+ * @deprecated since 10
+ * @useinstead ohos.file.fs.stat
+ */
+declare function fstat(): void;
+/**
+ * @deprecated since 10
+ * @useinstead ohos.file.fs.listFile
+ */
+declare interface Dir {
+  /**
+   * @deprecated since 10
+   * @useinstead ohos.file.fs.listFile
+   */
+  read(): void;
+}
+`,
+  "@ohos.file.fs.d.ts": `
+declare namespace fs {
+  export function listFile(): void;
+  export function stat(): void;
+}
+`,
 };
 
 test("indexer: top-level entries + module-move + bare-kit useinstead", () => {
@@ -330,6 +367,32 @@ test("indexer: whole-export @useinstead (repl.exportName) surfaces as cross-kit 
       map.crossKitDropin?.["@ohos.application.Configuration\0Configuration"],
       "@ohos.app.ability.Configuration",
       "whole-export move indexed as cross-kit same-name drop-in",
+    );
+  } finally {
+    cleanup(sdk);
+  }
+});
+
+test("indexer: container export is NOT aliased cross-kit (shape-change guard)", () => {
+  // `Dir` is an interface (a CONTAINER — it has a member-level entry
+  // `Dir.read`), deprecated with @useinstead `ohos.file.fs.listFile` (a leaf
+  // function). The rename-export rule would alias `import {Dir}` ->
+  // `import {listFile as Dir}`, binding a type name to a function value and
+  // breaking `let d: Dir` / `Dir.read()` — so crossKitRenameExport must NOT
+  // carry `Dir`. The leaf `fstat` (no member entries) -> `stat` is the
+  // canonical sound rename and MUST be carried.
+  const sdk = makeTree(SDK_FILES);
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    assert.equal(
+      map.crossKitRenameExport?.["@ohos.fileio\0Dir"],
+      undefined,
+      "container export `Dir` must NOT be aliased to the leaf `listFile` (shape change)",
+    );
+    assert.equal(
+      map.crossKitRenameExport?.["@ohos.fileio\0fstat"],
+      "@ohos.file.fs\0stat",
+      "leaf export `fstat` -> `stat` is a sound rename and must be carried",
     );
   } finally {
     cleanup(sdk);
