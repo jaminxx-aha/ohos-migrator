@@ -223,7 +223,7 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
       const sourceLine = node.getStartLineNumber() ?? 0;
       const instanceSafe = verifyInstanceSafe(node, dep, repl, ownKit, kitIndex);
       const isCrossKitMemberDropin = verifyCrossKitMemberDropin(
-        dep, repl, ownKit, kitIndex, kitTopLevelExports,
+        dep, repl, ownKit, kitIndex, kitTopLevelExports, kitSourceFiles,
       );
       entries.push({
         dep,
@@ -828,18 +828,25 @@ function collectKitTopLevelExports(sourceFile: Node): Set<string> {
 }
 
 /**
- * Verify a cross-kit equal-length member move is safe to auto-replace by
- * injecting a new import and rebinding the receiver: the replacement chain
- * must be the same length as the deprecated chain (call shape preserved) and
- * its FIRST segment must be a top-level export of `repl.kit` (a different,
- * real, non-aligned kit). For a 1-seg move that first segment is the leaf
- * (e.g. `startBackgroundRunning`); for a 2-seg path-preserving move it is the
- * container (e.g. `A2dpSourceProfile` in `bluetoothManager.A2dpSourceProfile.connect`
- * -> `bluetooth.a2dp.A2dpSourceProfile.connect`). The remaining segments are
- * trusted from @useinstead at the same trust level as the shipped 1-seg leaf.
+ * Verify a cross-kit member move is safe to auto-replace by injecting a new
+ * import and rebinding the receiver. Two shapes:
+ *   - EQUAL-LENGTH (N->N, incl. 1->1 and 2->2): the call shape is preserved and
+ *     the replacement chain's FIRST segment must be a top-level export of
+ *     `repl.kit` (a different, real, non-aligned kit). For 1-seg that is the leaf
+ *     (e.g. `startBackgroundRunning`); for 2-seg path-preserving it is the
+ *     container (e.g. `A2dpSourceProfile` in `bluetoothManager.A2dpSourceProfile.connect`
+ *     -> `bluetooth.a2dp.A2dpSourceProfile.connect`). The remaining segments are
+ *     trusted from @useinstead.
+ *   - 2->1 NAMESPACE FLATTEN (e.g. `bluetoothManager.BLE.startBLEScan` ->
+ *     `bluetooth.ble.startBLEScan`): the dropped container must be a NAMESPACE
+ *     in `ownKit` (so `binding.<container>.<leaf>` is valid value-position access)
+ *     AND the single repl leaf must be a top-level export of `repl.kit`. An
+ *     interface/class container (e.g. `GattServer`, `PhotoAsset`) is rejected —
+ *     the access would be inert (instance members aren't reachable via the type
+ *     name), so flagging it would inflate the auto count without real coverage.
  * Without verification, the entry stays manual so the scanner never splices an
- * unverified (possibly non-existent) target. Unequal-length moves are rejected
- * (call-shape change: instance<->static, container flatten/extend).
+ * unverified (possibly non-existent or shape-changed) target. Other unequal-length
+ * moves (1->2 extend, 2->3, ...) are rejected (call-shape change).
  */
 function verifyCrossKitMemberDropin(
   dep: DepSymbol,
@@ -847,9 +854,13 @@ function verifyCrossKitMemberDropin(
   ownKit: string,
   kitIndex: Record<string, KitDepInfo>,
   kitTopLevelExports: Map<string, Set<string>>,
+  kitSourceFiles: Map<string, SourceFile>,
 ): boolean {
   if (!repl || !repl.members || repl.members.length === 0) return false;
-  if (!dep.members || dep.members.length !== repl.members.length) return false;
+  if (!dep.members || dep.members.length === 0) return false;
+  const equalLen = dep.members.length === repl.members.length;
+  const flatten21 = dep.members.length === 2 && repl.members.length === 1;
+  if (!equalLen && !flatten21) return false;
   if (!repl.kit || repl.kit === ownKit) return false;
   // A target that lines up with the deprecated kit's indexed module move is
   // already covered by rewrite-import (the binding is re-pointed) — leave it.
@@ -862,7 +873,12 @@ function verifyCrossKitMemberDropin(
   if (!repl.members.every((m) => IDENT_RE.test(m))) return false;
   const set = kitTopLevelExports.get(repl.kit);
   if (!set) return false;
-  return set.has(repl.members[0]);
+  if (!set.has(repl.members[0])) return false;
+  // 2->1 flatten: the dropped container must be a NAMESPACE in ownKit (valid
+  // value-position access). Interface/class containers are inert -> manual.
+  if (flatten21 && !containerIsNamespaceInKit(ownKit, dep.members[0], kitSourceFiles))
+    return false;
+  return true;
 }
 
 /**
@@ -996,6 +1012,32 @@ function containerHasMemberInKit(
     if (collectContainerMembers(sf, containerName).has(member)) return true;
   }
   return false;
+}
+
+/**
+ * Is `containerName` declared as a NAMESPACE (`declare namespace` /
+ * `ModuleDeclaration`) in `kit`'s top-level source file? Used by
+ * `verifyCrossKitMemberDropin` to gate 2->1 cross-kit flattens: only a
+ * NAMESPACE container makes `binding.<container>.<leaf>` valid value-position
+ * access (the namespace is a runtime value). An INTERFACE/CLASS container would
+ * make that access inert (instance members aren't reachable via the type name),
+ * so flagging such a flatten would inflate the auto count without real coverage
+ * (mirrors round 15's 2->1 interface-instance trap finding).
+ */
+function containerIsNamespaceInKit(
+  kit: string,
+  containerName: string,
+  kitSourceFiles: Map<string, SourceFile>,
+): boolean {
+  const sf = kitSourceFiles.get(kit);
+  if (!sf) return false;
+  const modules =
+    (sf as unknown as { getDescendantsOfKind?: (k: SyntaxKind) => Node[] }).getDescendantsOfKind?.(
+      SyntaxKind.ModuleDeclaration,
+    ) ?? [];
+  return modules.some(
+    (m) => (m as { getName?: () => string | undefined }).getName?.() === containerName,
+  );
 }
 
 /**

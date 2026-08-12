@@ -439,13 +439,18 @@ test("indexer: cross-kit 2-seg path-preserving move flagged crossKitMemberDropin
   }
 });
 
-test("indexer: cross-kit move with @useinstead parse artifact stays manual", () => {
+test("indexer: 2->1 namespace flatten with @useinstead parse artifact flagged crossKitMemberDropin", () => {
   // `bluetoothManager.BLE.on` has @useinstead `ohos.bluetooth.ble.on.event:BLEDeviceFind`
   // — the parser leaks a `name:value` event hint into the member chain
   // (repl.members = ["on","event:BLEDeviceFind"]). `toReplSymbol` strips the
   // colon-bearing segment, leaving repl.members = ["on"] (1-seg). The DEPRECATED
-  // chain is 2-seg (["BLE","on"]), so the equal-length gate rejects the move —
-  // a 2->1 flatten is a call-shape change (namespace -> instance), left manual.
+  // chain is 2-seg (["BLE","on"]): a 2->1 flatten. BLE is a NAMESPACE in
+  // bluetoothManager (so `bm.BLE.on(...)` is valid value-position access) and
+  // `on` is a top-level export of bluetooth.ble — so round 18's namespace-flatten
+  // gate flags it (previously rejected by the equal-length gate as a call-shape
+  // change; that was too conservative for namespace containers). The colon strip
+  // is still essential: without it the chain would carry `event:BLEDeviceFind`
+  // (fails IDENT_RE) and be rejected.
   const sdk = makeTree(SDK_FILES);
   try {
     const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
@@ -453,7 +458,8 @@ test("indexer: cross-kit move with @useinstead parse artifact stays manual", () 
       (x) => x.dep.kit === "@ohos.bluetoothManager" && x.dep.members?.[0] === "BLE",
     );
     assert.ok(e, "bluetoothManager.BLE.on entry exists");
-    assert.notEqual(e!.crossKitMemberDropin, true, "2->1 length mismatch must NOT be flagged");
+    assert.deepEqual(e!.repl?.members, ["on"], "toReplSymbol stripped the colon fragment");
+    assert.equal(e!.crossKitMemberDropin, true, "2->1 namespace flatten (BLE) -> flagged");
   } finally {
     cleanup(sdk);
   }
@@ -3185,3 +3191,93 @@ test("scan + rewrite: alias-re-exported kit-move instance rename spliced, preser
   } finally { cleanup(sdk); cleanup(root); }
 });
 
+
+/**
+ * Round 18 — cross-kit 2->1 NAMESPACE FLATTEN: a nested namespace's member
+ * moves to a top-level export of another kit, dropping the namespace segment
+ * (e.g. `bluetoothManager.BLE.startBLEScan` -> `bluetooth.ble.startBLEScan`). The
+ * scanner's crossKitMemberDropin branch is length-agnostic (`oldSymbol=bm.BLE.X`
+ * -> `replacement=ble.X`), so no scanner change — only the indexer's equal-length
+ * gate is relaxed to admit 2->1. Soundness gate: the dropped container must be a
+ * NAMESPACE in ownKit (so `binding.<container>.<leaf>` is valid value-position
+ * access). An INTERFACE/CLASS container (e.g. `GattServer`, `PhotoAsset`) is
+ * inert — instance members aren't reachable via the type name, so flagging it
+ * would inflate the auto count without real coverage (mirrors round 15's 2->1
+ * interface-instance trap finding). The repl leaf must also be a top-level export
+ * of repl.kit (existing gate).
+ */
+function flatten21Sdk(): string {
+  return makeTree({
+    // Old kit: a NAMESPACE container `Sub` (member `run`) and an INTERFACE
+    // container `Iface` (member `go`), each with a cross-kit @useinstead that
+    // flattens to a 1-seg top-level target. The kit is NOT module-moved.
+    "@ohos.fakelib.d.ts": `
+declare namespace fakelib {
+    namespace Sub {
+        /** @since 9 @deprecated since 10 @useinstead ohos.fakelib.target.run */
+        function run(): void;
+    }
+    interface Iface {
+        /** @since 9 @deprecated since 10 @useinstead ohos.fakelib.target.go */
+        go(): void;
+    }
+}
+`,
+    // Target kit: both `run` and `go` are top-level functions.
+    "@ohos.fakelib.target.d.ts": `
+declare namespace target {
+    function run(): void;
+    function go(): void;
+}
+`,
+  });
+}
+
+test("indexer: 2->1 namespace flatten flagged, interface container rejected", () => {
+  const sdk = flatten21Sdk();
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const sub = map.entries.find(
+      (x) => x.dep.kit === "@ohos.fakelib" && x.dep.members?.[0] === "Sub" && x.dep.members?.[1] === "run",
+    );
+    const iface = map.entries.find(
+      (x) => x.dep.kit === "@ohos.fakelib" && x.dep.members?.[0] === "Iface" && x.dep.members?.[1] === "go",
+    );
+    assert.ok(sub, "Sub.run entry exists");
+    assert.ok(iface, "Iface.go entry exists");
+    // Sub is a NAMESPACE -> `fl.Sub.run()` is valid -> flatten flagged.
+    assert.equal(sub!.crossKitMemberDropin, true, "2->1 namespace flatten (Sub.run) -> flagged");
+    assert.deepEqual(sub!.repl?.members, ["run"]);
+    // Iface is an INTERFACE -> `fl.Iface.go` is inert (instance method via the
+    // type name) -> NOT flagged (would inflate auto without real coverage).
+    assert.notEqual(iface!.crossKitMemberDropin, true, "2->1 interface container (Iface.go) -> NOT flagged");
+  } finally { cleanup(sdk); }
+});
+
+test("scan + rewrite: 2->1 namespace flatten rebinds + injects import", () => {
+  const sdk = flatten21Sdk();
+  const root = makeTree({
+    "p.ts":
+      `import * as fl from '@ohos.fakelib';\n` +
+      `fl.Sub.run();\n`,   // namespace flatten -> auto rebind + inject
+  });
+  try {
+    const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
+    const { findings } = scanProjectMembers({ projectRoot: root, map });
+    // The 2->1 flatten produces a rename-member rebind (oldSymbol=fl.Sub.run
+    // -> replacement=target.run) plus one per-file inject-import for the target kit.
+    const rebind = findings.find((f) => f.rule === "rename-member" && f.oldSymbol === "fl.Sub.run");
+    assert.ok(rebind, "Sub.run rebind emitted");
+    assert.equal(rebind!.replacement, "target.run");
+    assert.ok(rebind!.note.includes("injected import"), "note marks injected import");
+    const injects = findings.filter((f) => f.rule === "inject-import");
+    assert.equal(injects.length, 1, "exactly one inject-import for the file");
+    assert.ok(injects[0].replacement?.includes("@ohos.fakelib.target"), "injects the target kit import");
+    const res = rewriteProject(root, findings, { write: true });
+    assert.equal(res.skippedManual, 0);
+    const out = readFileSync(join(root, "p.ts"), "utf8");
+    assert.ok(out.includes("target.run();"), "fl.Sub.run -> target.run spliced");
+    assert.ok(!out.includes("fl.Sub.run();"), "old call site gone");
+    assert.ok(out.includes("@ohos.fakelib.target"), "target import injected");
+  } finally { cleanup(sdk); cleanup(root); }
+});
