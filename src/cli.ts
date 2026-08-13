@@ -59,11 +59,12 @@ program
   .requiredOption("--project <path>", "project root directory")
   .option("--sdk <path>", "SDK ets/api directory (to build map if missing)")
   .option("--since <n>", "only report deprecations with since <= N", (v) => Number(v), 0)
+  .option("--symbol-overrides <path>", "JSON file of per-symbol overrides (merged over builtin)")
   .action((opts) => {
     const map = loadMap(opts.sdk);
     const projectRoot = resolve(opts.project);
     const mod = scanProject({ projectRoot, map, since: opts.since || 0 });
-    const mem = scanProjectMembers({ projectRoot, map, since: opts.since || 0 });
+    const mem = scanProjectMembers({ projectRoot, map, since: opts.since || 0, symbolOverrides: opts.symbolOverrides });
     const ins = scanProjectInstanceMembers({ projectRoot, map, since: opts.since || 0 });
     const tsc = scanProjectInstanceMembersTsc({ projectRoot, map, since: opts.since || 0 });
     const exp = scanProjectExportRenames({ projectRoot, map, since: opts.since || 0 });
@@ -85,6 +86,7 @@ program
   .option("--ui-context <expr>", "UIContext expression for cross-kit overrides", "this.getUIContext()")
   .option("--window-stage-expr <expr>", "WindowStage expression for window overrides", "this.windowStage")
   .option("--window-expr <expr>", "Window expression for window overrides", "this.window")
+  .option("--symbol-overrides <path>", "JSON file of per-symbol overrides (merged over builtin)")
   .option("--write", "write changes to disk (default: dry-run)")
   .action((opts) => {
     const map = loadMap(opts.sdk);
@@ -97,6 +99,7 @@ program
       uiContextExpr: opts.uiContext,
       windowStageExpr: opts.windowStageExpr,
       windowExpr: opts.windowExpr,
+      symbolOverrides: opts.symbolOverrides,
     });
     const exp = scanProjectExportRenames({ projectRoot, map, since: opts.since || 0 });
     const drp = scanProjectCrossKitDropin({ projectRoot, map, since: opts.since || 0 });

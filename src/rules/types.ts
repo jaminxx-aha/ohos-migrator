@@ -113,6 +113,9 @@ export type CrossKitDropin = Record<string, string>;
  */
 export type CrossKitRenameExport = Record<string, string>;
 
+/** Curated per-symbol override: `${kit}\0${exportName}\0${members.join(".")}` -> `{ replacement, note }`. */
+export type SymbolOverrideTable = Record<string, { replacement: string; note: string }>;
+
 /** The deprecation map, persisted as JSON. */
 export interface DeprecationMap {
   apiVersion: number;

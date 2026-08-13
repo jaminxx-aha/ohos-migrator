@@ -1,0 +1,4 @@
+[
+  { "kit": "@ohos.fake", "exportName": "fake", "members": ["A", "B"], "replacement": "'replaced'", "note": "user override" },
+  { "kit": "@ohos.ability.wantConstant", "exportName": "wantConstant", "members": ["Action", "ACTION_DIAL"], "replacement": "'custom-dial'", "note": "user override wins" }
+]

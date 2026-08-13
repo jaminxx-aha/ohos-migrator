@@ -19,6 +19,7 @@ import { readFileSync } from "node:fs";
 import { relative, sep } from "node:path";
 import { walkFiles } from "../walk.js";
 import { findMemberOverride } from "../rewriter/overrides.js";
+import { findSymbolOverride, loadSymbolOverrides } from "../rewriter/symbol-overrides.js";
 import { extractImports } from "./import-extractor.js";
 import type { DeprecationEntry, DeprecationMap, Finding, ReplSymbol } from "../rules/types.js";
 
@@ -35,6 +36,12 @@ export interface MemberScanOptions {
   windowStageExpr?: string;
   /** Runtime expression yielding a Window (window recipe). */
   windowExpr?: string;
+  /**
+   * Path to a user JSON file of per-symbol overrides, merged over the builtin
+   * table (wantConstant Action/Entity literals, etc.). Loaded once at scan
+   * start; entries produce `override` findings spliced at the match span.
+   */
+  symbolOverrides?: string;
 }
 
 /** Per-kit index of deprecated members (entries that have a member chain). */
@@ -59,6 +66,10 @@ export interface MemberScanResult {
 export function scanProjectMembers(opts: MemberScanOptions): MemberScanResult {
   const { projectRoot, map } = opts;
   const since = opts.since ?? 0;
+  // Load any user symbol-override file over the builtin table. Only when a
+  // path is given — otherwise leave `active` as initialized (builtin by
+  // default), so repeated scans don't clobber a previously loaded table.
+  if (opts.symbolOverrides) loadSymbolOverrides(opts.symbolOverrides);
   const ctx = {
     uiContextExpr: opts.uiContextExpr ?? "this.getUIContext()",
     windowStageExpr: opts.windowStageExpr ?? "this.windowStage",
@@ -327,10 +338,16 @@ function memberFinding(
 ): Finding | null {
   const fileRel = relative(projectRoot, file).split(sep).join("/");
   const oldSymbol = `${binding}.${members.join(".")}`;
+  // Curated per-symbol override (wantConstant Action/Entity literals, or a
+  // user-loaded JSON table) wins over both the kit recipe and the structural
+  // derivation — it's human-verified identity data, the highest trust tier.
+  const cur = findSymbolOverride(e.dep.kit, e.dep.exportName, members);
   const ov = findMemberOverride(e.dep.kit, members, e.repl, ctx);
-  const desc: MemberReplacement = ov
-    ? { newSymbol: ov.replacement, rule: "override", note: ov.note, replacement: ov.replacement }
-    : describeMemberReplacement(binding, e.dep.kit, members, e.repl, kitMove);
+  const desc: MemberReplacement = cur
+    ? { newSymbol: cur.replacement, rule: "override", note: cur.note, replacement: cur.replacement }
+    : ov
+      ? { newSymbol: ov.replacement, rule: "override", note: ov.note, replacement: ov.replacement }
+      : describeMemberReplacement(binding, e.dep.kit, members, e.repl, kitMove);
   // Suppressed: the call site is covered by another rule (e.g. an aligned kit
   // move via rewrite-import). Emit no finding.
   if (desc.suppressed) return null;
