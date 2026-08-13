@@ -1,3 +1,23 @@
+// Faithful re-derivation of the auto/manual split for the deprecation map.
+//
+// Mirrors the scanner+indexer decision tree so the manual list can be
+// re-derived at any time (the original classify-*.mjs scratch scripts were
+// deleted, leaving the doc's bucket numbers un-reproducible). Run:
+//
+//   node scripts/classify-faithful.mjs
+//
+// Models: indexer flags (instanceSafe / crossKitMemberDropin /
+// memberPreservedByMove / nestedContainerInsert), exportIndex suppression
+// (member-scanner.ts:144), memberCoveredByContainerDropin (sym + asym,
+// member-scanner.ts:419 with the repl.kit===dropin guard), kit module-move
+// coverage for export-level entries, and describeMemberReplacement
+// (member-scanner.ts:464 — no-op/aligned suppress, same-kit rename-member,
+// cross-kit manual, unresolved manual). toReplSymbol strips colon-bearing
+// segments. The result is ~within a few dozen of the doc's recorded split;
+// the doc's own buckets are known-inaccurate (deleted classifier), so this
+// script is the source of truth for the manual SHAPE breakdown used to hunt
+// the next sound lever.
+
 import { readFileSync } from "node:fs";
 
 const map = JSON.parse(readFileSync(".harmony-deprecate/deprecation-map.24.json","utf8"));
@@ -27,28 +47,36 @@ function memberCovered(exportName, depMembers, repl, dropin) {
 let auto = 0, manual = 0;
 const buckets = {};
 const mlist = [];
-const exportAuto = { exportIndex:0, crossKitDropin:0, crossKitRenameExport:0, kitMove:0, memberlessManual:0 };
+// auto-by-path accounting (single pass; mirrors the scanner branches)
+const path = {
+  flag: 0,            // indexer flag set
+  exportIndex: 0,      // container same-kit renamed -> member suppressed
+  memberCovered: 0,    // container crossKitDropin'd -> member resolves on rebind
+  noop: 0,            // sameKit (incl. aligned kit-move) && chain unchanged
+  renameMember: 0,     // sameKit && trustworthy && same-length chain change
+  exportLvl_auto: 0,  // export-level (no members) covered by some rewrite
+  exportLvl_manual: 0,
+};
 
 for (const e of E) {
   // ---- export-level (no dep.members) ----
   if (!e.dep.members || e.dep.members.length === 0) {
     const k = e.dep.kit, ex = e.dep.exportName;
-    if (exportIndex[`${k}\0${ex}`]) { auto++; exportAuto.exportIndex++; continue; }
-    if (crossKitDropin[`${k}\0${ex}`] || crossKitDropin[`${k}\0default`]) { auto++; exportAuto.crossKitDropin++; continue; }
-    if (crossKitRenameExport[`${k}\0${ex}`]) { auto++; exportAuto.crossKitRenameExport++; continue; }
-    // kit module-move: rewrite-import re-points specifier -> all exports auto
-    if (kitIndex[k]?.newKit) { auto++; exportAuto.kitMove++; continue; }
-    manual++; exportAuto.memberlessManual++; buckets["export-other"]=(buckets["export-other"]||0)+1; mlist.push({e,why:"export-other"}); continue;
+    if (exportIndex[`${k}\0${ex}`]) { auto++; path.exportLvl_auto++; continue; }
+    if (crossKitDropin[`${k}\0${ex}`] || crossKitDropin[`${k}\0default`]) { auto++; path.exportLvl_auto++; continue; }
+    if (crossKitRenameExport[`${k}\0${ex}`]) { auto++; path.exportLvl_auto++; continue; }
+    if (kitIndex[k]?.newKit) { auto++; path.exportLvl_auto++; continue; }
+    manual++; path.exportLvl_manual++; buckets["export-other"]=(buckets["export-other"]||0)+1; mlist.push({e,why:"export-other"}); continue;
   }
   const depKit = e.dep.kit;
   const dMembers = e.dep.members;
   const repl = toRepl(e.repl);
   const ownKit = depKit;
-  if (e.instanceSafe || e.crossKitMemberDropin || e.memberPreservedByMove || e.nestedContainerInsert) { auto++; continue; }
-  if (e.dep.exportName && exportIndex[`${ownKit}\0${e.dep.exportName}`]) { auto++; continue; }
+  if (e.instanceSafe || e.crossKitMemberDropin || e.memberPreservedByMove || e.nestedContainerInsert) { auto++; path.flag++; continue; }
+  if (e.dep.exportName && exportIndex[`${ownKit}\0${e.dep.exportName}`]) { auto++; path.exportIndex++; continue; }
   if (e.dep.exportName && repl && e.dep.members) {
     const dropin = crossKitDropin[`${ownKit}\0${e.dep.exportName}`] ?? crossKitDropin[`${ownKit}\0default`];
-    if (memberCovered(e.dep.exportName, e.dep.members, repl, dropin)) { auto++; continue; }
+    if (memberCovered(e.dep.exportName, e.dep.members, repl, dropin)) { auto++; path.memberCovered++; continue; }
   }
   if (!repl || !repl.members || repl.members.length===0) {
     manual++; buckets["no_replacement"]=(buckets["no_replacement"]||0)+1; mlist.push({e,why:"no_repl"}); continue;
@@ -59,8 +87,8 @@ for (const e of E) {
   const trustworthy = repl.kit ? true : rMembers.length===1;
   const sameLength = dMembers.length>0 && dMembers.length===rMembers.length;
   const chainEqual = sameLength && dMembers.every((x,i)=>x===rMembers[i]);
-  if (sameKit && chainEqual) { auto++; continue; }
-  if (sameKit && trustworthy && sameLength) { auto++; continue; }
+  if (sameKit && chainEqual) { auto++; path.noop++; continue; }
+  if (sameKit && trustworthy && sameLength) { auto++; path.renameMember++; continue; }
   let why, bucket;
   if (repl.kit && !sameKit) { why="cross_kit"; bucket="cross-kit"; }
   else if (!sameLength) { why="chain_mismatch"; bucket="chain-length-mismatch"; }
@@ -70,8 +98,12 @@ for (const e of E) {
 }
 
 console.log("auto:", auto, "manual:", manual, "total:", auto+manual);
-console.log("exportAuto:", JSON.stringify(exportAuto));
 console.log("buckets:", JSON.stringify(buckets));
+console.log("auto by path:", JSON.stringify(path));
+console.log("member-auto:", path.flag+path.exportIndex+path.memberCovered+path.noop+path.renameMember,
+  "(flag", path.flag, "+ exportIndex", path.exportIndex, "+ memberCovered", path.memberCovered,
+  "+ noop", path.noop, "+ renameMember", path.renameMember, ")");
+console.log("export-level: auto", path.exportLvl_auto, "+ manual", path.exportLvl_manual);
 
 const shapes = {};
 for (const {e, why, repl} of mlist) {
