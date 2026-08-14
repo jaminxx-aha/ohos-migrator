@@ -101,158 +101,28 @@ export function scanProjectMembers(opts: MemberScanOptions): MemberScanResult {
       continue;
     }
     const bindings = extractBindingMap(content);
-    // Reverse map (kit -> existing local binding) to REUSE a binding when the
-    // consumer already imports the cross-kit target, avoiding a redundant
-    // injected import; plus the set of local names already in use for
-    // collision-free allocation of new bindings.
-    const kitToBinding = new Map<string, string>();
-    const usedBindings = new Set<string>();
-    for (const [b, k] of bindings) {
-      usedBindings.add(b);
-      if (!kitToBinding.has(k)) kitToBinding.set(k, b);
-    }
-    // Newly allocated bindings for cross-kit targets the file does NOT yet
-    // import: kit -> { binding, planned }. planned marks that an
-    // `inject-import` finding must be emitted for this (file, kit).
-    const allocated = new Map<string, { binding: string; planned: true }>();
-    const pickBinding = (kit: string): { binding: string; injected: boolean } => {
-      const existing = kitToBinding.get(kit);
-      if (existing) return { binding: existing, injected: false };
-      const hit = allocated.get(kit);
-      if (hit) return { binding: hit.binding, injected: true };
-      // Derive a stable name from the kit's last segment, suffixing on
-      // collision with an existing or already-allocated local name.
-      const base = kit.split(".").pop() ?? "mod";
-      let name = base;
-      let n = 2;
-      while (usedBindings.has(name) || [...allocated.values()].some((a) => a.binding === name)) {
-        name = `${base}${n++}`;
-      }
-      usedBindings.add(name);
-      allocated.set(kit, { binding: name, planned: true });
-      return { binding: name, injected: true };
-    };
-    // Anchor offset for injecting new imports: start of the line after the
-    // last existing import (a file needing injection always has the old
-    // binding's import). Falls back to end-of-file.
-    const imps = extractImports(content);
-    const maxSpecEnd = imps.length ? Math.max(...imps.map((i) => i.specEnd)) : -1;
-    const anchor = maxSpecEnd >= 0
-      ? (() => { const nl = content.indexOf("\n", maxSpecEnd); return nl === -1 ? content.length : nl + 1; })()
-      : 0;
+    // Per-file binding allocator: reuses an existing local binding for a
+    // cross-kit target when the file already imports it, else allocates a
+    // collision-free name and records a pending `inject-import`. Shared with
+    // the TS-LS scanner so both detection paths allocate bindings identically.
+    const alloc = createBindingAllocator(content);
+    const pickBinding = alloc.pickBinding;
 
-    const exportIndex = map.exportIndex ?? {};
-    const crossKitDropin = map.crossKitDropin ?? {};
     for (const [binding, kit] of bindings) {
       const entries = memberIndex[kit];
       if (!entries) continue;
       for (const e of entries) {
-        if (since && e.since > since) continue;
-        // If this member's enclosing export is itself same-kit renamed
-        // (e.g. `By.text` where `By` -> `On`), the rename-export rule already
-        // aliases the import so `By.text` resolves to `On.text`. Skip the
-        // redundant member finding to avoid double-reporting / a wrong splice.
-        if (e.dep.exportName && exportIndex[`${kit}\0${e.dep.exportName}`]) continue;
-        // If this export has a cross-kit same-name drop-in (named export or a
-        // `export default` moved wholesale to another kit under the same name),
-        // the import-specifier rewrite already re-points the binding to the new
-        // kit. When the member chain is unchanged the member resolves on the
-        // re-pointed binding, so the member finding is redundant — suppress it
-        // (mirrors the exportIndex / aligned-kit-move suppression). A changed
-        // chain still needs a member-level splice (or a wiring change), so only
-        // suppress when the chains are identical.
-        if (e.dep.exportName && e.repl && e.repl.members && e.dep.members) {
-          const dropin =
-            crossKitDropin[`${kit}\0${e.dep.exportName}`] ??
-            crossKitDropin[`${kit}\0default`];
-          if (
-            memberCoveredByContainerDropin(
-              e.dep.exportName,
-              e.dep.members,
-              e.repl,
-              dropin,
-            )
-          ) {
-            continue;
-          }
-        }
-        // A NO-`@useinstead` member whose enclosing kit relocated (or whose
-        // enclosing export dropped in cross-kit) AND whose member chain is
-        // verified to still exist in the new kit: the import-specifier rewrite
-        // (or named-import drop-in) already re-points the binding to where the
-        // member lives, so this finding is redundant. Members NOT preserved
-        // (genuinely removed) are left unflagged and still emit a manual finding.
-        if (e.memberPreservedByMove) continue;
+        if (!entryEligible(e, kit, map, since)) continue;
         const members = e.dep.members!;
         const pattern = binding + "\\." + members.map(escapeRe).join("\\.");
         const re = new RegExp(`\\b${pattern}\\b`, "g");
         for (const m of content.matchAll(re)) {
           if (m.index === undefined) continue;
           const matchEnd = m.index + m[0].length;
-          // Cross-kit equal-length member move verified at index time: instead
-          // of a manual finding, rebind the receiver to a (reused or injected)
-          // binding for repl.kit and keep/rename the chain. Covers 1-seg leaf
-          // moves (e.g. startBackgroundRunning) and 2-seg path-preserving moves
-          // (e.g. A2dpSourceProfile.connect). The call-site splice reuses the
-          // rename-member rewriter path; the import line is added by a single
-          // per-file inject-import finding emitted after the loop.
-          if (e.crossKitMemberDropin && e.repl?.kit && e.repl?.members?.length) {
-            const { binding: newBinding } = pickBinding(e.repl.kit);
-            const replChain = e.repl.members.join(".");
-            const replacement = `${newBinding}.${replChain}`;
-            const f: Finding = {
-              file: relative(projectRoot, file).split(sep).join("/"),
-              line: lineAt(content, m.index),
-              oldSymbol: `${binding}.${members.join(".")}`,
-              newSymbol: replacement,
-              since: e.since,
-              rule: "rename-member",
-              needsManual: false,
-              note: `cross-kit rebind -> ${e.repl.kit}.${replChain} (injected import)`,
-              matchStart: m.index,
-              matchEnd,
-              replacement,
-            };
-            const key = `${f.file}:${f.line}:${f.oldSymbol}`;
-            const prev = dedupe.get(key);
-            if (!prev || (prev.needsManual && !f.needsManual)) dedupe.set(key, f);
-            continue;
-          }
-          // Same-kit 1-seg -> 2-seg nested-container INSERT, verified at index
-          // time: the inserted container is a top-level export of this kit and
-          // the leaf is a STATIC method of that (nested-class) container. Splice
-          // `binding.<leaf>` -> `binding.<container>.<leaf>` and REUSE the
-          // existing kit binding — no import injection (unlike crossKitMemberDropin).
-          // E.g. `i18n.is24HourClock` -> `i18n.System.is24HourClock`,
-          // `UiTest.create` -> `UiTest.Driver.create`. Instance-method /
-          // interface / restate-leaf / stale-@useinstead / ambiguous shapes were
-          // rejected at index time and never carry this flag.
-          if (e.nestedContainerInsert && e.repl?.members && e.repl.members.length > 1) {
-            const replChain = e.repl.members.join(".");
-            const replacement = `${binding}.${replChain}`;
-            const f: Finding = {
-              file: relative(projectRoot, file).split(sep).join("/"),
-              line: lineAt(content, m.index),
-              oldSymbol: `${binding}.${members.join(".")}`,
-              newSymbol: replacement,
-              since: e.since,
-              rule: "rename-member",
-              needsManual: false,
-              note: `nested container insert -> ${binding}.${replChain}`,
-              matchStart: m.index,
-              matchEnd,
-              replacement,
-            };
-            const key = `${f.file}:${f.line}:${f.oldSymbol}`;
-            const prev = dedupe.get(key);
-            if (!prev || (prev.needsManual && !f.needsManual)) dedupe.set(key, f);
-            continue;
-          }
-          const f = memberFinding(
-            file, projectRoot, m.index, matchEnd, content, binding, members, e, ctx, kitMove,
+          const f = classifyMemberCallSite(
+            file, projectRoot, m.index, matchEnd, content, binding, members, e,
+            ctx, kitMove, pickBinding,
           );
-          // Suppressed members are covered by another rule (e.g. an aligned
-          // kit move) — emit no finding for them.
           if (!f) continue;
           const key = `${f.file}:${f.line}:${f.oldSymbol}`;
           const prev = dedupe.get(key);
@@ -263,25 +133,7 @@ export function scanProjectMembers(opts: MemberScanOptions): MemberScanResult {
     // Emit one inject-import finding per file that allocated new bindings,
     // combining all pending imports into a single insertion (avoids the
     // exact-span dedup that would silently drop a second same-offset insert).
-    if (allocated.size > 0) {
-      const text =
-        [...allocated.entries()]
-          .map(([k, a]) => `import * as ${a.binding} from '${k}';`)
-          .join("\n") + "\n";
-      injectFindings.push({
-        file: relative(projectRoot, file).split(sep).join("/"),
-        line: lineAt(content, anchor),
-        oldSymbol: "",
-        newSymbol: null,
-        since: 0,
-        rule: "inject-import",
-        needsManual: false,
-        note: `inject ${allocated.size} import(s) for cross-kit member rebind`,
-        matchStart: anchor,
-        matchEnd: anchor,
-        replacement: text,
-      });
-    }
+    injectFindings.push(...alloc.injectImports(file, projectRoot, content));
   }
 
   // Drop findings whose match span is subsumed by a longer match at the same
@@ -322,6 +174,117 @@ export function dedupeOverlappingSpans(findings: Finding[]): Finding[] {
     }
   }
   return kept;
+}
+
+/**
+ * Per-entry eligibility for the static member scanner: should this deprecated
+ * entry yield findings at all? Encodes the suppression pre-checks so that both
+ * the regex scanner (`scanProjectMembers`) and the TS-LS scanner
+ * (`scanProjectDeprecatedMembers`) suppress the same entries and stay in sync.
+ *
+ * Suppresses when:
+ *  - `since` filters it out;
+ *  - the enclosing export is itself same-kit renamed (rename-export aliases the
+ *    import, so `binding.<chain>` already resolves — no member splice needed);
+ *  - the export has a cross-kit same-name drop-in AND the member chain is
+ *    unchanged (the import-specifier rewrite re-points the binding);
+ *  - `memberPreservedByMove` (the member still exists in the relocated kit, so
+ *    the import rewrite already covers every call site).
+ */
+export function entryEligible(
+  e: DeprecationEntry,
+  kit: string,
+  map: DeprecationMap,
+  since: number,
+): boolean {
+  if (since && e.since > since) return false;
+  const exportIndex = map.exportIndex ?? {};
+  if (e.dep.exportName && exportIndex[`${kit}\0${e.dep.exportName}`]) return false;
+  const crossKitDropin = map.crossKitDropin ?? {};
+  if (e.dep.exportName && e.repl && e.repl.members && e.dep.members) {
+    const dropin =
+      crossKitDropin[`${kit}\0${e.dep.exportName}`] ??
+      crossKitDropin[`${kit}\0default`];
+    if (memberCoveredByContainerDropin(e.dep.exportName, e.dep.members, e.repl, dropin)) {
+      return false;
+    }
+  }
+  if (e.memberPreservedByMove) return false;
+  return true;
+}
+
+/**
+ * Classify a single static member call site (`binding.<chain>` at a span) into
+ * a Finding. Encodes the three branches the regex scanner applied per match, so
+ * the TS-LS scanner (which locates call sites via diagnostics instead of regex)
+ * produces identical findings — only the *detection* layer differs.
+ *
+ *  - **A** `crossKitMemberDropin`: cross-kit equal-length member move verified
+ *    at index time. Rebind the receiver to a (reused or injected) binding for
+ *    `repl.kit` and keep/rename the chain → `rename-member` splice; the import
+ *    line is added by a single per-file `inject-import` finding the caller emits.
+ *    `pickBinding` carries the per-file allocation side effect.
+ *  - **B** `nestedContainerInsert`: same-kit 1-seg → 2-seg insert of a
+ *    verified nested-class container → `rename-member` reusing the kit binding.
+ *  - **C** otherwise: `memberFinding` (override table / `describeMemberReplacement`
+ *    → override | rename-member | manual).
+ *
+ * Returns null when the call site is suppressed (e.g. an aligned kit move).
+ */
+export function classifyMemberCallSite(
+  file: string,
+  projectRoot: string,
+  offset: number,
+  matchEnd: number,
+  content: string,
+  binding: string,
+  members: string[],
+  e: DeprecationEntry,
+  ctx: { uiContextExpr: string; windowStageExpr: string; windowExpr: string },
+  kitMove: KitMoveResolver,
+  pickBinding: (kit: string) => { binding: string; injected: boolean },
+): Finding | null {
+  const fileRel = relative(projectRoot, file).split(sep).join("/");
+  const oldSymbol = `${binding}.${members.join(".")}`;
+  // Branch A: cross-kit equal-length member move (rebind + injected import).
+  if (e.crossKitMemberDropin && e.repl?.kit && e.repl?.members?.length) {
+    const { binding: newBinding } = pickBinding(e.repl.kit);
+    const replChain = e.repl.members.join(".");
+    const replacement = `${newBinding}.${replChain}`;
+    return {
+      file: fileRel,
+      line: lineAt(content, offset),
+      oldSymbol,
+      newSymbol: replacement,
+      since: e.since,
+      rule: "rename-member",
+      needsManual: false,
+      note: `cross-kit rebind -> ${e.repl.kit}.${replChain} (injected import)`,
+      matchStart: offset,
+      matchEnd,
+      replacement,
+    };
+  }
+  // Branch B: same-kit nested-container insert (reuse the kit binding).
+  if (e.nestedContainerInsert && e.repl?.members && e.repl.members.length > 1) {
+    const replChain = e.repl.members.join(".");
+    const replacement = `${binding}.${replChain}`;
+    return {
+      file: fileRel,
+      line: lineAt(content, offset),
+      oldSymbol,
+      newSymbol: replacement,
+      since: e.since,
+      rule: "rename-member",
+      needsManual: false,
+      note: `nested container insert -> ${binding}.${replChain}`,
+      matchStart: offset,
+      matchEnd,
+      replacement,
+    };
+  }
+  // Branch C: override / describeMemberReplacement / manual.
+  return memberFinding(file, projectRoot, offset, matchEnd, content, binding, members, e, ctx, kitMove);
 }
 
 function memberFinding(
@@ -573,9 +536,82 @@ export function extractBindingMap(content: string): BindingMap {
   return map;
 }
 
-/* ------------------------------------------------------------------ */
-/* Instance-method scanner — resolves typed local variables as the    */
-/* receiver (e.g. `let r: resourceManager.ResourceManager; r.getString()`),*/
+/**
+ * Per-file binding allocator for cross-kit member drop-ins (branch A of the
+ * static scanner). Reuses an existing local binding when the file already
+ * imports the target kit, else allocates a collision-free name and records a
+ * pending `inject-import`. Shared by the regex scanner (`scanProjectMembers`)
+ * and the TS-LS scanner (`scanProjectDeprecatedMembers`) so both detection
+ * paths produce identical injected imports.
+ */
+export interface BindingAllocator {
+  /** Resolve a binding for a (possibly new) kit, allocating one if needed. */
+  pickBinding: (kit: string) => { binding: string; injected: boolean };
+  /**
+   * Build the single per-file `inject-import` finding for every kit allocated
+   * via `pickBinding`, anchored at the start of the line after the last import
+   * (end-of-file fallback). Empty array when nothing was allocated.
+   */
+  injectImports: (file: string, projectRoot: string, content: string) => Finding[];
+}
+
+/**
+ * Construct a per-file `BindingAllocator`. Reads the file's imports once to
+ * seed the reverse map (kit -> existing binding) and the in-use name set; later
+ * `pickBinding` calls mutate the shared `allocated` map so a single
+ * `injectImports` call emits all pending injections.
+ */
+export function createBindingAllocator(content: string): BindingAllocator {
+  const bindings = extractBindingMap(content);
+  const kitToBinding = new Map<string, string>();
+  const usedBindings = new Set<string>();
+  for (const [b, k] of bindings) {
+    usedBindings.add(b);
+    if (!kitToBinding.has(k)) kitToBinding.set(k, b);
+  }
+  const allocated = new Map<string, { binding: string; planned: true }>();
+  const pickBinding = (kit: string): { binding: string; injected: boolean } => {
+    const existing = kitToBinding.get(kit);
+    if (existing) return { binding: existing, injected: false };
+    const hit = allocated.get(kit);
+    if (hit) return { binding: hit.binding, injected: true };
+    // Derive a stable name from the kit's last segment, suffixing on collision
+    // with an existing or already-allocated local name.
+    const base = kit.split(".").pop() ?? "mod";
+    let name = base;
+    let n = 2;
+    while (usedBindings.has(name) || [...allocated.values()].some((a) => a.binding === name)) {
+      name = `${base}${n++}`;
+    }
+    usedBindings.add(name);
+    allocated.set(kit, { binding: name, planned: true });
+    return { binding: name, injected: true };
+  };
+  const injectImports = (file: string, projectRoot: string, content: string): Finding[] => {
+    if (allocated.size === 0) return [];
+    const imps = extractImports(content);
+    const maxSpecEnd = imps.length ? Math.max(...imps.map((i) => i.specEnd)) : -1;
+    const anchor = maxSpecEnd >= 0
+      ? (() => { const nl = content.indexOf("\n", maxSpecEnd); return nl === -1 ? content.length : nl + 1; })()
+      : 0;
+    const text =
+      [...allocated.entries()].map(([k, a]) => `import * as ${a.binding} from '${k}';`).join("\n") + "\n";
+    return [{
+      file: relative(projectRoot, file).split(sep).join("/"),
+      line: lineAt(content, anchor),
+      oldSymbol: "",
+      newSymbol: null,
+      since: 0,
+      rule: "inject-import",
+      needsManual: false,
+      note: `inject ${allocated.size} import(s) for cross-kit member rebind`,
+      matchStart: anchor,
+      matchEnd: anchor,
+      replacement: text,
+    }];
+  };
+  return { pickBinding, injectImports };
+}
 /* which the binding-only scanner above cannot see.                   */
 /* ------------------------------------------------------------------ */
 
@@ -630,6 +666,10 @@ export function extractTypedVars(content: string, bindingKit: BindingMap): Map<s
   }
   return out;
 }
+
+/* ------------------------------------------------------------------ */
+/* Instance-method scanner — resolves typed local variables as the    */
+/* receiver (e.g. `let r: resourceManager.ResourceManager; r.getString()`),*/
 
 /** Per (kit, typeHead) index of deprecated instance members. */
 export interface InstanceIndexEntry {

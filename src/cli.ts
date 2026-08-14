@@ -15,7 +15,7 @@ import { scanProject } from "./scanner/scanner.js";
 import { scanProjectExportRenames } from "./scanner/scanner.js";
 import { scanProjectCrossKitDropin } from "./scanner/scanner.js";
 import { scanProjectMembers, scanProjectInstanceMembers } from "./scanner/member-scanner.js";
-import { scanProjectInstanceMembersTsc } from "./scanner/tsc-instance-scanner.js";
+import { scanProjectDeprecatedMembers } from "./scanner/tsc-diagnostics-scanner.js";
 import { rewriteProject } from "./rewriter/rewriter.js";
 import { printScanSummary, printRewriteSummary } from "./report.js";
 import {
@@ -25,7 +25,7 @@ import {
   resolveSdkApiDir,
 } from "./config.js";
 import { walkFiles } from "./walk.js";
-import type { DeprecationMap } from "./rules/types.js";
+import type { DeprecationMap, Finding } from "./rules/types.js";
 
 const program = new Command();
 
@@ -64,15 +64,29 @@ program
     const map = loadMap(opts.sdk);
     const projectRoot = resolve(opts.project);
     const mod = scanProject({ projectRoot, map, since: opts.since || 0 });
-    const mem = scanProjectMembers({ projectRoot, map, since: opts.since || 0, symbolOverrides: opts.symbolOverrides });
-    const ins = scanProjectInstanceMembers({ projectRoot, map, since: opts.since || 0 });
-    const tsc = scanProjectInstanceMembersTsc({ projectRoot, map, since: opts.since || 0 });
     const exp = scanProjectExportRenames({ projectRoot, map, since: opts.since || 0 });
     const drp = scanProjectCrossKitDropin({ projectRoot, map, since: opts.since || 0 });
-    const findings = [...mod.findings, ...mem.findings, ...ins.findings, ...tsc.findings, ...exp.findings, ...drp.findings];
+    // Member/instance detection: TS-LS is the source of truth when the SDK is
+    // present (catches instance/indirected calls + .ets, no comment false
+    // positives); otherwise fall back to the regex scanners (cache-only CI).
+    const tsc = scanProjectDeprecatedMembers({
+      projectRoot, map, since: opts.since || 0, symbolOverrides: opts.symbolOverrides,
+    });
+    let memberFindings: Finding[];
+    let memberFiles: number;
+    if (tsc.ran) {
+      memberFindings = tsc.findings;
+      memberFiles = tsc.filesScanned;
+    } else {
+      const mem = scanProjectMembers({ projectRoot, map, since: opts.since || 0, symbolOverrides: opts.symbolOverrides });
+      const ins = scanProjectInstanceMembers({ projectRoot, map, since: opts.since || 0 });
+      memberFindings = [...mem.findings, ...ins.findings];
+      memberFiles = Math.max(mem.filesScanned, ins.filesScanned);
+    }
+    const findings = [...mod.findings, ...memberFindings, ...exp.findings, ...drp.findings];
     console.log(
       printScanSummary(
-        { findings, filesScanned: Math.max(mod.filesScanned, mem.filesScanned, ins.filesScanned, tsc.filesScanned, exp.filesScanned, drp.filesScanned) },
+        { findings, filesScanned: Math.max(mod.filesScanned, memberFiles, exp.filesScanned, drp.filesScanned) },
       ),
     );
   });
@@ -92,7 +106,10 @@ program
     const map = loadMap(opts.sdk);
     const projectRoot = resolve(opts.project);
     const mod = scanProject({ projectRoot, map, since: opts.since || 0 });
-    const mem = scanProjectMembers({
+    const exp = scanProjectExportRenames({ projectRoot, map, since: opts.since || 0 });
+    const drp = scanProjectCrossKitDropin({ projectRoot, map, since: opts.since || 0 });
+    // Member/instance detection: TS-LS primary (SDK present), regex fallback.
+    const tsc = scanProjectDeprecatedMembers({
       projectRoot,
       map,
       since: opts.since || 0,
@@ -101,25 +118,30 @@ program
       windowExpr: opts.windowExpr,
       symbolOverrides: opts.symbolOverrides,
     });
-    const exp = scanProjectExportRenames({ projectRoot, map, since: opts.since || 0 });
-    const drp = scanProjectCrossKitDropin({ projectRoot, map, since: opts.since || 0 });
-    const ins = scanProjectInstanceMembers({
-      projectRoot,
-      map,
-      since: opts.since || 0,
-      uiContextExpr: opts.uiContext,
-      windowStageExpr: opts.windowStageExpr,
-      windowExpr: opts.windowExpr,
-    });
-    const tsc = scanProjectInstanceMembersTsc({
-      projectRoot,
-      map,
-      since: opts.since || 0,
-      uiContextExpr: opts.uiContext,
-      windowStageExpr: opts.windowStageExpr,
-      windowExpr: opts.windowExpr,
-    });
-    const findings = [...mod.findings, ...mem.findings, ...ins.findings, ...tsc.findings, ...exp.findings, ...drp.findings];
+    let memberFindings: Finding[];
+    if (tsc.ran) {
+      memberFindings = tsc.findings;
+    } else {
+      const mem = scanProjectMembers({
+        projectRoot,
+        map,
+        since: opts.since || 0,
+        uiContextExpr: opts.uiContext,
+        windowStageExpr: opts.windowStageExpr,
+        windowExpr: opts.windowExpr,
+        symbolOverrides: opts.symbolOverrides,
+      });
+      const ins = scanProjectInstanceMembers({
+        projectRoot,
+        map,
+        since: opts.since || 0,
+        uiContextExpr: opts.uiContext,
+        windowStageExpr: opts.windowStageExpr,
+        windowExpr: opts.windowExpr,
+      });
+      memberFindings = [...mem.findings, ...ins.findings];
+    }
+    const findings = [...mod.findings, ...memberFindings, ...exp.findings, ...drp.findings];
     const result = rewriteProject(projectRoot, findings, { write: !!opts.write });
     console.log(printRewriteSummary(result, !!opts.write));
   });
