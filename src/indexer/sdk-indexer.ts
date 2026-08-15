@@ -107,6 +107,13 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
   // '<repl.kit>'` and rebind the receiver. Built in a first pass so repl.kit
   // (possibly a different file) is available regardless of iteration order.
   const kitTopLevelExports = new Map<string, Set<string>>();
+  // A kit's DEFAULT export name (from `export default <name>`), so the fixture
+  // generator can emit `import <name> from '<kit>'` (default) rather than the
+  // non-resolving `import { <name> }` for namespace-default kits like
+  // `@ohos.router` (`declare namespace router; export default router`). The
+  // default name is the kit's namespace value — a value import is the form TS
+  // resolves; the named form 2614s.
+  const kitDefaultExport = new Map<string, string>();
   // Parallel map: a kit's parsed SourceFile, so post-loop verifiers can
   // descend into a kit's container declarations (e.g. check that a moved
   // member is still declared in the new kit's `Flags` enum / `Stat` interface).
@@ -131,6 +138,8 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
     const set = collectKitTopLevelExports(sf);
     const kitKey = "@" + kitFromFile(basename(f));
     if (set.size > 0) kitTopLevelExports.set(kitKey, set);
+    const defExp = collectKitDefaultExport(sf);
+    if (defExp) kitDefaultExport.set(kitKey, defExp);
     kitSourceFiles.set(kitKey, sf);
   }
 
@@ -414,6 +423,10 @@ export function buildDeprecationMap(opts: IndexOptions): DeprecationMap {
     crossKitDropin,
     crossKitRenameExport,
     fileKit,
+    kitExports: Object.fromEntries(
+      [...kitTopLevelExports.entries()].map(([k, s]) => [k, [...s].sort()]),
+    ),
+    kitDefaultExport: Object.fromEntries(kitDefaultExport.entries()),
   };
 }
 
@@ -574,10 +587,27 @@ function computeIdentity(
     type Named = Node & { getName?: () => string | undefined };
     const fn = (n as Named).getName;
     try {
-      return fn?.call(n);
+      const nm = fn?.call(n);
+      if (nm) return nm;
     } catch {
-      return undefined;
+      // fall through
     }
+    // A `const X = ...` is a VariableStatement whose name lives on its first
+    // VariableDeclaration (`collectKitTopLevelExports` resolves the same way).
+    // Without this, a namespace-internal `const parentPort` would record
+    // exportName = the enclosing namespace (`worker`) and members = [], losing
+    // the const's own name entirely.
+    if (n.getKind() === SyntaxKind.VariableStatement) {
+      try {
+        const decls = (n as unknown as {
+          getDeclarationList?: () => { getDeclarations?: () => Named[] };
+        }).getDeclarationList?.();
+        return decls?.getDeclarations?.()[0]?.getName?.();
+      } catch {
+        return undefined;
+      }
+    }
+    return undefined;
   };
 
   const enclosing: string[] = [];
@@ -784,6 +814,32 @@ function verifyInstanceSafe(
  * own name is intentionally NOT added — `import * as b` exposes the namespace
  * contents as `b.<member>`, not as `b.<namespaceName>`.
  */
+/**
+ * The kit's default export name, if it has `export default <Identifier>`
+ * (the common `declare namespace X { ... } export default X` shape). The
+ * fixture generator needs this to pick the value/default import form
+ * (`import X from '<kit>'`) that TS resolves; the named form 2614s for a
+ * default-only export. Returns undefined for kits with no default export.
+ */
+function collectKitDefaultExport(sourceFile: Node): string | undefined {
+  try {
+    const stmts =
+      (sourceFile as unknown as { getStatements?: () => Node[] }).getStatements?.() ??
+      sourceFile.getChildren();
+    for (const s of stmts) {
+      if (s.getKind() !== SyntaxKind.ExportAssignment) continue;
+      // `export default <expr>` — the expression is the default. For the SDK
+      // shape it is a bare namespace identifier; `export default X` (no `as`).
+      const expr = (s as unknown as { getExpression?: () => { getText?: () => string } }).getExpression?.();
+      const txt = expr?.getText?.();
+      if (txt && /^[A-Za-z_$][\w$]*$/.test(txt)) return txt;
+    }
+  } catch {
+    // ignore
+  }
+  return undefined;
+}
+
 function collectKitTopLevelExports(sourceFile: Node): Set<string> {
   const names = new Set<string>();
   type Named = Node & { getName?: () => string | undefined };
@@ -1537,12 +1593,41 @@ function resolveCrossKitMemberExportConflict(
 }
 
 /**
- * Build the nested-file -> kit re-export map by scanning top-level kits'
- * import statements. Two shapes are recorded:
- *   - `import * as _X from './dir/file'`  -> whole nested file -> kit
- *   - `import { Name [, Name2] } from './dir/file'` -> each Name -> kit
- * `import type {...}` is also honoured (type-only re-exports still surface the
- * kit for the user's binding resolution).
+ * Build the nested-file -> kit attribution. TWO PHASES so a kit that
+ * GENUINELY re-exports a nested type wins over a kit that merely IMPORTS it
+ * for internal use.
+ *
+ * The historical bug: `@ohos.ability.featureAbility`'s
+ * `import { Context as _Context } from './app/context'` (internal use, never
+ * re-exported) stole `app/context.d.ts` from `@ohos.app.ability`, which
+ * genuinely re-exports `Context` via `export type Context = _Context.Context`.
+ * Because attribution was first-writer-wins over ALL import/export edges, the
+ * internal-import edge won, and the fixpoint then propagated the theft down
+ * `app/context`'s own imports (`../bundle/applicationInfo`,
+ * `../bundle/elementName`, ...) stealing the whole `bundle/*` family from
+ * `@ohos.bundle.bundleManager` (which re-exports them via `export type X =
+ * _local.X`). The fixture then emitted `import { CustomizeData } from
+ * '@ohos.ability.featureAbility'`, which TS-LS rejects
+ * (`Module has no exported member`), so no 6385/6387 fired.
+ *
+ * Phase 1 — GENUINE re-export attribution (decides importability). A nested
+ * file attributes to kit K only via a genuine re-export edge:
+ *   (a) `export { X } from './sub'` / `export * from './sub'`   (recordExport)
+ *   (b) `export type X = _local[.Y]` where `_local` is imported from './sub'
+ *       (type-alias re-export) — attribute the whole source file to K
+ *   (c) bare `export { X }` where `X` is imported from './sub'
+ * A file attributed in phase 1 contributes its own genuine re-exports too
+ * (second-level types), so we fixpoint over genuine edges only.
+ *
+ * Phase 2 — TRANSITIVE fallback (keeps scanner indirect-access coverage).
+ * Files NOT attributed in phase 1 (no kit genuinely re-exports them — e.g. an
+ * internal `CustomizeData` reached only via a property chain) are attributed
+ * transitively from already-attributed files via their plain imports. This
+ * never overrides phase 1 (first-writer-wins within phase 2, and phase 1
+ * always pre-populates). The scanner's `resolveReceiver` maps these types'
+ * declaration files back to a kit via `fileKit`, so a property-chain access
+ * (`appInfo.customizeData.name`) still resolves; the fixture generator skips
+ * them as not directly importable.
  */
 function buildReexportMap(
   project: Project,
@@ -1551,17 +1636,17 @@ function buildReexportMap(
   nsImportKits: Map<string, string>,
   namedReexports: Map<string, string>,
 ): void {
-  // Fixpoint worklist: seed with top-level files, then propagate. When a
-  // nested file is attributed to a kit (via a namespace or named re-export),
-  // process ITS imports too so second-level types (e.g.
-  // `@ohos.bundle` -> `bundle/bundleInfo` -> `bundle/hapModuleInfo`) are
-  // attributed to the same kit instead of falling through to `@?`.
-  const processed = new Set<string>();
-  const worklist: string[] = [...topLevelFiles];
-  while (worklist.length > 0) {
-    const filePath = worklist.shift()!;
-    if (processed.has(filePath)) continue;
-    processed.add(filePath);
+  // Files already attributed (any kit). Phase 2 fills only the gaps.
+  const attributed = new Set<string>();
+  const markAttributed = (file: string): void => { attributed.add(file); };
+
+  // ---- Phase 1: genuine re-export edges only ----
+  const seen = new Set<string>();
+  const work: string[] = [...topLevelFiles];
+  while (work.length > 0) {
+    const filePath = work.shift()!;
+    if (seen.has(filePath)) continue;
+    seen.add(filePath);
     let content: string;
     try {
       content = readFileSync(filePath, "utf8");
@@ -1573,27 +1658,49 @@ function buildReexportMap(
     const ownKit = isTopLevel(filePath)
       ? "@" + kitFromFile(basename(filePath))
       : resolveOwnKit(filePath, nsImportKits, namedReexports);
-    // Don't propagate unresolved (`@?`) synthetic kits.
     if (!ownKit || ownKit.startsWith("@?")) continue;
 
-    for (const imp of sourceFile.getDescendantsOfKind(SyntaxKind.ImportDeclaration)) {
-      const spec = normalizeSpecifier(imp);
-      if (!spec || (!spec.startsWith("./") && !spec.startsWith("../"))) continue;
-      const target = resolveRelative(filePath, spec, fileSet);
-      if (!target) continue;
-      recordImport(imp, target, ownKit, nsImportKits, namedReexports);
-      if (!processed.has(target) && !isTopLevel(target)) worklist.push(target);
-    }
-    // Re-exports (`export { X } from './y'`, `export * from './y'`) also bind a
-    // nested file to this kit — e.g. `@ohos.arkui.modifier` re-exports every
-    // `*Modifier` file. Without this those files fall through to `@?`.
+    // (a) export-from re-exports (`export { X } from './y'`, `export *`).
     for (const exp of sourceFile.getDescendantsOfKind(SyntaxKind.ExportDeclaration)) {
       const spec = exp.getModuleSpecifierValue?.();
       if (!spec || (!spec.startsWith("./") && !spec.startsWith("../"))) continue;
       const target = resolveRelative(filePath, spec, fileSet);
       if (!target) continue;
-      recordExport(exp, target, ownKit, nsImportKits, namedReexports);
-      if (!processed.has(target) && !isTopLevel(target)) worklist.push(target);
+      recordExport(exp, target, ownKit, nsImportKits, namedReexports, markAttributed);
+      if (!seen.has(target) && !isTopLevel(target)) work.push(target);
+    }
+    // (b)+(c) type-alias + bare re-exports of imported names.
+    recordGenuineReexports(
+      sourceFile, filePath, ownKit, fileSet, nsImportKits, namedReexports, markAttributed, seen, work,
+    );
+  }
+
+  // ---- Phase 2: transitive fallback via plain imports (no override) ----
+  const seen2 = new Set<string>();
+  const work2: string[] = [...topLevelFiles];
+  while (work2.length > 0) {
+    const filePath = work2.shift()!;
+    if (seen2.has(filePath)) continue;
+    seen2.add(filePath);
+    let content: string;
+    try {
+      content = readFileSync(filePath, "utf8");
+    } catch {
+      continue;
+    }
+    const sourceFile = getOrCreateSourceFile(project, filePath, content);
+    if (!sourceFile) continue;
+    const ownKit = isTopLevel(filePath)
+      ? "@" + kitFromFile(basename(filePath))
+      : resolveOwnKit(filePath, nsImportKits, namedReexports);
+    if (!ownKit || ownKit.startsWith("@?")) continue;
+    for (const imp of sourceFile.getDescendantsOfKind(SyntaxKind.ImportDeclaration)) {
+      const spec = normalizeSpecifier(imp);
+      if (!spec || (!spec.startsWith("./") && !spec.startsWith("../"))) continue;
+      const target = resolveRelative(filePath, spec, fileSet);
+      if (!target) continue;
+      recordImportTransitive(imp, target, ownKit, nsImportKits, namedReexports, attributed);
+      if (!seen2.has(target) && !isTopLevel(target)) work2.push(target);
     }
   }
 }
@@ -1622,35 +1729,145 @@ function resolveRelative(
   return undefined;
 }
 
-function recordImport(
+/**
+ * Phase-1 genuine re-exports of locally-imported names:
+ *   (b) `export type X = _local[.Y]` (exported type alias whose leading
+ *       identifier is a locally-imported binding) -> attribute the source
+ *       file to this kit. Covers `@ohos.bundle.bundleManager`'s
+ *       `export type AbilityInfo = _AbilityInfo.AbilityInfo` (inside its
+ *       `declare namespace` body) and `@ohos.app.ability`'s
+ *       `export type Context = _Context.Context`.
+ *   (c) bare `export { X }` (no `from`) where `X` is a locally-imported name
+ *       -> attribute its source file. Covers `@ohos.abilityAccessCtrl`'s
+ *       `import { Permissions } from './permissions'; export { Permissions };`.
+ *
+ * `import type {...}` is honoured (type-only re-exports still surface the kit
+ * for binding resolution). Reuses the local-name->specifier resolution also
+ * used by `addTypeAliasReExportedFiles` (which extends `kitToSourceFiles` for
+ * the post-loop verifiers; here we additionally set attribution).
+ */
+function recordGenuineReexports(
+  sourceFile: SourceFile,
+  filePath: string,
+  kit: string,
+  fileSet: Set<string>,
+  nsImportKits: Map<string, string>,
+  namedReexports: Map<string, string>,
+  markAttributed: (f: string) => void,
+  seen: Set<string>,
+  work: string[],
+): void {
+  type Named = Node & { getName?: () => string | undefined };
+  type ImportDecl = Node & {
+    getModuleSpecifierValue?: () => string | undefined;
+    getNamespaceImport?: () => Named | undefined;
+    getDefaultImport?: () => Named | undefined;
+    getNamedImports?: () => Named[];
+  };
+  type TypeAlias = Node & { getTypeNode?: () => { getText?: () => string } | undefined };
+  type ExportSpec = Node & {
+    getName?: () => string | undefined;
+    compilerNode?: { propertyName?: { getText?: () => string } };
+  };
+  // local binding name -> relative module specifier, for this file's imports.
+  const localToSpec = new Map<string, string>();
+  const imports =
+    (sourceFile as unknown as { getDescendantsOfKind?: (k: SyntaxKind) => Node[] })
+      .getDescendantsOfKind?.(SyntaxKind.ImportDeclaration) ?? [];
+  for (const imp of imports as ImportDecl[]) {
+    const spec = imp.getModuleSpecifierValue?.();
+    if (!spec || (!spec.startsWith("./") && !spec.startsWith("../"))) continue;
+    const ns = imp.getNamespaceImport?.();
+    if (ns) { const nm = ns.getName?.(); if (nm) localToSpec.set(nm, spec); continue; }
+    const def = imp.getDefaultImport?.();
+    if (def) { const nm = def.getName?.(); if (nm) localToSpec.set(nm, spec); }
+    for (const nis of imp.getNamedImports?.() ?? []) {
+      const aliasId = (nis as { getAliasNode?: () => { getText?: () => string } | undefined }).getAliasNode?.();
+      const nm = aliasId?.getText?.() ?? nis.getName?.();
+      if (nm) localToSpec.set(nm, spec);
+    }
+  }
+  const attribute = (spec: string | undefined): void => {
+    if (!spec) return;
+    const target = resolveRelative(filePath, spec, fileSet);
+    if (!target) return;
+    if (!nsImportKits.has(target)) nsImportKits.set(target, kit);
+    markAttributed(target);
+    if (!seen.has(target) && !isTopLevel(target)) work.push(target);
+  };
+  // (b) exported type aliases whose leading identifier is a local import.
+  const aliases =
+    (sourceFile as unknown as { getDescendantsOfKind?: (k: SyntaxKind) => Node[] })
+      .getDescendantsOfKind?.(SyntaxKind.TypeAliasDeclaration) ?? [];
+  for (const a of aliases as TypeAlias[]) {
+    if (!hasExportModifier(a)) continue;
+    const rhs = a.getTypeNode?.()?.getText?.();
+    if (!rhs) continue;
+    const m = rhs.match(/^([A-Za-z_$][\w$]*)/);
+    if (!m) continue;
+    attribute(localToSpec.get(m[1]));
+  }
+  // (c) bare `export { a, b }` (no module specifier) re-exporting imports.
+  const exps =
+    (sourceFile as unknown as { getDescendantsOfKind?: (k: SyntaxKind) => Node[] })
+      .getDescendantsOfKind?.(SyntaxKind.ExportDeclaration) ?? [];
+  for (const exp of exps as (Node & { getModuleSpecifierValue?: () => string | undefined; getNamedExports?: () => ExportSpec[] })[]) {
+    if (exp.getModuleSpecifierValue?.()) continue; // has `from` -> handled by (a)
+    for (const ex of exp.getNamedExports?.() ?? []) {
+      const source = ex.compilerNode?.propertyName?.getText?.() ?? ex.getName?.();
+      if (!source) continue;
+      attribute(localToSpec.get(source));
+    }
+  }
+}
+
+/**
+ * Phase-2 transitive import attribution — fills files NOT yet attributed by
+ * phase 1 (no genuine re-exporter). First-writer-wins within phase 2; phase 1
+ * claims are never overridden (the `attributed` set pre-populated in phase 1).
+ * Namespace import -> whole file; named/default -> per-name. Kept for scanner
+ * indirect-access coverage of non-re-exported types reached via property chains.
+ */
+function recordImportTransitive(
   imp: ImportDeclaration,
   targetFile: string,
   kit: string,
   nsImportKits: Map<string, string>,
   namedReexports: Map<string, string>,
+  attributed: Set<string>,
 ): void {
-  // Namespace import: `import * as X from './...'` -> whole file belongs to kit.
+  if (attributed.has(targetFile)) return; // no override (phase 1 or earlier phase 2)
   const ns = imp.getNamespaceImport?.();
   if (ns) {
-    if (!nsImportKits.has(targetFile)) nsImportKits.set(targetFile, kit);
+    if (!nsImportKits.has(targetFile)) {
+      nsImportKits.set(targetFile, kit);
+      attributed.add(targetFile);
+    }
     return;
   }
-  // Default import: `import X from './...'` -> file's default export -> kit.
   const def = imp.getDefaultImport?.();
   if (def) {
-    namedReexports.set(`${targetFile}\0default`, kit);
+    const key = `${targetFile}\0default`;
+    if (!namedReexports.has(key)) {
+      namedReexports.set(key, kit);
+      attributed.add(targetFile);
+    }
   }
-  // Named imports: each imported name maps (file, name) -> kit.
   for (const nis of imp.getNamedImports()) {
     const imported = nis.getName(); // the imported (source) name
-    namedReexports.set(`${targetFile}\0${imported}`, kit);
+    const key = `${targetFile}\0${imported}`;
+    if (!namedReexports.has(key)) {
+      namedReexports.set(key, kit);
+      attributed.add(targetFile);
+    }
   }
 }
 
 /**
- * Record a re-export (`export { X } from './y'` / `export * from './y'`) the
- * same way an import would be: it binds the target file's export(s) to this
- * kit. `export { a as b }` attributes the source name `a`.
+ * Record a genuine re-export (`export { X } from './y'` / `export * from
+ * './y'`): it binds the target file's export(s) to this kit.
+ * `export { a as b }` attributes the source name `a`. Marks the file
+ * attributed so phase 2 never overrides it.
  */
 function recordExport(
   exp: ExportDeclaration,
@@ -1658,11 +1875,13 @@ function recordExport(
   kit: string,
   nsImportKits: Map<string, string>,
   namedReexports: Map<string, string>,
+  markAttributed: (f: string) => void,
 ): void {
   // `export * from './y'` -> whole file belongs to kit.
   const ns = exp.getNamespaceExport?.();
   if (ns) {
     if (!nsImportKits.has(targetFile)) nsImportKits.set(targetFile, kit);
+    markAttributed(targetFile);
     return;
   }
   // `export { a, b as c } from './y'` -> each source name maps (file, name).
@@ -1671,4 +1890,5 @@ function recordExport(
     const source = ex.compilerNode.propertyName?.getText() ?? ex.getName();
     namedReexports.set(`${targetFile}\0${source}`, kit);
   }
+  markAttributed(targetFile);
 }

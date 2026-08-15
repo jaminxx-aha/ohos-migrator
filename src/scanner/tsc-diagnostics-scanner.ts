@@ -309,7 +309,7 @@ function splitToReceiver(
 }
 
 /* ------------------------------------------------------------------ */
-/* Symbol -> kit resolution (port of tsc-instance-scanner resolveReceiver). */
+/* Symbol -> kit resolution (receiver type -> owning kit via file->kit map). */
 /* ------------------------------------------------------------------ */
 
 function resolveReceiver(

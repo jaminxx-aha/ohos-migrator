@@ -89,7 +89,40 @@ for (const f of findings) {
 // member findings: oldSymbol -> finding (any). Also a list for suffix matching.
 const memberSyms = new Set(mem.findings.map((f) => f.oldSymbol));
 
+/** Is there a member finding `<binding>.<chain>` whose binding maps to `kit`? */
+function memberCovered(kit, chain) {
+  for (const sym of memberSyms) {
+    const dot = sym.length - chain.length - 1;
+    if (sym.endsWith("." + chain)) {
+      const binding = sym.slice(0, dot);
+      if (kitOfLocal(binding) === kit) return true;
+    }
+  }
+  return false;
+}
+
+// Signature -> entry lookup, mirroring the indexer's
+// `verifyMembersPreservedByMove` third-shape detection: a 2-seg no-`@useinstead`
+// member `[C, M]` is suppressed when its parent `[C]` has a SAME-KIT 1-seg
+// rename repl `[C']` and `M` is preserved in `C'`. Coverage then rides on the
+// parent container's rename-member finding (`<binding>.C` -> `<binding>.C'`),
+// which rewrites the type/import binding — the preserved member needs no splice.
+const bySig = new Map();
+for (const e of map.entries) {
+  const d = e.dep;
+  bySig.set(`${d.kit}${NUL}${d.exportName}${NUL}${(d.members ?? []).join(".")}`, e);
+}
+
 const isOrphan = (k) => k.startsWith("@?");
+// A name is fixture-importable iff it is the kit's default export or a genuinely
+// top-level named export. Names that exist only via transitive attribution are
+// NOT emitted in the fixture (no kit re-exports them, so the import 2614s) and
+// are exempt here — they stay in the map for the scanner's indirect-access
+// coverage via fileKit.
+const kitExports = map.kitExports ?? {};
+const kitDefaultExport = map.kitDefaultExport ?? {};
+const isImportable = (kit, name) =>
+  kitDefaultExport[kit] === name || (kitExports[kit] ?? []).includes(name);
 let gaps = 0;
 const samples = [];
 
@@ -101,6 +134,7 @@ for (const e of map.entries) {
   if (members.length === 0) continue;
   const { kit, exportName } = e.dep;
   if (!exportName || isOrphan(kit)) continue;
+  if (!isImportable(kit, exportName)) continue; // transitive-only: scanner-indirect-covered
   const eligible = entryEligible(e, kit, map, 0);
   const chain = members.join(".");
   // Bracket-notation members (`[Symbol.iterator]`) are matched with a literal
@@ -109,16 +143,7 @@ for (const e of map.entries) {
   const isBracket = chain.includes("[");
   if (eligible) {
     if (memberSuppressed(e) || isBracket) continue;
-    // Any member finding whose binding maps to this kit and whose suffix is chain.
-    let found = false;
-    for (const sym of memberSyms) {
-      const dot = sym.length - chain.length - 1;
-      if (sym.endsWith("." + chain)) {
-        const binding = sym.slice(0, dot);
-        if (kitOfLocal(binding) === kit) { found = true; break; }
-      }
-    }
-    if (!found) gap(`eligible member: ${exportName}.${chain} [${kit}]`);
+    if (!memberCovered(kit, chain)) gap(`eligible member: ${exportName}.${chain} [${kit}]`);
   } else {
     // Suppressed: covered by import-level on this kit/exportName.
     const ei = map.exportIndex?.[`${kit}${NUL}${exportName}`];
@@ -132,6 +157,16 @@ for (const e of map.entries) {
     }
     if (dropin && rewriteImportKits.has(kit)) covered = true;
     if (map.kitIndex?.[kit] && kitIndexFindings.has(kit)) covered = true; // module-move (auto or manual)
+    // Third shape: same-kit container rename, member preserved. The parent
+    // `[C]` has a same-kit 1-seg repl `[C']`; its rename-member finding
+    // rewrites the binding, covering the preserved child `[C, M]`.
+    if (!covered && e.memberPreservedByMove && members.length === 2) {
+      const parent = bySig.get(`${kit}${NUL}${exportName}${NUL}${members[0]}`);
+      const pr = parent?.repl;
+      if (pr?.members?.length === 1 && (!pr.kit || pr.kit === kit)) {
+        covered = memberCovered(kit, members[0]);
+      }
+    }
     if (!covered) gap(`suppressed member (import-level): ${exportName}.${chain} [${kit}]`);
   }
 }

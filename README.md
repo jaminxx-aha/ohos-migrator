@@ -22,8 +22,12 @@ node dist/cli.js --help
 
 ## Prerequisites
 
-The `index` command needs the HarmonyOS SDK declaration files (`.d.ts` under
-`<sdk>/openharmony/ets/api`). The SDK is discovered from, in priority order:
+The `index`, `scan`, and `rewrite` commands all need the HarmonyOS SDK
+declaration files (`.d.ts` under `<sdk>/openharmony/ets/api`) on disk: `index`
+builds the map from them, and `scan`/`rewrite` run the TypeScript
+LanguageService against them to resolve `@ohos.*` imports. If the SDK cannot be
+resolved, `scan`/`rewrite` error out (no regex fallback). The SDK is
+discovered from, in priority order:
 
 1. `--sdk <path>` argument
 2. `DEVECO_SDK_HOME` environment variable (`.../openharmony/ets/api` is appended)
@@ -70,28 +74,43 @@ node dist/cli.js scan --project ./my_app
 node dist/cli.js scan --project ./my_app --since 12   # only deprecations since <= 12
 ```
 
-Two passes:
+Member-level detection runs exclusively via the TypeScript LanguageService
+(codes 6385/6387): the compiler flags every call site that resolves to a
+`@deprecated` declaration — instance/indirected methods, `.ets` ArkUI files,
+and deprecated *signatures* (overloads) — and never matches text inside
+comments/strings. The SDK must be on disk so the LS can resolve `@ohos.*`
+imports against the declaration files; if it is absent the command errors
+out (no regex fallback).
 
-- **Module-level**: an `import` of a whole deprecated kit that moved to a new
-  specifier → `rewrite-import` (auto-fixable), or `manual` (deprecated with no
-  `@useinstead`).
-- **Member-level**: a specific deprecated method/property/enum-member inside a
-  non-deprecated kit (e.g. `router.pushUrl`) → `rename-member` (same-kit rename)
-  or `manual` (cross-kit / no replacement).
+The scan report shows **TS-LS member-level results only**:
+
+- a specific deprecated method/property/enum-member (e.g. `router.pushUrl`)
+  → `rename-member` (same-kit rename), `override` (data-driven recipe), or
+  `manual` (cross-kit / no replacement).
+
+Import-level rewrites (whole-kit moves / export renames / cross-kit drop-ins)
+are **not** shown by `scan` — TS-LS emits no diagnostic on the import
+statement, so it has no module-move signal — but `rewrite` still applies them
+so the output compiles. A deprecated member whose whole kit moved (e.g.
+`reminder.publishReminder` on `@ohos.reminderAgent` → `@ohos.reminderAgentManager`)
+is suppressed in the report as redundant with that import rewrite; `rewrite`
+re-points the specifier and the call site resolves on the new kit unchanged.
 
 Prints a grouped summary with file:line, old → new symbol, and `since` version.
 
-### `rewrite` — apply safe import rewrites
+### `rewrite` — apply safe rewrites
 
 ```bash
 node dist/cli.js rewrite --project ./my_app           # dry-run, prints +/- diffs
 node dist/cli.js rewrite --project ./my_app --write   # write to disk
 ```
 
-Only `rewrite-import` findings are auto-applied (old kit specifier → new kit
-specifier, leaving bindings and call sites untouched). `manual` findings are
-never auto-written — they're reported for human review. Default is dry-run; pass
-`--write` to modify files.
+Runs TS-LS for member-level fixes (as `scan` does) **plus** the import-level
+regex scanners — kit moves (`rewrite-import`), export renames (`rename-export`),
+and cross-kit drop-ins — so rewritten imports stay in sync with every member
+splice and the result compiles. The import-level findings are not surfaced by
+`scan` but are applied here. `manual` findings are never auto-written — they're
+reported for human review. Default is dry-run; pass `--write` to modify files.
 
 ## How it works
 
@@ -105,10 +124,15 @@ never auto-written — they're reported for human review. Default is dry-run; pa
   JSDoc and symbol-identity extraction from the standard `.d.ts` / `.d.ets`
   files, recursively across the `api/` tree. Nested declaration files are
   attributed to their owning top-level kit via re-export tracing.
-- **Scanner** is deliberately regex/offset based and tolerant: ArkUI `.ets`
-  uses `struct` / `@Component` / `build()` syntax that `tsc` cannot parse, so a
-  full AST parse is avoided. Import specifiers and member accesses are matched
-  via binding-resolution from imports.
+- **Scanner** (member-level) runs the TypeScript LanguageService (`getSuggestionDiagnostics`,
+  codes 6385/6387): the compiler resolves every call site against the SDK
+  declarations and flags deprecated symbols/signatures. ArkUI `.ets` is fed to
+  the LS as a virtual `.ts` root file — `@Component`/`struct`/`build()` become
+  harmless "Cannot find name" semantics that do not block 6385/6387. The SDK
+  must be on disk; without it `scan`/`rewrite` error out rather than fall back.
+  (Import-level detection — kit moves, export renames, cross-kit drop-ins —
+  stays regex/offset based: TS-LS emits nothing on the import statement, so the
+  specifier is matched against the indexed `kitIndex`/export tables.)
 - **Rewriter** splices the quoted import specifier literal at exact offsets,
   applying edits bottom-up within each file.
 
@@ -117,9 +141,15 @@ never auto-written — they're reported for human review. Default is dry-run; pa
 - **`.d.ets` is indexed** alongside `.d.ts` (parsed as TS declarations). Note
   that only a handful of ArkUI component `.d.ets` files carry `@deprecated`
   markers today; the bulk of deprecations live in `.d.ts`.
-- **Member-level detection is heuristic, not type-checked.** Binding resolution
-  from imports keeps false positives low, but shadowing can still occur. Treat
-  scan output as a review report, not an authoritative linter verdict.
+- **Member-level detection is type-checked via the compiler** (TS-LS 6385/6387),
+  so false positives on comments/strings and most shadowing are eliminated.
+  Computed member access (`router["pushUrl"]`), dynamic-import receivers
+  (`const r = await import('@ohos.X'); r.foo()`), and a handful of declaration
+  shapes the indexer doesn't attribute still slip through — treat scan output
+  as a review report, not an authoritative linter verdict.
+- **`scan` reports TS-LS member-level results only.** Import-level rewrites
+  (kit moves / export renames / cross-kit drop-ins) are applied by `rewrite`
+  but not shown by `scan` — TS-LS has no module-move signal at the import.
 - **What is auto-rewritten.** The rewriter applies these rule kinds:
   - `rewrite-import` — replace the quoted import specifier when a kit moved
     (e.g. `@ohos.reminderAgent` -> `@ohos.reminderAgentManager`), or when a

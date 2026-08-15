@@ -50,12 +50,32 @@ const kitIndex = map.kitIndex ?? {};
 const exportIndex = map.exportIndex ?? {};
 const crossKitDropin = map.crossKitDropin ?? {};
 const crossKitRenameExport = map.crossKitRenameExport ?? {};
+const kitExports = map.kitExports ?? {};
+const kitDefaultExport = map.kitDefaultExport ?? {};
 
 // module-move (kit-level) default binding per kit, e.g. "@ohos.ability.dataUriUtils" -> "dataUriUtils".
 const mmDefaultBinding = {};
 for (const e of entries) if (e.kind === "module-move") mmDefaultBinding[e.dep.kit] = e.dep.exportName;
 
 const isOrphan = (kit) => kit.startsWith("@?");
+
+/**
+ * Is `name` importable from `kit` under TS-LS? A name resolves when it is the
+ * kit's default export (`import name from '<kit>'`) OR a genuinely top-level
+ * named export (`import { name } from '<kit>'`). Names that only exist via
+ * phase-2 transitive attribution (no kit re-exports them) do NOT resolve — TS
+ * emits 2614 — so they are skipped here (they stay in the map for the scanner's
+ * indirect-access coverage via fileKit).
+ */
+const isImportable = (kit, name) =>
+  kitDefaultExport[kit] === name || (kitExports[kit] ?? []).includes(name);
+
+/** Should this item use a default import (`import X from '<kit>'`)? */
+const isDefaultForm = (kit, exportName) =>
+  kitDefaultExport[kit] === exportName ||
+  mmDefaultBinding[kit] === exportName ||
+  (crossKitDropin[`${kit}${NUL}default`] !== undefined &&
+    crossKitDropin[`${kit}${NUL}${exportName}`] !== undefined);
 
 /** Tail segment of a kit specifier, used as a fallback default-import binding. */
 function kitTail(kit) {
@@ -82,24 +102,15 @@ const addItem = (it) => {
 
 // (1) entries: member + module-move + length-0 export-level.
 let orphanCount = 0;
+let skippedUnimportable = 0;
 const kitHasEntryDefault = new Set(); // kits whose default export has an entry (Want), vs kits whose default export has no entry (cipher)
 for (const e of entries) {
   const { kit, exportName } = e.dep;
   if (!exportName) continue;
   if (isOrphan(kit)) { orphanCount++; continue; }
-  // An entry's export is the kit's DEFAULT export only when the kit has a
-  // `kit\0default` move AND that same export has a same-name drop-in
-  // (`kit\0export`). Otherwise the entry is a named export (e.g. cipher's
-  // `CipherResponse`, which moved via crossKitRenameExport, not as default).
-  const hasDefMove = crossKitDropin[`${kit}${NUL}default`] !== undefined;
-  const isDefExport = hasDefMove && crossKitDropin[`${kit}${NUL}${exportName}`] !== undefined;
-  let form;
-  if (mmDefaultBinding[kit] === exportName || isDefExport) {
-    form = "default";
-    kitHasEntryDefault.add(kit);
-  } else {
-    form = "named";
-  }
+  if (!isImportable(kit, exportName)) { skippedUnimportable++; continue; }
+  const form = isDefaultForm(kit, exportName) ? "default" : "named";
+  if (form === "default") kitHasEntryDefault.add(kit);
   addItem({ kit, form, exportName });
 }
 
@@ -162,23 +173,46 @@ for (const it of items) {
 
 // -------------------------------------------------------------- body lines
 // One member reference per member entry (members length >= 1), non-orphan,
-// using the assigned local for its (kit, exportName).
+// importable, using the assigned local for its (kit, exportName).
+//
+// Each entry emits TWO complementary access forms so TS-LS flags the member
+// regardless of whether it is a VALUE member (namespace function / enum
+// member / class static — reached via static `<local>.<chain>`) or an
+// INSTANCE member (interface / class instance — reached via a typed local
+// `let _vN: <type>; _vN.<leaf>`). The two are complementary: for any given
+// declaration kind exactly one resolves to the deprecated declaration and
+// the other is an inert type error (the fixture is a scan fixture, not a
+// compiling module), so there is no double-counting.
 const bodyLines = [];
 const seenBody = new Set();
+let iVar = 0;
 for (const e of entries) {
   const members = e.dep.members ?? [];
   if (members.length === 0) continue;
   const { kit, exportName } = e.dep;
   if (!exportName || isOrphan(kit)) continue;
-  const hasDefMove = crossKitDropin[`${kit}${NUL}default`] !== undefined;
-  const isDefExport = hasDefMove && crossKitDropin[`${kit}${NUL}${exportName}`] !== undefined;
-  const form = (mmDefaultBinding[kit] === exportName || isDefExport) ? "default" : "named";
+  if (!isImportable(kit, exportName)) continue;
+  const form = isDefaultForm(kit, exportName) ? "default" : "named";
   const local = localOf[itemKey({ kit, form, exportName })];
   if (!local) continue;
-  const line = `  ${local}.${members.join(".")};`;
-  if (seenBody.has(line)) continue;
-  seenBody.add(line);
-  bodyLines.push(`${line}  // since ${e.since ?? "?"}`);
+  const chain = members.join(".");
+  const leaf = members[members.length - 1];
+  const note = `  // since ${e.since ?? "?"}`;
+  // (a) static value-access form: `<local>.<chain>`.
+  const stat = `  ${local}.${chain};`;
+  if (!seenBody.has(stat)) { seenBody.add(stat); bodyLines.push(stat + note); }
+  // (b) instance typed-local form: `let _vN: <typeExpr>; _vN.<leaf>;`. The
+  // receiver type is the chain minus its leaf, qualified by the kit binding
+  // (the namespace value) — e.g. members=[ResourceManager,getString] ->
+  // `let _vN: <local>.ResourceManager; _vN.getString;`. For length-1 chains
+  // the type is the binding itself (only resolves when exportName is a type,
+  // i.e. a top-level interface/class — otherwise an inert error).
+  const typeExpr = members.length >= 2
+    ? `${local}.${members.slice(0, -1).join(".")}`
+    : local;
+  const vname = `_v${iVar++}`;
+  const inst = `  let ${vname}: ${typeExpr}; ${vname}.${leaf};`;
+  if (!seenBody.has(inst)) { seenBody.add(inst); bodyLines.push(inst + note); }
 }
 
 // -------------------------------------------------------------- emit imports
@@ -212,6 +246,7 @@ out.push("// detect it; the file is a scan/rewrite fixture, not a compiling modu
 out.push("// Named imports are split by cross-kit target so each clause is homogeneous");
 out.push("// (the drop-in scanner leaves a mixed clause untouched).");
 if (orphanCount) out.push(`// ${orphanCount} entries on unimportable @? orphan kits were skipped.`);
+if (skippedUnimportable) out.push(`// ${skippedUnimportable} entries on names not genuinely re-exported by their kit (transitive-only attribution) were skipped — they stay in the map for the scanner's indirect-access coverage.`);
 out.push("");
 for (const kit of kits) {
   const { named, default: def } = kitItems[kit];

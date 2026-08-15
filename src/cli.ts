@@ -14,7 +14,6 @@ import { buildDeprecationMap } from "./indexer/sdk-indexer.js";
 import { scanProject } from "./scanner/scanner.js";
 import { scanProjectExportRenames } from "./scanner/scanner.js";
 import { scanProjectCrossKitDropin } from "./scanner/scanner.js";
-import { scanProjectMembers, scanProjectInstanceMembers } from "./scanner/member-scanner.js";
 import { scanProjectDeprecatedMembers } from "./scanner/tsc-diagnostics-scanner.js";
 import { rewriteProject } from "./rewriter/rewriter.js";
 import { printScanSummary, printRewriteSummary } from "./report.js";
@@ -25,7 +24,7 @@ import {
   resolveSdkApiDir,
 } from "./config.js";
 import { walkFiles } from "./walk.js";
-import type { DeprecationMap, Finding } from "./rules/types.js";
+import type { DeprecationMap } from "./rules/types.js";
 
 const program = new Command();
 
@@ -63,32 +62,28 @@ program
   .action((opts) => {
     const map = loadMap(opts.sdk);
     const projectRoot = resolve(opts.project);
-    const mod = scanProject({ projectRoot, map, since: opts.since || 0 });
-    const exp = scanProjectExportRenames({ projectRoot, map, since: opts.since || 0 });
-    const drp = scanProjectCrossKitDropin({ projectRoot, map, since: opts.since || 0 });
-    // Member/instance detection: TS-LS is the source of truth when the SDK is
-    // present (catches instance/indirected calls + .ets, no comment false
-    // positives); otherwise fall back to the regex scanners (cache-only CI).
+    // Member/instance detection runs exclusively via the TypeScript
+    // LanguageService (codes 6385/6387): it catches instance/indirected calls
+    // + .ets and never matches text in comments/strings. The SDK must be on
+    // disk so the LS can resolve `@ohos.*` imports against the declaration
+    // files; without it the tool cannot detect member-level deprecations and
+    // refuses to run (no regex fallback).
+    //
+    // The scan report shows TS-LS results only. Import-level rewrites (kit
+    // moves, export renames, cross-kit drop-ins) are NOT reported here — TS-LS
+    // gives no module-move signal at the import statement — but `rewrite`
+    // still applies them so the output compiles. Deprecated members whose
+    // whole kit moved are suppressed as redundant with that import rewrite.
     const tsc = scanProjectDeprecatedMembers({
       projectRoot, map, since: opts.since || 0, symbolOverrides: opts.symbolOverrides,
     });
-    let memberFindings: Finding[];
-    let memberFiles: number;
-    if (tsc.ran) {
-      memberFindings = tsc.findings;
-      memberFiles = tsc.filesScanned;
-    } else {
-      const mem = scanProjectMembers({ projectRoot, map, since: opts.since || 0, symbolOverrides: opts.symbolOverrides });
-      const ins = scanProjectInstanceMembers({ projectRoot, map, since: opts.since || 0 });
-      memberFindings = [...mem.findings, ...ins.findings];
-      memberFiles = Math.max(mem.filesScanned, ins.filesScanned);
+    if (!tsc.ran) {
+      console.error(
+        "Error: TS-LS scanning requires the HarmonyOS SDK on disk. Set --sdk, DEVECO_SDK_HOME, or OHOS_SDK_HOME.",
+      );
+      process.exit(1);
     }
-    const findings = [...mod.findings, ...memberFindings, ...exp.findings, ...drp.findings];
-    console.log(
-      printScanSummary(
-        { findings, filesScanned: Math.max(mod.filesScanned, memberFiles, exp.filesScanned, drp.filesScanned) },
-      ),
-    );
+    console.log(printScanSummary({ findings: tsc.findings, filesScanned: tsc.filesScanned }));
   });
 
 program
@@ -108,7 +103,13 @@ program
     const mod = scanProject({ projectRoot, map, since: opts.since || 0 });
     const exp = scanProjectExportRenames({ projectRoot, map, since: opts.since || 0 });
     const drp = scanProjectCrossKitDropin({ projectRoot, map, since: opts.since || 0 });
-    // Member/instance detection: TS-LS primary (SDK present), regex fallback.
+    // Member/instance detection runs exclusively via the TypeScript
+    // LanguageService (SDK must be present). The import-level regex scanners
+    // (mod/exp/drp) run alongside TS-LS — NOT as a fallback — because they
+    // cover kit moves / export renames / cross-kit drop-ins that TS-LS cannot
+    // see (it emits no diagnostic on the import statement). Their findings feed
+    // `rewriteProject` so the rewritten imports stay in sync and the output
+    // compiles, even though they are not shown by `scan`.
     const tsc = scanProjectDeprecatedMembers({
       projectRoot,
       map,
@@ -118,29 +119,13 @@ program
       windowExpr: opts.windowExpr,
       symbolOverrides: opts.symbolOverrides,
     });
-    let memberFindings: Finding[];
-    if (tsc.ran) {
-      memberFindings = tsc.findings;
-    } else {
-      const mem = scanProjectMembers({
-        projectRoot,
-        map,
-        since: opts.since || 0,
-        uiContextExpr: opts.uiContext,
-        windowStageExpr: opts.windowStageExpr,
-        windowExpr: opts.windowExpr,
-        symbolOverrides: opts.symbolOverrides,
-      });
-      const ins = scanProjectInstanceMembers({
-        projectRoot,
-        map,
-        since: opts.since || 0,
-        uiContextExpr: opts.uiContext,
-        windowStageExpr: opts.windowStageExpr,
-        windowExpr: opts.windowExpr,
-      });
-      memberFindings = [...mem.findings, ...ins.findings];
+    if (!tsc.ran) {
+      console.error(
+        "Error: TS-LS scanning requires the HarmonyOS SDK on disk. Set --sdk, DEVECO_SDK_HOME, or OHOS_SDK_HOME.",
+      );
+      process.exit(1);
     }
+    const memberFindings = tsc.findings;
     const findings = [...mod.findings, ...memberFindings, ...exp.findings, ...drp.findings];
     const result = rewriteProject(projectRoot, findings, { write: !!opts.write });
     console.log(printRewriteSummary(result, !!opts.write));

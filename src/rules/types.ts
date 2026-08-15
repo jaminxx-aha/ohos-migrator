@@ -138,6 +138,26 @@ export interface DeprecationMap {
    * the dep entries use, keeping lookup keys consistent.
    */
   fileKit?: Record<string, string>;
+  /**
+   * Per-kit set of genuinely re-exported top-level export names — the names a
+   * consumer can actually `import { X } from '<kit>'`. Built from the indexer's
+   * phase-1 genuine re-export edges (`export { X } from`/`export *`,
+   * `export type X = _local[.Y]`, bare `export { X }` of imported names). Used
+   * by the fixture generator to decide which deprecated entries resolve under
+   * TS-LS (an entry whose exportName is NOT in this set cannot be imported
+   * directly and is skipped in the "must compile" fixture, though it stays in
+   * the map for the scanner's indirect-access coverage).
+   */
+  kitExports?: Record<string, string[]>;
+  /**
+   * Per-kit default export name (from `export default <name>`), for kits whose
+   * top export is a default namespace (`declare namespace X; export default X`,
+   * e.g. `@ohos.router` -> `router`). The fixture generator uses this to pick
+   * the value/default import form that TS resolves (`import X from '<kit>'`);
+   * the named form 2614s for a default-only export. Absent for kits with no
+   * default export.
+   */
+  kitDefaultExport?: Record<string, string>;
 }
 
 /** Rule kind the rewriter may apply. */
