@@ -1,5 +1,5 @@
 {
   "apiType": "stageMode",
   "buildOption": {},
-  "targets": [{ "name": "default" }]
+  "targets": [{ "name": "default", "config": { "deviceType": [] } }]
 }
