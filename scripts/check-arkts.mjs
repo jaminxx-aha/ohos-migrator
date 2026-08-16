@@ -91,22 +91,61 @@ function sdkRoot() {
   return join(DEVECO_SDK_HOME, "default");
 }
 
-/** All device-define dirs across the SDK variants ace-server may read: ace-server
- *  unions getPopularDeviceDefineSyscap (.json) + getHmsPopularDeviceDefineSyscap
- *  (-hmos.json), across openharmony and hms, ets and js. Patch them all so the
- *  device syscap set includes Lite capabilities regardless of which variant
- *  ace-server resolves for runtimeOS=HarmonyOS. Idempotent; append-only. */
+/** Collect every @syscap tag declared across the SDK .d.ts/.d.ets API files.
+ *  These are the capabilities APIs require; if any is missing from a device's
+ *  device-define SysCaps, ace-server reports a blocking syscap ERROR on use.
+ *  Returns the full set so we can append it to every device-define JSON,
+ *  making syscap checks pass regardless of which @syscap an API carries. */
+function collectSyscaps(apiDirs) {
+  const caps = new Set(LITE_SYSCAPS); // baseline Lite tags (always included)
+  const re = /@syscap\s+([A-Za-z][\w.]*)/g;
+  const walk = (d) => {
+    let entries;
+    try { entries = readdirSync(d); } catch { return; }
+    for (const name of entries) {
+      const p = join(d, name);
+      let s;
+      try { s = statSync(p); } catch { continue; }
+      if (s.isDirectory()) { walk(p); continue; }
+      if (!name.endsWith(".d.ts") && !name.endsWith(".d.ets")) continue;
+      try {
+        const txt = readFileSync(p, "utf8");
+        if (!txt.includes("@syscap")) continue; // fast filter
+        re.lastIndex = 0;
+        let m;
+        while ((m = re.exec(txt)) !== null) caps.add(m[1].trim());
+      } catch { /* skip */ }
+    }
+  };
+  for (const ad of apiDirs) if (existsSync(ad)) walk(ad);
+  return [...caps];
+}
+
+/** Patch every SDK device-define JSON (across openharmony/hms × ets/js, both
+ *  plain .json and -hmos.json) to include every @syscap declared in the SDK.
+ *  ace-server unions getPopularDeviceDefineSyscap (.json) +
+ *  getHmsPopularDeviceDefineSyscap (-hmos.json) and intersects per deviceType;
+ *  adding all caps to every file makes the intersection include them, so the
+ *  syscap check passes for any @system.* / @ohos.* deprecated API. Idempotent;
+ *  append-only (only widens capability sets — harmless to other projects). */
 function patchSdkDeviceDefine() {
   const root = sdkRoot();
-  const dirs = [
+  const apiDirs = [
+    join(root, "openharmony", "ets", "api"),
+    join(root, "openharmony", "js", "api"),
+    join(root, "hms", "ets", "api"),
+    join(root, "hms", "js", "api"),
+  ];
+  const ddDirs = [
     join(root, "openharmony", "ets", "api", "device-define"),
     join(root, "openharmony", "js", "api", "device-define"),
     join(root, "hms", "ets", "api", "device-define"),
     join(root, "hms", "js", "api", "device-define"),
   ];
+  const allCaps = collectSyscaps(apiDirs);
   let total = 0;
   let seen = 0;
-  for (const dd of dirs) {
+  for (const dd of ddDirs) {
     if (!existsSync(dd)) continue;
     seen++;
     for (const name of readdirSync(dd)) {
@@ -116,7 +155,7 @@ function patchSdkDeviceDefine() {
         const d = JSON.parse(readFileSync(p, "utf8"));
         if (!Array.isArray(d.SysCaps)) continue;
         const have = new Set(d.SysCaps);
-        const add = LITE_SYSCAPS.filter((x) => !have.has(x));
+        const add = allCaps.filter((x) => !have.has(x));
         if (add.length) {
           d.SysCaps.push(...add);
           writeFileSync(p, JSON.stringify(d, null, 2) + "\n", "utf8");
@@ -125,7 +164,7 @@ function patchSdkDeviceDefine() {
       } catch { /* skip malformed file */ }
     }
   }
-  console.log(`patch: added ${total} Lite syscap(s) across ${seen} device-define dir(s) under ${root} (covers .json + -hmos.json, openharmony + hms)`);
+  console.log(`patch: collected ${allCaps.length} syscap(s); added ${total} across ${seen} device-define dir(s) under ${root}`);
 }
 
 /** Run hvigorw CompileArkTS; return the raw stdout+stderr text. */
