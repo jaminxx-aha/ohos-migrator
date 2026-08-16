@@ -26,6 +26,7 @@ import { revertBrokenEdits } from "./rewriter/verify-revert.js";
 import { runHvigor } from "./verify/hvigor.js";
 import { runAiRewrite, type AiRewriteResult } from "./ai/pipeline.js";
 import { resolveAiConfig, writeEnvTemplate } from "./ai/config.js";
+import { selectResiduals } from "./ai/replace.js";
 import { printScanSummary, printRewriteSummary } from "./report.js";
 import {
   cacheFile,
@@ -181,7 +182,11 @@ program
         arr.push(f);
         byFile.set(f.file, arr);
       }
-      leftForAiFindings = findings.length;
+      // Residuals that actually reach the model: auto-fixable ones are spliced
+      // deterministically (excluded) and `humanOnly` manuals need a human, not
+      // the model (excluded). Report the real count the AI would see, not the
+      // raw scan total — so a dry run doesn't overstate what's sent.
+      leftForAiFindings = selectResiduals(findings).length;
       leftForAiFiles = byFile.size;
       const aiOpts = resolveAiConfig(opts, projectRoot);
       if (write && aiOpts && byFile.size > 0) {

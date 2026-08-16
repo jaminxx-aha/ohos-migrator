@@ -47,6 +47,13 @@ export interface AiClientOpts {
    *  this file. The API key is redacted. Default
    *  <projectRoot>/logs/ai-conversation.log (gitignored via *.log). */
   logFile?: string;
+  /** Sink for each streamed token (delta), so the CLI can echo the model's
+   *  reply to the terminal in real time as it arrives — the response is
+   *  streamed visibly, not just accumulated silently. Defaults to
+   *  `process.stdout.write`; the full response is still accumulated for
+   *  parsing + the conversation log regardless. Pass a no-op to silence
+   *  (e.g. in tests). */
+  onDelta?: (delta: string) => void;
 }
 
 export interface RequestEditsResult {
@@ -71,6 +78,11 @@ const DEFAULT_IDLE_MS = 120_000;
 const DEFAULT_TOTAL_MS = 600_000;
 /** Self-heal a mid-stream stall once before surfacing the failure. */
 const STREAM_ATTEMPTS = 2;
+/** Default per-token sink: write to stdout so a run shows the model's reply
+ *  streaming in real time. (Tests pass a no-op `onDelta` to stay quiet.) */
+const defaultStdoutWriter = (s: string): void => {
+  process.stdout.write(s);
+};
 
 export async function requestEdits(
   client: AiClientOpts,
@@ -89,6 +101,7 @@ export async function requestEdits(
     : user;
   const idleMs = client.timeoutMs ?? DEFAULT_IDLE_MS;
   const totalMs = client.maxTotalMs ?? DEFAULT_TOTAL_MS;
+  const onDelta = client.onDelta ?? defaultStdoutWriter;
 
   let raw = "";
   let lastError: string | undefined;
@@ -100,6 +113,7 @@ export async function requestEdits(
         user: userPayload,
         idleMs,
         totalMs,
+        onDelta,
       });
       logConversation(client, SYSTEM_PROMPT, userPayload, raw, undefined, attempt);
       return { edits: parseEdits(raw), raw };
@@ -131,6 +145,7 @@ async function streamCompletion(
     user: string;
     idleMs: number;
     totalMs: number;
+    onDelta: (delta: string) => void;
   },
 ): Promise<string> {
   const controller = new AbortController();
@@ -174,7 +189,12 @@ async function streamCompletion(
     for await (const chunk of stream) {
       armIdle(); // a chunk arrived — reset the idle window
       const delta = chunk.choices[0]?.delta?.content ?? "";
-      if (delta) acc += delta;
+      if (delta) {
+        acc += delta;
+        // Echo each token to the terminal as it arrives so the reply streams
+        // visibly (the full text is still accumulated for parsing + the log).
+        params.onDelta(delta);
+      }
       // A length/content_filter truncation ends the stream normally (no throw)
       // — detect it so the truncated payload enters the retry path instead of
       // being silently recovered as [] by parseEdits (which would bypass the
