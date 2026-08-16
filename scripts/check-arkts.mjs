@@ -186,12 +186,17 @@ function runCompile() {
   return (r.stdout ?? "") + (r.stderr ?? "");
 }
 
-/** Parse error lines → Map<absFile, Set<1-based line>>; returns {} if clean. */
+/** Parse error locations → Map<absFile, Set<1-based line>>; empty if clean.
+ *  ArkTS errors span multiple lines: `Error Message: <line1>\n  <line2>. At
+ *  File: <path>:<line>:<col>`. The `At File:` marker may sit on a continuation
+ *  line, so a single-line regex misses them (and falsely reports "0 errors").
+ *  Scan EVERY line for `At File: <path>:<line>:<col>` — that marker is specific
+ *  to errors (WARNs use `ArkTS:WARN File:`), so each hit is one error site. */
 function parseErrors(out) {
   const byFile = new Map();
+  const re = /At File: (\S+):(\d+):(\d+)/g;
   let m;
-  ERR_RE.lastIndex = 0;
-  while ((m = ERR_RE.exec(out)) !== null) {
+  while ((m = re.exec(out)) !== null) {
     const file = m[1];
     const line = Number(m[2]);
     if (!file || !line) continue;
@@ -199,6 +204,26 @@ function parseErrors(out) {
     byFile.get(file).add(line);
   }
   return byFile;
+}
+
+/** Undo the generator's TS-LS self-repair over-comments so hvigor (ground
+ *  truth) re-evaluates them. TS-LS is more permissive than ArkTS on type
+ *  compat (misses real errors) AND stricter on name resolution (over-comments
+ *  valid lines). Restoring `// <code>;  // omitted: would not compile (NNNN)`
+ *  back to `<code>;` lets hvigor keep the compilable ones (recovered detection)
+ *  and re-comment only genuinely-broken lines. */
+function uncommentTsLsOmissions() {
+  let count = 0;
+  for (const file of corpusFiles()) {
+    const arr = readFileSync(file, "utf8").split(/\r?\n/);
+    let changed = false;
+    for (let i = 0; i < arr.length; i++) {
+      const m = arr[i].match(/^(\s*)\/\/ (.+?);  \/\/ omitted: would not compile \(\d+\)$/);
+      if (m) { arr[i] = `${m[1]}${m[2]};`; count++; changed = true; }
+    }
+    if (changed) writeFileSync(file, arr.join("\n"), "utf8");
+  }
+  if (count) console.log(`un-comment: restored ${count} TS-LS-omitted line(s) for hvigor re-check`);
 }
 
 /** Comment out (prepend `// ` to) the given 1-based lines in a file, in place. */
@@ -219,21 +244,25 @@ function commentLines(file, lines) {
 
 function main() {
   patchSdkDeviceDefine();
+  uncommentTsLsOmissions();
   let total = 0;
   for (let iter = 1; iter <= MAX_ITERS; iter++) {
     const out = runCompile();
     const byFile = parseErrors(out);
     const errorCount = [...byFile.values()].reduce((n, s) => n + s.size, 0);
-    if (errorCount === 0) {
-      // Confirm via the COMPILE RESULT line.
-      if (/COMPILE RESULT:FAIL/.test(out) && /ERROR:0\b|ERROR: 0\b/.test(out)) {
-        // fall through to success
-      }
-      const ok = /COMPILE RESULT:SUCCESS|Finished|BUILD SUCCESSFUL/.test(out) ||
-                 (/COMPILE RESULT:FAIL/.test(out) === false);
+    const failed = /COMPILE RESULT:FAIL|BUILD FAILED/.test(out);
+    if (errorCount === 0 && !failed) {
       console.log(`iter ${iter}: 0 ArkTS errors — clean compile`);
       console.log(`done: commented ${total} line(s) over ${iter - 1} repair round(s)`);
       return;
+    }
+    if (errorCount === 0 && failed) {
+      // hvigor failed but the parser found no `At File:` site — an unparsed
+      // error format. Surface it rather than falsely reporting "clean".
+      console.error(`iter ${iter}: BUILD FAILED but 0 error locations parsed (unparsed diagnostic)`);
+      const idx = out.indexOf("Error Message:");
+      if (idx >= 0) console.error(out.slice(idx, idx + 600));
+      process.exit(1);
     }
     let fixed = 0;
     for (const [file, lines] of byFile) {

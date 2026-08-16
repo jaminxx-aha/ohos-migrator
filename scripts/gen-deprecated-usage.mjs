@@ -546,6 +546,24 @@ function exportedNamespaceMember(topSf, nsName, name) {
   return false;
 }
 
+/** Is `name` declared (exported OR not) as one of `kinds` directly inside the
+ *  ambient `declare namespace <nsName>` in `topSf`? Unlike exportedNamespaceMember,
+ *  this is export-agnostic — ambient `declare namespace` members are reachable
+ *  via the binding even without an `export` modifier (verified: `bluetooth.ScanMode`
+ *  compiles though `enum ScanMode` lacks `export`). Used to qualify enum/type
+ *  references in placeholders where reachability is what matters, not export-ness. */
+function namespaceDeclaresMember(topSf, nsName, name, kinds) {
+  if (!topSf || !nsName || !name) return false;
+  const ns = findNamespaceDecl(topSf, nsName);
+  if (!ns) return false;
+  for (const k of kinds) {
+    for (const d of getDescendantsOfKind(ns, k)) {
+      if (nameableName(d) === name) return true;
+    }
+  }
+  return false;
+}
+
 const NAMESPACE_VALUE_KINDS = [
   SyntaxKind.FunctionDeclaration,
   SyntaxKind.VariableStatement,
@@ -735,7 +753,21 @@ function placeholderForType(typeText, ctx, depth = 0) {
   const lit = core.match(/^'[^']*'|^"[^"]*"|^\d+(\.\d+)?$/);
   if (lit) return lit[0];
   if (/\bAsyncCallback\b/.test(core) || core.startsWith("(") || /=>/.test(core) ||
-      /\bFunction\b/.test(core) || /^(ErrorCallback|Callback)</.test(core)) return "() => {}";
+      /\bFunction\b/.test(core) || /^(ErrorCallback|Callback)</.test(core)) {
+    // Callback placeholder must match the declared return type, else ArkTS
+    // rejects `() => {}` (void) for `(...) => string` (10505001). Extract the
+    // return type after `=>` and recurse for its value placeholder; default to
+    // `() => {}` when there is no `=>` or the return type is void/unconstructible.
+    const arrow = core.indexOf("=>");
+    if (arrow >= 0) {
+      const ret = core.slice(arrow + 2).trim().replace(/[);]+$/, "").trim();
+      if (ret && !/^(void|undefined)$/.test(ret)) {
+        const rp = placeholderForType(ret, ctx, depth + 1);
+        if (rp !== OMIT) return `() => ${rp}`;
+      }
+    }
+    return "() => {}";
+  }
   if (/\[\]$/.test(core) || core.startsWith("Array<") || core.startsWith("ReadonlyArray<")) return "[]";
   if (core.startsWith("[")) return OMIT; // tuple — element-wise construction is unreliable
   if (/^Uint8Array/.test(core) || core.startsWith("ArrayBuffer")) return "new Uint8Array(0)";
@@ -751,9 +783,11 @@ function placeholderForType(typeText, ctx, depth = 0) {
   if (rk === SyntaxKind.EnumDeclaration) {
     const member = firstEnumMember(rd);
     if (!member) return OMIT;
-    // Qualify if the enum is a namespace member (reached via the binding),
-    // not a module-level named export.
-    const ref = exportedNamespaceMember(ctx.topSf, ctx.binding, simple)
+    // Qualify if the enum is declared inside the kit's (ambient) namespace —
+    // ambient namespace members are reachable via the binding even without an
+    // `export` modifier (verified: `bluetooth.ScanMode` compiles). Falls back to
+    // the bare name only for genuine module-level named exports.
+    const ref = namespaceDeclaresMember(ctx.topSf, ctx.binding, simple, [SyntaxKind.EnumDeclaration])
       ? `${ctx.binding}.${simple}` : simple;
     return `${ref}.${member}`;
   }
@@ -877,7 +911,7 @@ function emitUsage(sym, ctx) {
     const r = root; // binding (default form) or exportName (named)
     switch (kind) {
       case SyntaxKind.FunctionDeclaration:
-        return { lines: [`${note}\n${r}(${argsFor(decl, argCtx)});`], namedImports };
+        return { lines: [`${note}\n${callOrBare(r, decl, argCtx)}`], namedImports };
       case SyntaxKind.VariableStatement:
       case SyntaxKind.VariableDeclaration:
         return { lines: [`${note}\nconst ${argCtx.nextVar()} = ${r};`], namedImports };
@@ -982,16 +1016,16 @@ function emitMember(typeExpr, leaf, kind, decl, note, argCtx, namedImports) {
     const rt = withTypeArgs(typeExpr, decl, kind);
     const v = argCtx.nextVar();
     const isCall = kind === SyntaxKind.MethodSignature;
-    const tail = isCall ? `${v}.${leaf}(${argsFor(decl, argCtx)});` : `${v}.${leaf};`;
+    const tail = isCall ? callOrBare(`${v}.${leaf}`, decl, argCtx) : `${v}.${leaf};`;
     return { lines: [`${note}\ndeclare let ${v}: ${rt}; ${tail}`], namedImports };
   }
   if (kind === SyntaxKind.MethodDeclaration) {
     if (isStatic(decl)) {
-      return { lines: [`${note}\n${typeExpr}.${leaf}(${argsFor(decl, argCtx)});`], namedImports };
+      return { lines: [`${note}\n${callOrBare(`${typeExpr}.${leaf}`, decl, argCtx)}`], namedImports };
     }
     const rt = withTypeArgs(typeExpr, decl, kind);
     const v = argCtx.nextVar();
-    return { lines: [`${note}\ndeclare let ${v}: ${rt}; ${v}.${leaf}(${argsFor(decl, argCtx)});`], namedImports };
+    return { lines: [`${note}\ndeclare let ${v}: ${rt}; ${callOrBare(`${v}.${leaf}`, decl, argCtx)}`], namedImports };
   }
   if (kind === SyntaxKind.PropertyDeclaration) {
     if (isStatic(decl)) {
@@ -1004,7 +1038,7 @@ function emitMember(typeExpr, leaf, kind, decl, note, argCtx, namedImports) {
   // Namespace-value leaves (no instance stub).
   switch (kind) {
     case SyntaxKind.FunctionDeclaration:
-      return { lines: [`${note}\n${typeExpr}.${leaf}(${argsFor(decl, argCtx)});`], namedImports };
+      return { lines: [`${note}\n${callOrBare(`${typeExpr}.${leaf}`, decl, argCtx)}`], namedImports };
     case SyntaxKind.VariableStatement:
     case SyntaxKind.VariableDeclaration:
     case SyntaxKind.EnumMember:
@@ -1033,6 +1067,19 @@ function withTypeArgs(typeExpr, decl, kind) {
 function argsFor(decl, argCtx) {
   const ps = getParameters(decl).filter((p) => !isParamOptional(p) && !hasInitializer(p));
   return ps.map((p) => placeholderFor(paramTypeText(p), argCtx)).join(", ");
+}
+
+/** Emit a call site, falling back to a bare member-access reference when any
+ *  required arg has no constructible placeholder (the `__omit__` sentinel).
+ *  `pre` is the expression up to (and including) the callee name, e.g. `v.leaf`,
+ *  `typeExpr.leaf`, or `r`. The bare fallback `<pre>;` references the deprecated
+ *  callable without invoking it — it compiles cleanly (no unconstructible arg)
+ *  and still fires 6385 (verified: `bluetooth.sppConnect;` triggers the deprec
+ *  WARN), so the symbol stays detected instead of being commented out. */
+function callOrBare(pre, decl, argCtx) {
+  const args = argsFor(decl, argCtx);
+  if (args.includes(OMIT)) return `${pre};`;
+  return `${pre}(${args});`;
 }
 
 /** First enum member name of an EnumDeclaration, or undefined. */
