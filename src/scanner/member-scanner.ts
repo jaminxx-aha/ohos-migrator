@@ -126,7 +126,7 @@ export function scanProjectMembers(opts: MemberScanOptions): MemberScanResult {
           const matchEnd = m.index + m[0].length;
           const f = classifyMemberCallSite(
             file, projectRoot, m.index, matchEnd, content, binding, members, e,
-            ctx, kitMove, pickBinding,
+            ctx, kitMove, pickBinding, map.kitExports,
           );
           if (!f) continue;
           const key = `${f.file}:${f.line}:${f.oldSymbol}`;
@@ -265,7 +265,12 @@ export function classifyMemberCallSite(
   e: DeprecationEntry,
   ctx: { uiContextExpr: string; windowStageExpr: string; windowExpr: string },
   kitMove: KitMoveResolver,
-  pickBinding: (kit: string) => { binding: string; injected: boolean },
+  pickBinding: (kit: string, forceNew?: boolean) => { binding: string; injected: boolean },
+  /** Serialized `kitTopLevelExports` from the deprecation map
+   *  (`Record<kit, string[]>`). Used by the reverse drop-in branch to tell
+   *  whether a kit-move member's replacement actually resolves in the moved-to
+   *  kit, and whether the deprecated (old) kit still exports the member. */
+  kitExports?: Record<string, string[]>,
 ): Finding | null {
   const fileRel = relative(projectRoot, file).split(sep).join("/");
   const oldSymbol = `${binding}.${members.join(".")}`;
@@ -306,8 +311,68 @@ export function classifyMemberCallSite(
       replacement,
     };
   }
+  // Branch A': reverse drop-in — the kit moved (so `rewrite-import` will
+  // re-point this binding to the new kit), but this member has NO reachable
+  // target in the moved-to kit: it was removed (repl null) OR its @useinstead
+  // names a member the new kit doesn't export (stale). The blanket import
+  // swap would break the reference. Since the deprecated (old) kit still
+  // resolves and still exports the member, keep the reference on the old kit
+  // via a freshly-injected import under a new binding (forced new — the
+  // existing binding is about to be swapped away). The call site still uses a
+  // deprecated symbol (scanner keeps flagging it) but now compiles, with a
+  // note marking it for human review. Members that DID travel to the new kit
+  // are unaffected — `memberTargetMissingInMovedKit` is false for them, so
+  // they fall through to the aligned-suppress path and migrate via the swap.
+  const movedTo = kitMove(e.dep.kit);
+  if (movedTo && memberTargetMissingInMovedKit(e, movedTo, kitExports) && oldKitStillExports(e, kitExports)) {
+    const { binding: oldBinding } = pickBinding(e.dep.kit, true);
+    const chain = members.join(".");
+    const replacement = `${oldBinding}.${chain}`;
+    return {
+      file: fileRel,
+      line: lineAt(content, offset),
+      oldSymbol,
+      newSymbol: replacement,
+      since: e.since,
+      rule: "rename-member",
+      needsManual: true,
+      note: `kept on deprecated ${e.dep.kit} (no target in moved kit ${movedTo})`,
+      matchStart: offset,
+      matchEnd,
+      replacement,
+    };
+  }
   // Branch C: override / describeMemberReplacement / manual.
   return memberFinding(file, projectRoot, offset, matchEnd, content, binding, members, e, ctx, kitMove);
+}
+
+/**
+ * Whether a kit-moved member has no reachable target in the moved-to kit.
+ * True when the member was removed (no `@useinstead`, `repl` null) OR the
+ * `@useinstead` points at the moved-to kit but names a member that kit does
+ * not export (stale metadata). A `@useinstead` pointing at a *different* kit
+ * is a genuine cross-kit target handled elsewhere — false here.
+ */
+function memberTargetMissingInMovedKit(
+  e: DeprecationEntry,
+  movedTo: string,
+  kitExports?: Record<string, string[]>,
+): boolean {
+  const repl = e.repl;
+  if (!repl || !repl.members?.length) return true; // removed: no @useinstead
+  if (repl.kit === movedTo) {
+    // aligned target — is the named member actually exported by the new kit?
+    return !(kitExports?.[movedTo] ?? []).includes(repl.members[0]);
+  }
+  return false; // points elsewhere: not a reverse drop-in
+}
+
+/** Whether the deprecated (old) kit still resolves and still exports the
+ *  member's first segment — so a reverse drop-in rebind will actually resolve. */
+function oldKitStillExports(e: DeprecationEntry, kitExports?: Record<string, string[]>): boolean {
+  const seg = e.dep.members?.[0];
+  if (!seg) return false;
+  return (kitExports?.[e.dep.kit] ?? []).includes(seg);
 }
 
 function memberFinding(
@@ -568,8 +633,16 @@ export function extractBindingMap(content: string): BindingMap {
  * paths produce identical injected imports.
  */
 export interface BindingAllocator {
-  /** Resolve a binding for a (possibly new) kit, allocating one if needed. */
-  pickBinding: (kit: string) => { binding: string; injected: boolean };
+  /** Resolve a binding for a (possibly new) kit, allocating one if needed.
+   *
+   *  `forceNew` skips the reuse of an existing local binding for `kit` and
+   *  always allocates a fresh name (queueing an `inject-import`). This is
+   *  needed for a *reverse drop-in*: when the kit moved (`kitIndex.newKit`),
+   *  the existing local binding for the old kit is about to be re-pointed to
+   *  the new kit by `rewrite-import`, so reusing it for a member that must
+   *  stay on the deprecated old kit would silently break it. Forcing a new
+   *  binding yields a distinct name that survives the import swap. */
+  pickBinding: (kit: string, forceNew?: boolean) => { binding: string; injected: boolean };
   /**
    * Build the single per-file `inject-import` finding for every kit allocated
    * via `pickBinding`, anchored at the start of the line after the last import
@@ -596,9 +669,11 @@ export function createBindingAllocator(
     if (!kitToBinding.has(k)) kitToBinding.set(k, b);
   }
   const allocated = new Map<string, { binding: string; planned: true }>();
-  const pickBinding = (kit: string): { binding: string; injected: boolean } => {
-    const existing = kitToBinding.get(kit);
-    if (existing) return { binding: existing, injected: false };
+  const pickBinding = (kit: string, forceNew = false): { binding: string; injected: boolean } => {
+    if (!forceNew) {
+      const existing = kitToBinding.get(kit);
+      if (existing) return { binding: existing, injected: false };
+    }
     const hit = allocated.get(kit);
     if (hit) return { binding: hit.binding, injected: true };
     // Derive a stable name from the kit's last segment, suffixing on collision

@@ -2635,27 +2635,33 @@ test("indexer: relocated-kit member flagged memberPreservedByMove only when pres
   } finally { cleanup(sdk); }
 });
 
-test("scan + rewrite: preserved member suppressed, removed member still reported (kit move)", () => {
+test("scan + rewrite: preserved member suppressed, removed member reverse-dropin'd (kit move)", () => {
   const sdk = movedSdk();
   const root = makeTree({
     "p.ts":
       `import { fakeConst } from '@ohos.ability.fakeConst';\n` +
       `fakeConst.Flags.F1;\n` +   // preserved -> suppressed (kit-move rewrite covers it)
-      `fakeConst.Flags.F2;\n` +   // removed -> manual finding
-      `fakeConst.Action.A;\n`,    // removed -> manual finding
+      `fakeConst.Flags.F2;\n` +   // dropped in new kit -> reverse-dropin to old kit
+      `fakeConst.Action.A;\n`,    // enum dropped in new kit -> reverse-dropin to old kit
   });
   try {
     const map = buildDeprecationMap({ sdkApiDir: sdk, apiVersion: 12, generatedAt: "" });
     const { findings } = scanProjectMembers({ projectRoot: root, map });
     // F1 is preserved: NO member finding (the kit-move import rewrite handles it).
     assert.ok(!bySymbol(findings as any, "fakeConst.Flags.F1"), "F1 preserved -> no member finding");
-    // F2 and Action.A were dropped: manual findings still surface them.
+    // F2 and Action.A were dropped from the NEW kit but the deprecated (old) kit
+    // still exports them. The blanket import swap would re-point the binding to
+    // the new kit and break these; instead they are reverse-dropin'd: rebound to
+    // a freshly-injected OLD-kit import (compiles, still deprecated) and flagged
+    // for human review (needsManual). Migrated members are unaffected.
     const f2 = bySymbol(findings as any, "fakeConst.Flags.F2");
-    assert.equal(f2?.rule, "manual");
+    assert.equal(f2?.rule, "rename-member");
     assert.equal(f2?.needsManual, true);
+    assert.match(f2?.replacement ?? "", /fakeConst\d*\.Flags\.F2/, "F2 rebound to old-kit binding");
     const aa = bySymbol(findings as any, "fakeConst.Action.A");
-    assert.equal(aa?.rule, "manual");
+    assert.equal(aa?.rule, "rename-member");
     assert.equal(aa?.needsManual, true);
+    assert.match(aa?.replacement ?? "", /fakeConst\d*\.Action\.A/, "Action.A rebound to old-kit binding");
   } finally { cleanup(sdk); cleanup(root); }
 });
 

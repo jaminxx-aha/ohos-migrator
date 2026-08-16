@@ -150,7 +150,7 @@ export function scanProjectDeprecatedMembers(opts: MemberScanOptions): Diagnosti
             if (!entryEligible(e, kit, map, since)) continue;
             const f = classifyMemberCallSite(
               file, projectRoot, pae.getStart(sf), pae.getEnd(), content,
-              leftmostText, fullChain, e, ctx, kitMove, pickBinding,
+              leftmostText, fullChain, e, ctx, kitMove, pickBinding, map.kitExports,
             );
             insertDedupe(dedupe, f);
           }
