@@ -92,6 +92,11 @@ export function scanProjectMembers(opts: MemberScanOptions): MemberScanResult {
   // would otherwise emit duplicate findings for one call site. Prefer an
   // auto-fixable rename-member over a manual one.
   const dedupe = new Map<string, Finding>();
+  // Kits whose module shape is `declare namespace <ns> { ... } export default
+  // <ns>` — members are reachable only via the DEFAULT import, so the
+  // per-file binding allocator must emit `import X from '<kit>'` (not the
+  // namespace form) when injecting a fresh binding for one of these.
+  const defaultExportKits = new Set(Object.keys(map.kitDefaultExport ?? {}));
 
   for (const file of files) {
     let content: string;
@@ -105,7 +110,7 @@ export function scanProjectMembers(opts: MemberScanOptions): MemberScanResult {
     // cross-kit target when the file already imports it, else allocates a
     // collision-free name and records a pending `inject-import`. Shared with
     // the TS-LS scanner so both detection paths allocate bindings identically.
-    const alloc = createBindingAllocator(content);
+    const alloc = createBindingAllocator(content, defaultExportKits);
     const pickBinding = alloc.pickBinding;
 
     for (const [binding, kit] of bindings) {
@@ -199,7 +204,25 @@ export function entryEligible(
 ): boolean {
   if (since && e.since > since) return false;
   const exportIndex = map.exportIndex ?? {};
-  if (e.dep.exportName && exportIndex[`${kit}\0${e.dep.exportName}`]) return false;
+  if (e.dep.exportName && exportIndex[`${kit}\0${e.dep.exportName}`]) {
+    // The whole export is deprecated/moved and covered by an import-level
+    // rewrite (rewrite-import re-points the binding), so a member finding is
+    // normally redundant. EXCEPT when this member is RENAMED in the target
+    // kit (the repl chain differs from the dep chain): the import swap alone
+    // re-points the binding but leaves the OLD member name unresolved on the
+    // new kit (e.g. `bluetooth.CharacteristicReadReq` -> binding re-pointed to
+    // `@ohos.bluetoothManager`, whose member is `CharacteristicReadRequest`),
+    // so the member finding MUST be emitted to let the rewriter splice the new
+    // name. Preserved-by-move members (same name) stay suppressed here and via
+    // `memberPreservedByMove` below.
+    const rMembers = e.repl?.members;
+    const dMembers = e.dep.members;
+    const renamed =
+      !!rMembers &&
+      !!dMembers &&
+      !(rMembers.length === dMembers.length && rMembers.every((m, i) => m === dMembers[i]));
+    if (!renamed) return false;
+  }
   const crossKitDropin = map.crossKitDropin ?? {};
   if (e.dep.exportName && e.repl && e.repl.members && e.dep.members) {
     const dropin =
@@ -561,7 +584,10 @@ export interface BindingAllocator {
  * `pickBinding` calls mutate the shared `allocated` map so a single
  * `injectImports` call emits all pending injections.
  */
-export function createBindingAllocator(content: string): BindingAllocator {
+export function createBindingAllocator(
+  content: string,
+  defaultExportKits?: Set<string>,
+): BindingAllocator {
   const bindings = extractBindingMap(content);
   const kitToBinding = new Map<string, string>();
   const usedBindings = new Set<string>();
@@ -595,7 +621,16 @@ export function createBindingAllocator(content: string): BindingAllocator {
       ? (() => { const nl = content.indexOf("\n", maxSpecEnd); return nl === -1 ? content.length : nl + 1; })()
       : 0;
     const text =
-      [...allocated.entries()].map(([k, a]) => `import * as ${a.binding} from '${k}';`).join("\n") + "\n";
+      [...allocated.entries()].map(([k, a]) =>
+        // A kit with `export default <ns>` exposes its namespace members only
+        // via the DEFAULT import (`import X from '<kit>'`); the namespace form
+        // `import * as X` yields `{ default: <ns> }` and `X.<member>` is
+        // unreachable. Emit the form that matches the kit's actual export shape
+        // so the rebind `X.<member>` resolves.
+        defaultExportKits?.has(k)
+          ? `import ${a.binding} from '${k}';`
+          : `import * as ${a.binding} from '${k}';`,
+      ).join("\n") + "\n";
     return [{
       file: relative(projectRoot, file).split(sep).join("/"),
       line: lineAt(content, anchor),

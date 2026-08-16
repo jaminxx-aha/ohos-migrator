@@ -113,7 +113,10 @@ export function scanProjectDeprecatedMembers(opts: MemberScanOptions): Diagnosti
     if (!sf) continue; // failed to parse (e.g. ArkUI-only errors blocked it)
 
     const bindingMap = extractBindingMap(content);
-    const alloc = createBindingAllocator(content);
+    const alloc = createBindingAllocator(
+      content,
+      new Set(Object.keys(map.kitDefaultExport ?? {})),
+    );
     const pickBinding = alloc.pickBinding;
 
     let diags: ts.Diagnostic[];
@@ -125,8 +128,9 @@ export function scanProjectDeprecatedMembers(opts: MemberScanOptions): Diagnosti
     for (const d of diags) {
       if (d.code !== 6385 && d.code !== 6387) continue;
       if (d.start == null) continue;
-      const pae = findEnclosingPropertyAccess(sf, d.start);
+      const pae = findEnclosingMemberAccess(sf, d.start);
       if (!pae) continue;
+      const isTypeRef = ts.isQualifiedName(pae);
       const split = splitToReceiver(pae, sf);
       if (!split) continue;
       const { leftmostText, fullChain } = split;
@@ -134,6 +138,10 @@ export function scanProjectDeprecatedMembers(opts: MemberScanOptions): Diagnosti
       if (bindingMap.has(leftmostText)) {
         // Static path: receiver is an import binding. Kit comes from the
         // binding's import; accessChain is the full chain after the binding.
+        // Applies to BOTH value-position property access AND type-position
+        // qualified names (e.g. `bluetooth.CharacteristicReadReq` in a type
+        // annotation) — a deprecated type referenced in a type annotation
+        // still needs its rename spliced when its kit moved/renamed it.
         const kit = bindingMap.get(leftmostText)!;
         const entries = memberIndex[kit];
         if (entries) {
@@ -149,6 +157,11 @@ export function scanProjectDeprecatedMembers(opts: MemberScanOptions): Diagnosti
         }
         continue;
       }
+
+      // Type-position qualified names have no instance semantics (you don't
+      // call a method on a type reference), so the instance path below only
+      // applies to value-position property access.
+      if (isTypeRef) continue;
 
       // Instance path: receiver is a local variable. Resolve its type via the
       // checker (constructor return type, factory call, Promise unwrap, ...).
@@ -269,17 +282,24 @@ function buildLanguageService(files: string[], sdkApiDir: string): LsBundle {
 /* AST helpers — locate the deprecated property access + split it.     */
 /* ------------------------------------------------------------------ */
 
-/** Deepest `PropertyAccessExpression` whose span contains `pos`. */
-function findEnclosingPropertyAccess(
+/** Deepest deprecated member access whose span contains `pos`. This is a
+ *  `PropertyAccessExpression` in value position (`ns.member()` / `ns.member`)
+ *  OR a `QualifiedName` in type position (`: ns.MemberType`). Both shapes can
+ *  carry a 6385 deprecation diagnostic, and both need their rename spliced
+ *  when the member moved/renamed across a kit — type annotations reference
+ *  deprecated types just as much as value accesses. */
+function findEnclosingMemberAccess(
   sf: ts.SourceFile,
   pos: number,
-): ts.PropertyAccessExpression | undefined {
-  let best: ts.PropertyAccessExpression | undefined;
+): ts.PropertyAccessExpression | ts.QualifiedName | undefined {
+  let best: ts.PropertyAccessExpression | ts.QualifiedName | undefined;
   function visit(node: ts.Node): void {
     const start = node.getStart(sf);
     const end = node.getEnd();
     if (pos < start || pos >= end) return;
-    if (ts.isPropertyAccessExpression(node)) best = node;
+    if (ts.isPropertyAccessExpression(node) || ts.isQualifiedName(node)) {
+      best = node;
+    }
     ts.forEachChild(node, visit);
   }
   visit(sf);
@@ -293,19 +313,26 @@ interface PaeSplit {
   fullChain: string[];
 }
 
-/** Walk a PAE leftwards to the root identifier, collecting the member chain. */
+/** Walk a PAE (value) or QualifiedName (type) leftwards to the root identifier,
+ *  collecting the member chain. PropertyAccessExpression chains via
+ *  `.expression`/`.name`; QualifiedName (type position) via `.left`/`.right` —
+ *  same shape, different field names. */
 function splitToReceiver(
-  pae: ts.PropertyAccessExpression,
+  node: ts.PropertyAccessExpression | ts.QualifiedName,
   sf: ts.SourceFile,
 ): PaeSplit | undefined {
   const chain: string[] = [];
-  let node: ts.Expression = pae;
-  while (ts.isPropertyAccessExpression(node)) {
-    chain.unshift(node.name.text);
-    node = node.expression;
+  let cur: ts.PropertyAccessExpression | ts.QualifiedName | ts.Expression = node;
+  while (ts.isPropertyAccessExpression(cur)) {
+    chain.unshift(cur.name.text);
+    cur = cur.expression;
   }
-  if (!ts.isIdentifier(node)) return undefined; // e.g. `(a.b).c` or `fn().x`
-  return { leftmostText: node.getText(sf), fullChain: chain };
+  while (ts.isQualifiedName(cur)) {
+    chain.unshift(cur.right.text);
+    cur = cur.left;
+  }
+  if (!ts.isIdentifier(cur)) return undefined; // e.g. `(a.b).c` or `fn().x`
+  return { leftmostText: cur.getText(sf), fullChain: chain };
 }
 
 /* ------------------------------------------------------------------ */

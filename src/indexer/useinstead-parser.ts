@@ -27,7 +27,25 @@ export interface ParsedUseinstead {
   kit?: string;
   exportName?: string;
   members: string[];
+  /** True when the token names a standard JS global (e.g. `Intl.*`) rather
+   *  than an `@ohos` kit. Such a `@useinstead` migrates the deprecated symbol
+   *  to a GLOBAL namespace — the rewriter would have to drop the kit binding
+   *  and emit a bare global reference, which it can't splice mechanically, so
+   *  `toReplSymbol` returns null (→ manual) rather than mis-attribute the
+   *  global to the current file's kit (which produces a backwards rename:
+   *  `intl.DateTimeOptions` -> `intl.DateTimeFormatOptions`, referencing a
+   *  member that does not exist on `@ohos.intl`). */
+  global?: boolean;
 }
+
+/** Standard JS global object/namespace names that can appear in a `@useinstead`
+ *  token to mean "use the builtin, not an @ohos kit" (observed: `Intl.*`).
+ *  Conservative set — extend only when the SDK actually emits more. */
+const JS_GLOBALS = new Set([
+  "Intl", "JSON", "Math", "console", "Date", "Promise", "Array", "Object",
+  "Error", "Number", "String", "Boolean", "Map", "Set", "WeakMap", "WeakSet",
+  "Symbol", "RegExp", "ArrayBuffer", "DataView", "Reflect", "Proxy",
+]);
 
 /**
  * @param token       the raw `@useinstead` value (single whitespace-free token)
@@ -50,6 +68,15 @@ export function parseUseinstead(
 ): ParsedUseinstead {
   let rest = token;
   let kit: string | undefined;
+
+  // A token rooted at a standard JS global (`Intl.DateTimeFormatOptions`)
+  // names a builtin, not an @ohos kit. Detect this BEFORE the fallback-kit
+  // branch would mis-attribute `Intl` to the current file's kit.
+  const headEnd = rest.search(/[.#]/);
+  const headIdent = headEnd === -1 ? rest : rest.slice(0, headEnd);
+  if (JS_GLOBALS.has(headIdent)) {
+    return { members: [], global: true };
+  }
 
   if (rest.startsWith("ohos.")) {
     kit = longestKitPrefix(rest, knownKits, kitLookup);
@@ -213,22 +240,31 @@ export function describeReplacement(parsed: ParsedUseinstead | null): string | n
   return s;
 }
 
-/** Build a ReplSymbol (without the `@` on kit) for storage. */
-export function toReplSymbol(parsed: ParsedUseinstead): ReplSymbol {
+/** Build a ReplSymbol (without the `@` on kit) for storage. Returns null
+ *  for a global reference (see `ParsedUseinstead.global`): the @useinstead
+ *  points at a JS builtin, which the rewriter cannot splice mechanically, so
+ *  the entry falls back to manual rather than corrupt the call site. */
+export function toReplSymbol(parsed: ParsedUseinstead): ReplSymbol | null {
+  if (parsed.global) return null;
   const r: ReplSymbol = {};
   if (parsed.kit) r.kit = parsed.kit; // already `@ohos.x.y`
   if (parsed.exportName) r.exportName = parsed.exportName;
   if (parsed.members?.length) {
-    // Strip `name:value` parse artifacts. JS member names cannot contain a
-    // colon, so any segment with `:` is a leaked @useinstead hint, not a real
-    // code member — most often the trailing event-name hint on `on`/`off`
-    // event subscriptions (e.g. `ohos.bluetooth.connection/connection.on#event:bluetoothDeviceFind`
-    // parses to members `[on, event:bluetoothDeviceFind]`; the event name is
-    // already passed as a string arg at the call site, so the real replacement
-    // is just `on`). Dropping the artifact yields the true member chain, which
-    // is then byte-identical to the deprecated chain (a path-preserving
-    // cross-kit move) and safe to rebind.
-    r.members = parsed.members.filter((m) => !m.includes(":"));
+    // Strip parse artifacts. A real JS member name is a bare identifier; any
+    // segment that isn't one is a leaked @useinstead token, not a code member:
+    //   - `:` trailing event-name hints on `on`/`off` subscriptions
+    //     (e.g. `connection.on#event:bluetoothDeviceFind` parses to
+    //     `[on, event:bluetoothDeviceFind]`; the event name is already passed
+    //     as a string arg at the call site, so the real replacement is `on`).
+    //   - `(` / `"` / `'` from a `@useinstead` that names a *call* with a
+    //     literal arg, e.g. `global#canIUse("SystemCapability.NFC.Core")` —
+    //     the arg can't be spliced mechanically, so the symbol must fall back
+    //     to `manual` (rewriter leaves it with a hint) rather than corrupt it.
+    // Dropping the artifact segments yields the true member chain, which for a
+    // path-preserving cross-kit move is byte-identical to the deprecated chain
+    // and safe to rebind. When the artifact IS the leaf (the canIUse case),
+    // nothing remains and the symbol becomes `manual`.
+    r.members = parsed.members.filter((m) => /^[A-Za-z_$][\w$]*$/.test(m));
   }
   return r;
 }

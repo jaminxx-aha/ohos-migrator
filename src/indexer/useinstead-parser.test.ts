@@ -77,7 +77,7 @@ test("case-insensitive bare-identifier kit resolves via kitLookup", () => {
 });
 
 test("toReplSymbol normalizes kit with leading @", () => {
-  const r = toReplSymbol(parseUseinstead("ohos.router/Router.pushUrl", KITS));
+  const r = toReplSymbol(parseUseinstead("ohos.router/Router.pushUrl", KITS))!;
   assert.equal(r.kit, "@ohos.router");
   assert.equal(r.exportName, "Router");
   assert.deepEqual(r.members, ["pushUrl"]);
@@ -95,7 +95,7 @@ test("toReplSymbol strips name:value event-hint artifacts", () => {
   const parsed = parseUseinstead("ohos.bluetooth.connection/connection.on#event:bluetoothDeviceFind", kits);
   assert.equal(parsed.exportName, "connection");
   assert.deepEqual(parsed.members, ["on", "event:bluetoothDeviceFind"]);
-  const r = toReplSymbol(parsed);
+  const r = toReplSymbol(parsed)!;
   assert.deepEqual(r.members, ["on"]);
 });
 
@@ -105,13 +105,13 @@ test("toReplSymbol drops multiple colon-bearing segments, keeps clean ones", () 
   // Manually craft a members array with an artifact mid-segment to confirm
   // filtering is per-segment, not all-or-nothing.
   const crafted = { kit: "@ohos.x", exportName: "x", members: ["a", "b:c", "d"] };
-  const r = toReplSymbol(crafted as never);
+  const r = toReplSymbol(crafted as never)!;
   assert.deepEqual(r.members, ["a", "d"]);
 });
 
 test("toReplSymbol preserves a clean chain unchanged", () => {
   // No `:` artifacts -> members pass through verbatim (no accidental stripping).
-  const r = toReplSymbol(parseUseinstead("ohos.router/Router.pushUrl", KITS));
+  const r = toReplSymbol(parseUseinstead("ohos.router/Router.pushUrl", KITS))!;
   assert.deepEqual(r.members, ["pushUrl"]);
 });
 
