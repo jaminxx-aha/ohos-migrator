@@ -32,7 +32,16 @@ export interface AiConfig {
   apiKey: string;
   model: string;
   concurrency?: number;
+  /** Max idle gap (ms) between stream chunks — the primary AI timeout. Env
+   *  OHOS_MIGRATOR_AI_TIMEOUT_MS (default 120000). */
   timeoutMs?: number;
+  /** Hard total cap (ms) — backstop for a slow-but-progressing stream. Env
+   *  OHOS_MIGRATOR_AI_MAX_TOTAL_MS (default 600000). */
+  maxTotalMs?: number;
+  /** Conversation log path (prompt + streamed response + errors; key redacted).
+   *  Defaults to <projectRoot>/logs/ai-conversation.log. Set to /dev/null to
+   *  silence. Env OHOS_MIGRATOR_AI_LOG_FILE / flag --ai-log-file. */
+  logFile?: string;
 }
 
 export interface AiConfigFlags {
@@ -40,6 +49,7 @@ export interface AiConfigFlags {
   aiBaseUrl?: string;
   aiApiKey?: string;
   aiModel?: string;
+  aiLogFile?: string;
 }
 
 export const CONFIG_FILENAME = ".env";
@@ -111,13 +121,51 @@ export function resolveAiConfig(
     process.env.OPENAI_MODEL,
   );
   if (!baseUrl || !apiKey || !model) return undefined;
+  const rawLogFile = first(flags.aiLogFile, process.env.OHOS_MIGRATOR_AI_LOG_FILE) ?? defaultLogFile(projectRoot);
+  const logFile = sanitizeLogFile(rawLogFile, projectRoot);
   return {
     baseUrl,
     apiKey,
     model,
     concurrency: envNum("OHOS_MIGRATOR_AI_CONCURRENCY"),
     timeoutMs: envNum("OHOS_MIGRATOR_AI_TIMEOUT_MS"),
+    maxTotalMs: envNum("OHOS_MIGRATOR_AI_MAX_TOTAL_MS"),
+    logFile,
   };
+}
+
+/** Default conversation-log path: <projectRoot>/logs/ai-conversation.log
+ *  (falls back to cwd when projectRoot is unknown). The file is gitignored via
+ *  the repo's `*.log` rule, so the conversation is never committed. */
+function defaultLogFile(projectRoot?: string): string {
+  const base = projectRoot ?? process.cwd();
+  return join(base, "logs", "ai-conversation.log");
+}
+
+/**
+ * Validate + normalize the conversation-log path. Two defenses:
+ *
+ *   1. Cross-platform disable sentinels (/dev/null, nul, off, none) →
+ *      undefined, silencing logging on ALL platforms. (/dev/null only discards
+ *      on POSIX; on Windows it would create a stray <drive>:\dev\null file.)
+ *
+ *   2. Containment: the path MUST end in .log. This blocks rc/dotfile targets
+ *      (.zshrc / .bashrc / .profile / .env / …) — if the migrator appended
+ *      attacker-controlled migrated source (the file content is logged
+ *      verbatim) to such a file, the shell would source + execute it on next
+ *      start → RCE. A .log file is never auto-sourced by any shell. A path
+ *      that doesn't end in .log falls back to the safe default rather than
+ *      being honored, regardless of source (flag, env, or discovered .env) —
+ *      this closes the supply-chain vector where a cloned repo's .env sets
+ *      OHOS_MIGRATOR_AI_LOG_FILE=.zshrc.
+ */
+export function sanitizeLogFile(raw: string, projectRoot?: string): string | undefined {
+  const lf = raw.trim().toLowerCase();
+  if (lf === "" || lf === "/dev/null" || lf === "nul" || lf === "off" || lf === "none") {
+    return undefined;
+  }
+  if (!lf.endsWith(".log")) return defaultLogFile(projectRoot);
+  return raw;
 }
 
 export interface EnvTemplateField {
@@ -154,6 +202,8 @@ export function writeEnvTemplate(outPath: string, fromEnv = true): EnvTemplateRe
   const model = pick(["OHOS_MIGRATOR_AI_MODEL", "OPENAI_MODEL"]);
   const concurrency = pick(["OHOS_MIGRATOR_AI_CONCURRENCY"], "4");
   const timeoutMs = pick(["OHOS_MIGRATOR_AI_TIMEOUT_MS"], "120000");
+  const maxTotalMs = pick(["OHOS_MIGRATOR_AI_MAX_TOTAL_MS"], "600000");
+  const logFile = pick(["OHOS_MIGRATOR_AI_LOG_FILE"], "");
 
   const lines = [
     "# ohos-migrator AI client config (dotenv format).",
@@ -165,7 +215,13 @@ export function writeEnvTemplate(outPath: string, fromEnv = true): EnvTemplateRe
     `OHOS_MIGRATOR_AI_API_KEY=${quoteVal(apiKey)}`,
     `OHOS_MIGRATOR_AI_MODEL=${quoteVal(model)}`,
     `OHOS_MIGRATOR_AI_CONCURRENCY=${quoteVal(concurrency)}`,
+    "# timeoutMs = max idle gap (ms) between stream chunks before abort.",
     `OHOS_MIGRATOR_AI_TIMEOUT_MS=${quoteVal(timeoutMs)}`,
+    "# maxTotalMs = hard total cap (ms) — backstop for a slow stream.",
+    `OHOS_MIGRATOR_AI_MAX_TOTAL_MS=${quoteVal(maxTotalMs)}`,
+    "# logFile = where to append the AI conversation (key redacted).",
+    "# Empty = default (<projectRoot>/logs/ai-conversation.log); /dev/null = silence.",
+    `OHOS_MIGRATOR_AI_LOG_FILE=${quoteVal(logFile)}`,
   ];
   const content = lines.join("\n") + "\n";
   writeFileSync(outPath, content, "utf8");

@@ -18,6 +18,7 @@ import {
   loadAiEnv,
   discoverEnvPaths,
   writeEnvTemplate,
+  sanitizeLogFile,
   CONFIG_FILENAME,
 } from "./config.js";
 
@@ -302,4 +303,32 @@ test("writeEnvTemplate single-quotes $ values literally (no expansion)", () => {
     restoreEnv(snap);
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+/* ---- sanitizeLogFile ---- */
+
+test("sanitizeLogFile accepts a .log path as-is", () => {
+  assert.equal(sanitizeLogFile("/tmp/debug.log"), "/tmp/debug.log");
+  assert.equal(sanitizeLogFile("logs/x.log", "/proj"), "logs/x.log");
+});
+
+test("sanitizeLogFile refuses a non-.log path (rc/dotfile RCE guard) → default", () => {
+  // The classic RCE vector: an evil .env points the log at a shell rc file.
+  const out = sanitizeLogFile(".zshrc", "/proj");
+  assert.equal(out, join("/proj", "logs", "ai-conversation.log"));
+  // Other rc/dotfile targets also fall back to default:
+  for (const bad of [".bashrc", ".profile", "~/.bash_profile", ".env", "rc"]) {
+    assert.equal(sanitizeLogFile(bad, "/proj"), join("/proj", "logs", "ai-conversation.log"));
+  }
+});
+
+test("sanitizeLogFile silences logging on cross-platform sentinels", () => {
+  for (const s of ["off", "none", "nul", "/dev/null", "OFF", " None "]) {
+    assert.equal(sanitizeLogFile(s, "/proj"), undefined, `${s} should disable`);
+  }
+});
+
+test("sanitizeLogFile empty/whitespace → undefined (disable)", () => {
+  assert.equal(sanitizeLogFile("", "/proj"), undefined);
+  assert.equal(sanitizeLogFile("   ", "/proj"), undefined);
 });

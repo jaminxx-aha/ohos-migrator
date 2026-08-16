@@ -117,6 +117,7 @@ program
   .option("--ai-base-url <url>", "OpenAI-compatible base URL (env OHOS_MIGRATOR_AI_BASE_URL)")
   .option("--ai-api-key <key>", "API key for the AI endpoint (env OHOS_MIGRATOR_AI_API_KEY)")
   .option("--ai-model <name>", "model name (env OHOS_MIGRATOR_AI_MODEL)")
+  .option("--ai-log-file <path>", "append AI conversation (prompt+response, key redacted) to this log file (env OHOS_MIGRATOR_AI_LOG_FILE; default <project>/logs/ai-conversation.log)")
   .option("--patch-syscap", "allow patching the SDK device-define for @system.* syscap errors (TODO)")
   .action(async (opts) => {
     const map = loadMap(opts.sdk);

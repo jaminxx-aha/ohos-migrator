@@ -8,19 +8,45 @@
  * OpenAI-compatible APIs broadly support JSON mode but have uneven
  * strict-schema support, so the portable choice wins. The model is prompted to
  * emit `{"edits":[{oldText,newText,reason}]}` and we parse defensively.
+ *
+ * Transport: the response is consumed as a STREAM (`stream: true`). The PRIMARY
+ * timeout is an idle-gap watchdog — if no chunk arrives within `timeoutMs`
+ * (env `OHOS_MIGRATOR_AI_TIMEOUT_MS`, default 120s) the stream is aborted,
+ * because the model has stalled. This replaces a total wall-clock timeout: a
+ * slow-but-steady stream (chunks keep coming) completes in one attempt rather
+ * than tripping a blunt 120s cap and retrying; a true stall dies in idleMs. A
+ * generous hard total cap (`maxTotalMs`, default 10min) is a backstop so a
+ * pathologically slow stream can't run forever, and a 2-attempt client loop
+ * self-heals a transient mid-stream stall before surfacing the failure.
+ *
+ * Logging: every conversation (system+user prompt, streamed response, any
+ * error) is appended to `logFile` (default <projectRoot>/logs/ai-conversation.log,
+ * gitignored via *.log) so a failed migration can be diagnosed post hoc. The
+ * API key is redacted from the block before it is written.
  */
 
 import OpenAI from "openai";
+import { appendFileSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import type { AiEdit } from "./apply-edits.js";
 
 export interface AiClientOpts {
   baseUrl: string;
   apiKey: string;
   model: string;
-  /** Per-request timeout ms (default 120s). */
+  /** Max idle gap (ms) between stream chunks — the PRIMARY timeout. If no
+   *  chunk arrives within this window the stream is aborted (model stalled).
+   *  Default 120s. Env OHOS_MIGRATOR_AI_TIMEOUT_MS. */
   timeoutMs?: number;
+  /** Hard total cap (ms) — backstop so a slow-but-progressing stream can't
+   *  run forever. Default 600s (10min). Env OHOS_MIGRATOR_AI_MAX_TOTAL_MS. */
+  maxTotalMs?: number;
   /** Max concurrent file replacements (default 4). */
   concurrency?: number;
+  /** Append every AI conversation (prompt + streamed response + any error) to
+   *  this file. The API key is redacted. Default
+   *  <projectRoot>/logs/ai-conversation.log (gitignored via *.log). */
+  logFile?: string;
 }
 
 export interface RequestEditsResult {
@@ -41,6 +67,11 @@ Rules:
 - If you cannot safely fix a finding, omit an edit for it (do not guess).
 - Output ONLY the JSON object, no prose, no markdown fences.`;
 
+const DEFAULT_IDLE_MS = 120_000;
+const DEFAULT_TOTAL_MS = 600_000;
+/** Self-heal a mid-stream stall once before surfacing the failure. */
+const STREAM_ATTEMPTS = 2;
+
 export async function requestEdits(
   client: AiClientOpts,
   user: string,
@@ -49,25 +80,200 @@ export async function requestEdits(
   const openai = new OpenAI({
     baseURL: client.baseUrl,
     apiKey: client.apiKey,
-    timeout: client.timeoutMs ?? 120_000,
-    maxRetries: 2,
+    maxRetries: 2, // SDK-level retry on connection-setup / 5xx only (NOT mid-stream)
+    // No SDK `timeout`: the primary timeout is the streaming idle-gap watchdog
+    // below, so a steady-but-slow stream completes while a stall aborts fast.
   });
   const userPayload = retryErrors
     ? `${user}\n\n## Previous attempt failed hvigor compilation with these errors in this file:\n${retryErrors}\nFix the edits so the file compiles.`
     : user;
+  const idleMs = client.timeoutMs ?? DEFAULT_IDLE_MS;
+  const totalMs = client.maxTotalMs ?? DEFAULT_TOTAL_MS;
 
-  const completion = await openai.chat.completions.create({
+  let raw = "";
+  let lastError: string | undefined;
+  for (let attempt = 1; attempt <= STREAM_ATTEMPTS; attempt++) {
+    try {
+      raw = await streamCompletion(openai, {
+        model: client.model,
+        system: SYSTEM_PROMPT,
+        user: userPayload,
+        idleMs,
+        totalMs,
+      });
+      logConversation(client, SYSTEM_PROMPT, userPayload, raw, undefined, attempt);
+      return { edits: parseEdits(raw), raw };
+    } catch (e) {
+      lastError = e instanceof Error ? e.message : String(e);
+      // Retry once on a mid-stream stall / abort (self-heal). The final
+      // attempt's error is logged + surfaced below.
+    }
+  }
+  logConversation(client, SYSTEM_PROMPT, userPayload, raw, lastError, STREAM_ATTEMPTS);
+  // Surface the failure so the pipeline reverts this file to pre-AI (its
+  // catch handles "API failure → leave file at pre-AI"). Previously this
+  // returned {edits:[],raw:""} — but that read as "model returned no edits"
+  // in the report; throwing makes the network failure explicit.
+  throw new Error(`AI request failed after ${STREAM_ATTEMPTS} attempt(s): ${lastError ?? "unknown"}`);
+}
+
+/**
+ * Stream a chat completion, aborting if no chunk arrives for `idleMs` (stall)
+ * or after `totalMs` elapsed (runaway backstop). Returns the concatenated
+ * content. Uses an AbortController wired to both timers; a chunk resets the
+ * idle window, so only a genuine lack of progress triggers the abort.
+ */
+async function streamCompletion(
+  openai: OpenAI,
+  params: {
+    model: string;
+    system: string;
+    user: string;
+    idleMs: number;
+    totalMs: number;
+  },
+): Promise<string> {
+  const controller = new AbortController();
+  let abortReason: "idle" | "total" | undefined;
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const armIdle = (): void => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      abortReason = "idle";
+      controller.abort();
+    }, params.idleMs);
+  };
+  const totalTimer = setTimeout(() => {
+    abortReason = "total";
+    controller.abort();
+  }, params.totalMs);
+
+  let acc = "";
+  try {
+    // Arm the idle watchdog BEFORE create() so a hung connection-setup (the
+    // server accepts the socket but never sends a response) dies in idleMs,
+    // not only in the 600s totalTimer. controller.signal is wired into
+    // create(), so an idle abort here rejects create() into the catch with
+    // abortReason="idle".
+    armIdle();
+    const stream = await openai.chat.completions.create(
+      {
+        model: params.model,
+        messages: [
+          { role: "system", content: params.system },
+          { role: "user", content: params.user },
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0,
+        stream: true,
+      },
+      { signal: controller.signal },
+    );
+    armIdle(); // headers arrived (progress) — reset the idle window
+    for await (const chunk of stream) {
+      armIdle(); // a chunk arrived — reset the idle window
+      const delta = chunk.choices[0]?.delta?.content ?? "";
+      if (delta) acc += delta;
+      // A length/content_filter truncation ends the stream normally (no throw)
+      // — detect it so the truncated payload enters the retry path instead of
+      // being silently recovered as [] by parseEdits (which would bypass the
+      // 2-attempt loop and drop every edit the model had already emitted).
+      const fr = chunk.choices[0]?.finish_reason;
+      if (fr === "length" || fr === "content_filter") {
+        throw new Error(`stream truncated by finish_reason=${fr} after ${acc.length} chars`);
+      }
+    }
+    return acc;
+  } catch (e) {
+    if (abortReason) {
+      throw new Error(
+        `stream ${abortReason}-timeout (idle=${params.idleMs}ms total=${params.totalMs}ms) after receiving ${acc.length} chars`,
+      );
+    }
+    throw e; // SDK error (connection, 4xx/5xx) — let the client loop retry
+  } finally {
+    if (idleTimer) clearTimeout(idleTimer);
+    clearTimeout(totalTimer);
+  }
+}
+
+/**
+ * Append this request/response to the conversation log file. Best-effort — a
+ * failing log must never abort the migration. The API key is redacted from the
+ * block so a shared/log-leaked file cannot expose it.
+ */
+function logConversation(
+  client: AiClientOpts,
+  system: string,
+  user: string,
+  response: string,
+  error: string | undefined,
+  attempt: number,
+): void {
+  if (!client.logFile) return;
+  const block = formatLogBlock({
+    ts: new Date().toISOString(),
     model: client.model,
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: userPayload },
-    ],
-    response_format: { type: "json_object" },
-    temperature: 0,
+    baseUrl: client.baseUrl,
+    attempt,
+    system,
+    user,
+    response,
+    error,
   });
+  const safe = redactSecret(block, client.apiKey);
+  try {
+    mkdirSync(dirname(client.logFile), { recursive: true });
+    appendFileSync(client.logFile, safe + "\n", "utf8");
+  } catch {
+    // best-effort: swallow fs errors so logging never breaks a migration
+  }
+}
 
-  const raw = completion.choices[0]?.message?.content ?? "";
-  return { edits: parseEdits(raw), raw };
+/** Pure formatter for the conversation-log block (exported for tests). */
+export function formatLogBlock(o: {
+  ts: string;
+  model: string;
+  baseUrl: string;
+  attempt: number;
+  system: string;
+  user: string;
+  response: string;
+  error?: string;
+}): string {
+  const sep = "─".repeat(72);
+  const header =
+    `[${o.ts}] attempt=${o.attempt} model=${o.model} base=${o.baseUrl}` +
+    `${o.error ? " status=ERROR" : " status=OK"}`;
+  return [
+    sep,
+    header,
+    "### system",
+    o.system,
+    "### user",
+    o.user,
+    "### response",
+    o.response || "(empty)",
+    ...(o.error ? ["### error", o.error] : []),
+    sep,
+  ].join("\n");
+}
+
+/**
+ * Replace every occurrence of `secret` in `text` with `[REDACTED]`. No-op when
+ * the secret is missing/short (<8 chars) so a tiny or empty value can't
+ * accidentally clobber a common substring. Also scrubs server-masked echoes
+ * (e.g. a 401 body that prints "sk-abcd…wxyz") that share only the key's
+ * prefix/suffix and so escape the full-key match. Exported for tests.
+ */
+export function redactSecret(text: string, secret?: string): string {
+  if (!secret || secret.length < 8) return text;
+  // Exact full key:
+  let out = text.split(secret).join("[REDACTED]");
+  // Masked form (prefix…suffix, 2-4 dots) echoed in provider error bodies:
+  out = out.replace(/sk-[A-Za-z0-9_-]{1,20}\.{2,4}[A-Za-z0-9_-]{1,20}/g, "[REDACTED]");
+  return out;
 }
 
 /** Defensively parse `{"edits":[...]}` from model output. */
