@@ -13,7 +13,7 @@
  */
 
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
-import { resolve, basename, join } from "node:path";
+import { resolve, basename, join, relative, sep } from "node:path";
 import { Command } from "commander";
 import { buildDeprecationMap } from "./indexer/sdk-indexer.js";
 import { scanProject } from "./scanner/scanner.js";
@@ -69,6 +69,7 @@ program
   .option("--sdk <path>", "SDK ets/api directory (to build map if missing)")
   .option("--since <n>", "only report deprecations with since <= N", (v) => Number(v), 0)
   .option("--symbol-overrides <path>", "JSON file of per-symbol overrides (merged over builtin)")
+  .option("--file <path>", "scan only this file (relative to cwd or --project)")
   .action((opts) => {
     const map = loadMap(opts.sdk);
     const projectRoot = resolve(opts.project);
@@ -93,7 +94,10 @@ program
       );
       process.exit(1);
     }
-    console.log(printScanSummary({ findings: tsc.findings, filesScanned: tsc.filesScanned }));
+    let scanFindings = tsc.findings;
+    const scopedFile = scopeFile(opts.file, projectRoot);
+    if (scopedFile) scanFindings = scanFindings.filter((f) => f.file === scopedFile);
+    console.log(printScanSummary({ findings: scanFindings, filesScanned: tsc.filesScanned }, scopedFile));
   });
 
 program
@@ -106,6 +110,7 @@ program
   .option("--window-stage-expr <expr>", "WindowStage expression for window overrides", "this.windowStage")
   .option("--window-expr <expr>", "Window expression for window overrides", "this.window")
   .option("--symbol-overrides <path>", "JSON file of per-symbol overrides (merged over builtin)")
+  .option("--file <path>", "rewrite only this file (relative to cwd or --project)")
   .option("--write", "write changes to disk (default: dry-run)")
   .option("--use-ai", "after the subset, send residual deprecated usages to an AI (OpenAI-compatible) for replacement")
   .option("--env-file <path>", "dotenv file to load AI config from (else discovered: <project>/.env, ./.env, ~/.env)")
@@ -142,7 +147,9 @@ program
       process.exit(1);
     }
     const memberFindings = tsc.findings;
-    const findings = [...mod.findings, ...memberFindings, ...exp.findings, ...drp.findings];
+    let findings = [...mod.findings, ...memberFindings, ...exp.findings, ...drp.findings];
+    const scopedFile = scopeFile(opts.file, projectRoot);
+    if (scopedFile) findings = findings.filter((f) => f.file === scopedFile);
 
     const write = !!opts.write;
 
@@ -240,6 +247,7 @@ program
         ai: aiResult,
         aiModel,
         aiBaseUrl,
+        scopedFile,
       }),
     );
   });
@@ -262,6 +270,26 @@ program
       console.log("  Edit the file to fill the rest; `rewrite --use-ai` auto-loads ./.env (or pass --env-file).");
     }
   });
+
+/**
+ * Normalize a `--file` path to the relative-to-projectRoot, /-joined form used
+ * by `Finding.file`. Accepts paths relative to cwd, relative to --project, or
+ * absolute. Returns undefined when no --file was given. When the resolved path
+ * lies outside projectRoot (neither a cwd-relative nor project-root-relative
+ * match inside the project), returns the computed relative string anyway so the
+ * caller's filter simply matches nothing rather than crashing.
+ */
+function scopeFile(file: string | undefined, projectRoot: string): string | undefined {
+  if (!file) return undefined;
+  const abs = resolve(file); // relative to cwd
+  let rel = relative(projectRoot, abs);
+  if (rel.startsWith("..")) {
+    // Maybe the user gave it relative to --project rather than cwd.
+    const rel2 = relative(projectRoot, resolve(projectRoot, file));
+    if (!rel2.startsWith("..")) rel = rel2;
+  }
+  return rel.split(sep).join("/");
+}
 
 function loadMap(sdk?: string): DeprecationMap {
   // Try cache for the resolved apiVersion first.

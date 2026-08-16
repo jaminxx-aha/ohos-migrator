@@ -6,9 +6,10 @@ import type { Finding } from "./rules/types.js";
 import type { ScanResult } from "./scanner/scanner.js";
 import type { RewriteResult } from "./rewriter/rewriter.js";
 
-export function printScanSummary(result: ScanResult): string {
+export function printScanSummary(result: ScanResult, scopedFile?: string): string {
   const { findings, filesScanned } = result;
   const lines: string[] = [];
+  if (scopedFile) lines.push(`(scoped to ${scopedFile})`);
   lines.push(`Scanned ${filesScanned} file(s).`);
   lines.push(`${findings.length} deprecated usage(s) found.\n`);
 
@@ -62,10 +63,13 @@ export interface RewriteSummaryInput {
   };
   aiModel?: string;
   aiBaseUrl?: string;
+  /** When `--file` was given, the relative path the run was scoped to. */
+  scopedFile?: string;
 }
 
 export function printRewriteSummary(s: RewriteSummaryInput): string {
   const lines: string[] = [];
+  if (s.scopedFile) lines.push(`(scoped to ${s.scopedFile})`);
 
   if (s.useAi) {
     // Direct-AI path: no "obvious subset" pass. Report AI replacement only.
