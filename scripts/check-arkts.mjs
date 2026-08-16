@@ -165,6 +165,15 @@ function patchSdkDeviceDefine() {
     }
   }
   console.log(`patch: collected ${allCaps.length} syscap(s); added ${total} across ${seen} device-define dir(s) under ${root}`);
+  if (total > 0) {
+    console.log(
+      "  NOTE: device-define patched on disk. CLI CompileArkTS does NOT run the syscap\n" +
+      "  check (no checkPayload), so it can't verify this. DevEco IDE ace-server DOES\n" +
+      "  check syscap but caches device-define IN MEMORY at IDE startup — a running IDE\n" +
+      "  still sees the pre-patch set. FULLY QUIT & RESTART DevEco Studio (not just\n" +
+      "  reload project) so the ace-server LSP process re-reads the patched device-define."
+    );
+  }
 }
 
 /** Run hvigorw CompileArkTS; return the raw stdout+stderr text. */
