@@ -25,7 +25,7 @@ import { filterObviousSubset } from "./rewriter/subset.js";
 import { revertBrokenEdits } from "./rewriter/verify-revert.js";
 import { runHvigor } from "./verify/hvigor.js";
 import { runAiRewrite, type AiRewriteResult } from "./ai/pipeline.js";
-import { resolveAiConfig, writeConfigTemplate } from "./ai/config.js";
+import { resolveAiConfig, writeEnvTemplate } from "./ai/config.js";
 import { printScanSummary, printRewriteSummary } from "./report.js";
 import {
   cacheFile,
@@ -108,7 +108,7 @@ program
   .option("--symbol-overrides <path>", "JSON file of per-symbol overrides (merged over builtin)")
   .option("--write", "write changes to disk (default: dry-run)")
   .option("--use-ai", "after the subset, send residual deprecated usages to an AI (OpenAI-compatible) for replacement")
-  .option("--ai-config <path>", "AI config JSON file (else discovered: ./.ohos-migrator-ai.json or ~/.ohos-migrator-ai.json)")
+  .option("--env-file <path>", "dotenv file to load AI config from (else discovered: <project>/.env, ./.env, ~/.env)")
   .option("--ai-base-url <url>", "OpenAI-compatible base URL (env OHOS_MIGRATOR_AI_BASE_URL)")
   .option("--ai-api-key <key>", "API key for the AI endpoint (env OHOS_MIGRATOR_AI_API_KEY)")
   .option("--ai-model <name>", "model name (env OHOS_MIGRATOR_AI_MODEL)")
@@ -212,7 +212,7 @@ program
         aiResult = await runAiRewrite(projectRoot, byFile, map, aiOpts, true);
       } else if (!aiOpts) {
         console.warn(
-          "Warning: --use-ai set but AI config incomplete (baseUrl/apiKey/model). Configure via --ai-config file, --ai-* flags, or OHOS_MIGRATOR_AI_*/OPENAI_* env; run `harmony-deprecate ai-config` to scaffold a config file. Skipping AI replacement.",
+          "Warning: --use-ai set but AI config incomplete (baseUrl/apiKey/model). Configure via a .env file (run `harmony-deprecate ai-config`), --env-file, --ai-* flags, or OHOS_MIGRATOR_AI_*/OPENAI_* env. Skipping AI replacement.",
         );
       }
     }
@@ -240,20 +240,20 @@ program
 
 program
   .command("ai-config")
-  .description("Scaffold an AI config file (.ohos-migrator-ai.json) from current env, or a blank template.")
-  .option("-o, --output <path>", "output file path", ".ohos-migrator-ai.json")
+  .description("Scaffold a dotenv .env file with AI credentials, from current env or a blank template.")
+  .option("-o, --output <path>", "output file path", ".env")
   .option("--blank", "write a blank template (ignore current env)")
   .action((opts) => {
     const out = resolve(opts.output);
-    const written = writeConfigTemplate(out, !opts.blank);
-    const filled = (["baseUrl", "apiKey", "model"] as const).filter((k) => written[k]);
+    const res = writeEnvTemplate(out, !opts.blank);
     console.log(`Wrote ${out}`);
-    console.log(`  baseUrl: ${written.baseUrl ? "(from env)" : "<set me>"}`);
-    console.log(`  apiKey : ${written.apiKey ? "(from env)" : "<set me>"}`);
-    console.log(`  model  : ${written.model || "<set me>"}`);
-    console.log(`  ${filled.length}/3 field(s) populated from environment.`);
-    if (filled.length < 3) {
-      console.log("  Edit the file to fill the rest, then run `rewrite --use-ai` (it auto-discovers this file).");
+    for (const f of res.fields) {
+      console.log(`  ${f.label.padEnd(7)}: ${f.filled ? "(from env)" : "<set me>"}`);
+    }
+    const filled = res.fields.filter((f) => f.filled).length;
+    console.log(`  ${filled}/3 field(s) populated from environment.`);
+    if (filled < 3) {
+      console.log("  Edit the file to fill the rest; `rewrite --use-ai` auto-loads ./.env (or pass --env-file).");
     }
   });
 
