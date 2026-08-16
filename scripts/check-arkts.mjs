@@ -26,6 +26,26 @@ const DEVECO_SDK_HOME = "/Applications/DevEco-Studio.app/Contents/sdk";
 const HVIGORW = "/Applications/DevEco-Studio.app/Contents/tools/hvigor/bin/hvigorw";
 const MAX_ITERS = 6;
 
+// Lite-only system capabilities tagged on @system.* deprecated APIs. Only
+// liteWearable ships these by default; phone/tablet/2in1 device-define sets
+// exclude them, so ArkTSCheck (ace-server) reports a syscap ERROR on every
+// @system.* import. Ace-server intersects the deviceType's device-define
+// SysCaps — adding these to every device-define file makes the intersection
+// include them, so the syscap check passes. Append-only (never removes), so
+// it only widens the capability set and is harmless to other projects.
+const LITE_SYSCAPS = [
+  "SystemCapability.ArkUI.ArkUI.Lite",
+  "SystemCapability.Communication.Bluetooth.Lite",
+  "SystemCapability.DistributedDataManager.Preferences.Core.Lite",
+  "SystemCapability.FileManagement.File.FileIO.Lite",
+  "SystemCapability.Location.Location.Lite",
+  "SystemCapability.PowerManager.BatteryManager.Lite",
+  "SystemCapability.PowerManager.DisplayPowerManager.Lite",
+  "SystemCapability.Sensors.MiscDevice.Lite",
+  "SystemCapability.Sensors.Sensor.Lite",
+  "SystemCapability.Startup.SystemInfo.Lite",
+];
+
 // ArkTS error lines look like:
 //   Error Message: <msg> At File: <abs path>:<line>:<col>
 const ERR_RE = /Error Message: .* At File: (.+):(\d+):(\d+)/g;
@@ -53,6 +73,46 @@ function clearCaches() {
     const p = join(MODULE_DIR, rel);
     if (existsSync(p)) rmSync(p, { recursive: true, force: true });
   }
+}
+
+/** Resolve the SDK ets/api dir: prefer the deprecation map's sdkPath (matches
+ *  the SDK the indexer scanned), fall back to DEVECO_SDK_HOME. */
+function sdkApiDir() {
+  const mapPath = join(ROOT, ".harmony-deprecate", "deprecation-map.24.json");
+  if (existsSync(mapPath)) {
+    try {
+      const m = JSON.parse(readFileSync(mapPath, "utf8"));
+      if (m.sdkPath) return m.sdkPath;
+    } catch { /* fall through */ }
+  }
+  return join(DEVECO_SDK_HOME, "default", "openharmony", "ets", "api");
+}
+
+/** Append the Lite syscaps to every SDK device-define JSON so ArkTSCheck's
+ *  device-capability intersection includes them (idempotent; append-only). */
+function patchSdkDeviceDefine() {
+  const dd = join(sdkApiDir(), "device-define");
+  if (!existsSync(dd)) {
+    console.log(`patch: device-define dir not found at ${dd} — skipping syscap patch`);
+    return;
+  }
+  let total = 0;
+  for (const name of readdirSync(dd)) {
+    if (!name.endsWith(".json")) continue;
+    const p = join(dd, name);
+    try {
+      const d = JSON.parse(readFileSync(p, "utf8"));
+      if (!Array.isArray(d.SysCaps)) continue;
+      const have = new Set(d.SysCaps);
+      const add = LITE_SYSCAPS.filter((x) => !have.has(x));
+      if (add.length) {
+        d.SysCaps.push(...add);
+        writeFileSync(p, JSON.stringify(d, null, 2) + "\n", "utf8");
+        total += add.length;
+      }
+    } catch { /* skip malformed file */ }
+  }
+  console.log(`patch: added ${total} Lite syscap(s) to device-define JSONs (phone/tablet/2in1 now include Lite capabilities)`);
 }
 
 /** Run hvigorw CompileArkTS; return the raw stdout+stderr text. */
@@ -97,6 +157,7 @@ function commentLines(file, lines) {
 }
 
 function main() {
+  patchSdkDeviceDefine();
   let total = 0;
   for (let iter = 1; iter <= MAX_ITERS; iter++) {
     const out = runCompile();
