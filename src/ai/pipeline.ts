@@ -79,8 +79,10 @@ export async function runAiRewrite(
   }
 
   // For `--file`, verify with the TS LanguageService (single-file diagnostics
-  // delta) instead of a whole-project hvigor compile. Snapshot the baseline
-  // (pre-edit) diagnostics now — the file on disk is still the pre-AI content.
+  // delta) PLUS an hvigor fallback. Snapshot the TS-LS baseline (pre-edit
+  // diagnostics) now — the file on disk is still the pre-AI content. TS-LS
+  // alone misses arkts-* spec rules; lsVerifyRoundWithHvigorFallback below adds
+  // an hvigor fallback for files TS-LS clears.
   const useLs = scopedFile !== undefined;
   const lsVer = useLs ? createLsVerifier(projectRoot, scopedFile!, map) : undefined;
   if (lsVer) lsVer.baseline();
@@ -112,7 +114,7 @@ export async function runAiRewrite(
   let verifyReason: string | undefined;
   let fileErrors1: Map<string, string>;
   if (useLs) {
-    const r = lsVerifyRound(lsVer, jobs, projectRoot);
+    const r = lsVerifyRoundWithHvigorFallback(lsVer, jobs, projectRoot);
     verifyRan = r.ran;
     verifyReason = r.reason;
     fileErrors1 = r.fileErrors;
@@ -177,7 +179,7 @@ export async function runAiRewrite(
   if (needRetry.length > 0) {
     let fileErrors2: Map<string, string>;
     if (useLs) {
-      fileErrors2 = lsVerifyRound(lsVer, needRetry, projectRoot).fileErrors;
+      fileErrors2 = lsVerifyRoundWithHvigorFallback(lsVer, needRetry, projectRoot).fileErrors;
     } else {
       const hv2 = runHvigor({ projectRoot });
       fileErrors2 = hv2.ran ? groupRawByFile(hv2.raw, projectRoot) : new Map();
@@ -224,7 +226,13 @@ export function groupRawByFile(raw: string, projectRoot: string): Map<string, st
         out.set(rel, arr);
       }
       buf = [];
-    } else if (line.includes("ERROR") || line.startsWith(" ") || line.includes("ArkTS")) {
+    } else if (line.startsWith(" ") && !line.includes("WARN")) {
+      // Accumulate error-message lines (they lead with a space, e.g.
+      // " Classes cannot be used as objects (arkts-no-classes-as-obj)") to
+      // flush at the next "At File:" marker. Exclude ArkTS:WARN lines —
+      // those are deprecation warnings (the expected scanner signal), not
+      // build-breaking errors, and letting them into the buffer would drown
+      // the real error text fed back to the AI retry.
       buf.push(line.trim());
     }
   }
@@ -264,6 +272,45 @@ function lsVerifyRound(
     if (newErrors.length > 0) fileErrors.set(job.file, newErrors.join("\n"));
   }
   return { ran: true, fileErrors };
+}
+
+/**
+ * TS-LS verify round with an hvigor fallback for ArkTS spec rules.
+ *
+ * TS-LS only emits syntactic + semantic (type) diagnostics — it does NOT
+ * enforce ArkTS specification rules (arkts-no-misplaced-imports,
+ * arkts-no-any, arkts-no-as, …), which are an extra lint layer only hvigor
+ * CompileArkTS runs. So a TS-LS "clean" file can still be arkts-broken (e.g.
+ * the AI placed a new import after a `declare` statement, which type-checks
+ * fine but violates arkts-no-misplaced-imports). For every file TS-LS cleared,
+ * fall back to hvigor to catch arkts-* regressions the delta missed. Files
+ * TS-LS failed are kept as-is: faster feedback for type errors, and hvigor
+ * would surface the same type errors anyway.
+ *
+ * hvigor is whole-project, but errors are only attributed to AI-touched files
+ * TS-LS cleared (via groupRawByFile's per-file grouping) — pre-existing errors
+ * elsewhere don't interfere. Assumes the pre-edit baseline compiled (no ERROR);
+ * for `--file` that holds because the corpus/real file is compilable before the
+ * AI edit, so any ERROR hvigor reports on a touched file was introduced by AI.
+ */
+function lsVerifyRoundWithHvigorFallback(
+  lsVer: ReturnType<typeof createLsVerifier>,
+  jobs: FileJob[],
+  projectRoot: string,
+): { ran: boolean; reason?: string; fileErrors: Map<string, string> } {
+  const r = lsVerifyRound(lsVer, jobs, projectRoot);
+  if (!r.ran) return r;
+  const tsClean = jobs.filter((j) => j.status === "applied" && !r.fileErrors.has(j.file));
+  if (tsClean.length === 0) return r; // TS-LS already flagged every applied file
+  const hv = runHvigor({ projectRoot });
+  if (!hv.ran) return r; // hvigor unavailable — keep TS-LS verdict (may miss arkts-*)
+  const hvErrs = groupRawByFile(hv.raw, projectRoot);
+  const merged = new Map(r.fileErrors);
+  for (const j of tsClean) {
+    const e = hvErrs.get(j.file);
+    if (e) merged.set(j.file, e);
+  }
+  return { ran: true, reason: r.reason, fileErrors: merged };
 }
 
 async function mapPool<T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>): Promise<void> {

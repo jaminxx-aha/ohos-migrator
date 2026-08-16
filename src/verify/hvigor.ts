@@ -130,7 +130,15 @@ export function runHvigor(opts: HvigorOptions): HvigorResult {
   return {
     ran: true,
     errors: parseErrorLines(out),
-    raw: out.length > 40_000 ? out.slice(0, 40_000) + "\n…[truncated]…" : out,
+    // Full, untruncated output. groupRawByFile (pipeline.ts) parses
+    // "At File:" markers from `raw` — they sit at the END of each error
+    // block, so in a noisy project (thousands of ArkTS:WARN deprecation
+    // lines) they land well past 40k. A truncated raw silently drops them,
+    // making every arkts-* ERROR invisible to the verify gate (a false
+    // "clean" that leaves broken AI output on disk). Keeping it whole is the
+    // correctness fix; size is bounded by spawnSync maxBuffer (128 MB) and
+    // groupRawByFile only retains up to 10 messages per file.
+    raw: out,
   };
 }
 
