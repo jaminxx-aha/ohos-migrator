@@ -25,6 +25,7 @@ import { filterObviousSubset } from "./rewriter/subset.js";
 import { revertBrokenEdits } from "./rewriter/verify-revert.js";
 import { runHvigor } from "./verify/hvigor.js";
 import { runAiRewrite, type AiRewriteResult } from "./ai/pipeline.js";
+import { resolveAiConfig, writeConfigTemplate } from "./ai/config.js";
 import { printScanSummary, printRewriteSummary } from "./report.js";
 import {
   cacheFile,
@@ -107,6 +108,7 @@ program
   .option("--symbol-overrides <path>", "JSON file of per-symbol overrides (merged over builtin)")
   .option("--write", "write changes to disk (default: dry-run)")
   .option("--use-ai", "after the subset, send residual deprecated usages to an AI (OpenAI-compatible) for replacement")
+  .option("--ai-config <path>", "AI config JSON file (else discovered: ./.ohos-migrator-ai.json or ~/.ohos-migrator-ai.json)")
   .option("--ai-base-url <url>", "OpenAI-compatible base URL (env OHOS_MIGRATOR_AI_BASE_URL)")
   .option("--ai-api-key <key>", "API key for the AI endpoint (env OHOS_MIGRATOR_AI_API_KEY)")
   .option("--ai-model <name>", "model name (env OHOS_MIGRATOR_AI_MODEL)")
@@ -203,14 +205,14 @@ program
         arr.push(f);
         byFile.set(f.file, arr);
       }
-      const aiOpts = resolveAiOpts(opts);
+      const aiOpts = resolveAiConfig(opts, projectRoot);
       if (write && aiOpts && byFile.size > 0) {
         aiModel = aiOpts.model;
         aiBaseUrl = aiOpts.baseUrl;
         aiResult = await runAiRewrite(projectRoot, byFile, map, aiOpts, true);
       } else if (!aiOpts) {
         console.warn(
-          "Warning: --use-ai set but AI base_url/api_key/model not configured. Set --ai-base-url/--ai-api-key/--ai-model or OHOS_MIGRATOR_AI_{BASE_URL,API_KEY,MODEL}; skipping AI replacement.",
+          "Warning: --use-ai set but AI config incomplete (baseUrl/apiKey/model). Configure via --ai-config file, --ai-* flags, or OHOS_MIGRATOR_AI_*/OPENAI_* env; run `harmony-deprecate ai-config` to scaffold a config file. Skipping AI replacement.",
         );
       }
     }
@@ -236,18 +238,24 @@ program
     );
   });
 
-/** Resolve AI client config: flag > env. Returns undefined when incomplete. */
-function resolveAiOpts(opts: {
-  aiBaseUrl?: string;
-  aiApiKey?: string;
-  aiModel?: string;
-}): { baseUrl: string; apiKey: string; model: string } | undefined {
-  const baseUrl = opts.aiBaseUrl || process.env.OHOS_MIGRATOR_AI_BASE_URL;
-  const apiKey = opts.aiApiKey || process.env.OHOS_MIGRATOR_AI_API_KEY;
-  const model = opts.aiModel || process.env.OHOS_MIGRATOR_AI_MODEL;
-  if (!baseUrl || !apiKey || !model) return undefined;
-  return { baseUrl, apiKey, model };
-}
+program
+  .command("ai-config")
+  .description("Scaffold an AI config file (.ohos-migrator-ai.json) from current env, or a blank template.")
+  .option("-o, --output <path>", "output file path", ".ohos-migrator-ai.json")
+  .option("--blank", "write a blank template (ignore current env)")
+  .action((opts) => {
+    const out = resolve(opts.output);
+    const written = writeConfigTemplate(out, !opts.blank);
+    const filled = (["baseUrl", "apiKey", "model"] as const).filter((k) => written[k]);
+    console.log(`Wrote ${out}`);
+    console.log(`  baseUrl: ${written.baseUrl ? "(from env)" : "<set me>"}`);
+    console.log(`  apiKey : ${written.apiKey ? "(from env)" : "<set me>"}`);
+    console.log(`  model  : ${written.model || "<set me>"}`);
+    console.log(`  ${filled.length}/3 field(s) populated from environment.`);
+    if (filled.length < 3) {
+      console.log("  Edit the file to fill the rest, then run `rewrite --use-ai` (it auto-discovers this file).");
+    }
+  });
 
 function loadMap(sdk?: string): DeprecationMap {
   // Try cache for the resolved apiVersion first.

@@ -19,6 +19,8 @@ export interface AiClientOpts {
   model: string;
   /** Per-request timeout ms (default 120s). */
   timeoutMs?: number;
+  /** Max concurrent file replacements (default 4). */
+  concurrency?: number;
 }
 
 export interface RequestEditsResult {
@@ -50,7 +52,6 @@ export async function requestEdits(
     timeout: client.timeoutMs ?? 120_000,
     maxRetries: 2,
   });
-
   const userPayload = retryErrors
     ? `${user}\n\n## Previous attempt failed hvigor compilation with these errors in this file:\n${retryErrors}\nFix the edits so the file compiles.`
     : user;

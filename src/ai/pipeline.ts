@@ -49,7 +49,9 @@ export async function runAiRewrite(
   };
   if (!write || residualByFile.size === 0) return empty;
 
-  const concurrency = readConcurrency();
+  const concurrency = aiOpts.concurrency && aiOpts.concurrency > 0
+    ? Math.min(aiOpts.concurrency, 16)
+    : 4;
 
   // 1. Backup pre-AI (post-subset) content for every residual file.
   const jobs: FileJob[] = [];
@@ -207,9 +209,4 @@ async function mapPool<T>(items: T[], concurrency: number, fn: (item: T) => Prom
     }
   }
   await Promise.all(Array.from({ length: Math.min(cap, items.length) }, () => worker()));
-}
-
-function readConcurrency(): number {
-  const v = Number(process.env.OHOS_MIGRATOR_AI_CONCURRENCY);
-  return Number.isFinite(v) && v > 0 ? Math.min(v, 16) : 4;
 }
