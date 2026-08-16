@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * Generate COMPILABLE, real-usage code for every *importable* deprecated
- * symbol in the cached deprecation map, one `.ts` file per kit under
- * `test/deprecated/<kit>.ts`.
+ * symbol in the cached deprecation map, one `.ets` file per kit under
+ * `test/deprecated/<kit>.ets`.
  *
  * Unlike `gen-deprecated-all.mjs` (a non-compiling scan fixture that emits
  * dual inert forms purely to trip TS-LS), this generator reads each symbol's
@@ -1015,7 +1015,7 @@ function generateAll() {
     out.push(...usageLines);
     out.push("");
 
-    const filePath = join(outDir, `${kitTag(kit)}.ts`);
+    const filePath = join(outDir, `${kitTag(kit)}.ets`);
     writeFileSync(filePath, out.join("\n"), "utf8");
     stats.files++;
     stats.kits++;
@@ -1063,6 +1063,7 @@ function buildUsageLs(files) {
       paths: { "@ohos.*": ["@ohos.*.d.ts"], "@system.*": ["@system.*.d.ts"] },
       reportDeprecated: true,
       allowImportingTsExtensions: true,
+      allowNonTsExtensions: true, // let TS parse the .ets corpus files
       noUnusedLocals: false,
     }),
     getDefaultLibFileName: () => TS_LIB_DIR + "lib.esnext.d.ts",
@@ -1153,7 +1154,7 @@ function repairFiles() {
 
 /**
  * Build a LanguageService mirroring the scanner's config and report any
- * semantic/syntactic error in test/deprecated/*.ts beyond 6385/6387/6133.
+ * semantic/syntactic error in test/deprecated/*.ets beyond 6385/6387/6133.
  */
 function checkCompiles() {
   const dir = join(ROOT, "test", "deprecated");
@@ -1168,7 +1169,7 @@ function checkCompiles() {
     const syn = ls.getSyntacticDiagnostics(k);
     const all = [...sem, ...syn].filter((d) => !CHECK_IGNORE.has(d.code));
     if (all.length === 0) continue;
-    const kit = basename(f, ".ts");
+    const kit = basename(f, ".ets");
     perKit.set(kit, (perKit.get(kit) ?? 0) + all.length);
     total += all.length;
     const locLine = (d) => {
@@ -1204,7 +1205,7 @@ function collectTsFiles(dir) {
       const p = join(d, name);
       const s = statSync(p);
       if (s.isDirectory()) walk(p);
-      else if (name.endsWith(".ts")) out.push(p);
+      else if (name.endsWith(".ets")) out.push(p);
     }
   };
   if (existsSync(dir)) walk(dir);
