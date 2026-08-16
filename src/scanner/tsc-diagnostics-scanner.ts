@@ -197,16 +197,21 @@ export function scanProjectDeprecatedMembers(opts: MemberScanOptions): Diagnosti
 /* LanguageService host — virtual .ts for .ets, disk-read + SDK paths. */
 /* ------------------------------------------------------------------ */
 
-interface LsBundle {
+export interface LsBundle {
   ls: ts.LanguageService;
   checker: ts.TypeChecker;
   /** map of real on-disk path -> virtual .ts path fed to the LS. */
   tsOfEts: Map<string, string>;
+  /** Replace a file's cached text + bump its version so the LS re-checks it
+   *  without rebuilding the whole program (used by the single-file verifier). */
+  setFileText: (tsFile: string, text: string) => void;
 }
 
-function buildLanguageService(files: string[], sdkApiDir: string): LsBundle {
+export function buildLanguageService(files: string[], sdkApiDir: string): LsBundle {
   // virtual .ts path -> text, keyed by forward-slash path.
   const fileText = new Map<string, string>();
+  // per-file version counter so setFileText can invalidate a single file.
+  const versions = new Map<string, number>();
   const tsOfEts = new Map<string, string>();
   for (const f of files) {
     const fwd = f.replace(/\\/g, "/");
@@ -264,7 +269,7 @@ function buildLanguageService(files: string[], sdkApiDir: string): LsBundle {
     getNewLine: () => "\n",
     getCurrentDirectory: () => "/",
     getScriptFileNames: () => [...tsOfEts.values()],
-    getScriptVersion: () => "0",
+    getScriptVersion: (p) => String(versions.get(p.replace(/\\/g, "/")) ?? 0),
     getScriptSnapshot: (p) => {
       const t = readText(p);
       return t == null ? undefined : ts.ScriptSnapshot.fromString(t);
@@ -275,7 +280,12 @@ function buildLanguageService(files: string[], sdkApiDir: string): LsBundle {
 
   const ls = ts.createLanguageService(host);
   const checker = ls.getProgram()!.getTypeChecker();
-  return { ls, checker, tsOfEts };
+  const setFileText = (tsFile: string, text: string): void => {
+    const k = tsFile.replace(/\\/g, "/");
+    fileText.set(k, text);
+    versions.set(k, (versions.get(k) ?? 0) + 1);
+  };
+  return { ls, checker, tsOfEts, setFileText };
 }
 
 /* ------------------------------------------------------------------ */

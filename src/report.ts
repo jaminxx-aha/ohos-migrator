@@ -59,6 +59,9 @@ export interface RewriteSummaryInput {
     retriedFiles: number;
     stillFailedFiles: number;
     hvigorRan: boolean;
+    /** Which verifier grounded the edits (whole-project hvigor, or the
+     *  TS-LS single-file delta used under `--file`). */
+    verifyMode?: "hvigor" | "ts-ls";
     reason?: string;
   };
   aiModel?: string;
@@ -76,13 +79,15 @@ export function printRewriteSummary(s: RewriteSummaryInput): string {
     if (s.write) {
       if (s.ai) {
         const a = s.ai;
+        const verLabel = a.verifyMode === "ts-ls" ? "TS-LS verified, single-file" : "hvigor-verified";
+        const verNoun = a.verifyMode === "ts-ls" ? "TS-LS verification" : "hvigor verification";
         if (!a.hvigorRan) {
           lines.push(
-            `AI rewrite: reverted (no hvigor verification: ${a.reason ?? "unavailable"}); ${a.appliedFiles} file(s) left at original state.`,
+            `AI rewrite: reverted (no ${verNoun}: ${a.reason ?? "unavailable"}); ${a.appliedFiles} file(s) left at original state.`,
           );
         } else {
           lines.push(
-            `AI rewrite (hvigor-verified): ${a.appliedFiles} file(s) replaced; ${a.retriedFiles} retried with compiler feedback; ${a.stillFailedFiles} still failing (reverted to original).`,
+            `AI rewrite (${verLabel}): ${a.appliedFiles} file(s) replaced; ${a.retriedFiles} retried with compiler feedback; ${a.stillFailedFiles} still failing (reverted to original).`,
           );
         }
         if (s.aiModel) {

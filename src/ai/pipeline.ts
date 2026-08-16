@@ -13,6 +13,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { aiReplaceFile } from "./replace.js";
 import { runHvigor } from "../verify/hvigor.js";
+import { createLsVerifier, readFileText } from "../verify/ts-ls-verify.js";
 import type { AiClientOpts } from "./client.js";
 import type { Finding, DeprecationMap } from "../rules/types.js";
 
@@ -22,6 +23,9 @@ export interface AiRewriteResult {
   stillFailedFiles: number;
   perFile: { file: string; applied: number; status: "applied" | "reverted" | "failed" }[];
   hvigorRan: boolean;
+  /** Which verifier grounded the edits: whole-project hvigor, or (for `--file`)
+   *  the TS-LS single-file diagnostics delta. */
+  verifyMode?: "hvigor" | "ts-ls";
   reason?: string;
 }
 
@@ -43,6 +47,9 @@ export async function runAiRewrite(
   map: DeprecationMap,
   aiOpts: AiClientOpts,
   write: boolean,
+  /** When set (the `--file` path), verify with the TS-LS single-file delta
+   *  instead of a whole-project hvigor compile. */
+  scopedFile?: string,
 ): Promise<AiRewriteResult> {
   const empty: AiRewriteResult = {
     appliedFiles: 0, retriedFiles: 0, stillFailedFiles: 0, perFile: [], hvigorRan: false,
@@ -65,6 +72,13 @@ export async function runAiRewrite(
     jobs.push({ file, findings, preAi, applied: 0, status: "reverted" });
   }
 
+  // For `--file`, verify with the TS LanguageService (single-file diagnostics
+  // delta) instead of a whole-project hvigor compile. Snapshot the baseline
+  // (pre-edit) diagnostics now — the file on disk is still the pre-AI content.
+  const useLs = scopedFile !== undefined;
+  const lsVer = useLs ? createLsVerifier(projectRoot, scopedFile!, map) : undefined;
+  if (lsVer) lsVer.baseline();
+
   // 2. Round 1: AI-edit each file, write to disk.
   await mapPool(jobs, concurrency, async (job) => {
     try {
@@ -84,9 +98,24 @@ export async function runAiRewrite(
     }
   });
 
-  // 3. Ground-truth with hvigor (run 1).
-  const hv1 = runHvigor({ projectRoot });
-  if (!hv1.ran) {
+  // 3. Ground-truth verify (run 1). `--file` uses the TS-LS single-file delta;
+  //    otherwise the whole-project hvigor compile. Both produce a relFile ->
+  //    error-text map consumed by the same revert/retry logic below.
+  let verifyRan: boolean;
+  let verifyReason: string | undefined;
+  let fileErrors1: Map<string, string>;
+  if (useLs) {
+    const r = lsVerifyRound(lsVer, jobs, projectRoot);
+    verifyRan = r.ran;
+    verifyReason = r.reason;
+    fileErrors1 = r.fileErrors;
+  } else {
+    const hv1 = runHvigor({ projectRoot });
+    verifyRan = hv1.ran;
+    verifyReason = hv1.reason;
+    fileErrors1 = hv1.ran ? groupRawByFile(hv1.raw, projectRoot) : new Map();
+  }
+  if (!verifyRan) {
     // No verifier → revert everything AI-touched back to pre-AI (unverified
     // AI edits are never left on disk).
     for (const job of jobs) {
@@ -99,11 +128,10 @@ export async function runAiRewrite(
       stillFailedFiles: 0,
       perFile: jobs.map((j) => ({ file: j.file, applied: j.applied, status: j.status })),
       hvigorRan: false,
-      reason: hv1.reason ?? "hvigor unavailable",
+      verifyMode: useLs ? "ts-ls" : "hvigor",
+      reason: verifyReason ?? "verifier unavailable",
     };
   }
-
-  const fileErrors1 = groupRawByFile(hv1.raw, projectRoot); // relFile -> error text
 
   // 4. Revert files that have errors (round-1 survivors stay).
   const needRetry: FileJob[] = [];
@@ -136,16 +164,19 @@ export async function runAiRewrite(
     }
   }
 
-  // 6. Final hvigor (run 2); revert any file still broken after retry.
+  // 6. Final verify (run 2); revert any file still broken after retry.
   if (needRetry.length > 0) {
-    const hv2 = runHvigor({ projectRoot });
-    if (hv2.ran) {
-      const fileErrors2 = groupRawByFile(hv2.raw, projectRoot);
-      for (const job of needRetry) {
-        if (job.status === "applied" && fileErrors2.has(job.file)) {
-          writeFileSync(join(projectRoot, ...job.file.split("/")), job.preAi, "utf8");
-          job.status = "failed";
-        }
+    let fileErrors2: Map<string, string>;
+    if (useLs) {
+      fileErrors2 = lsVerifyRound(lsVer, needRetry, projectRoot).fileErrors;
+    } else {
+      const hv2 = runHvigor({ projectRoot });
+      fileErrors2 = hv2.ran ? groupRawByFile(hv2.raw, projectRoot) : new Map();
+    }
+    for (const job of needRetry) {
+      if (job.status === "applied" && fileErrors2.has(job.file)) {
+        writeFileSync(join(projectRoot, ...job.file.split("/")), job.preAi, "utf8");
+        job.status = "failed";
       }
     }
   }
@@ -159,6 +190,7 @@ export async function runAiRewrite(
     stillFailedFiles,
     perFile: jobs.map((j) => ({ file: j.file, applied: j.applied, status: j.status })),
     hvigorRan: true,
+    verifyMode: useLs ? "ts-ls" : "hvigor",
   };
 }
 
@@ -197,6 +229,31 @@ function relFile(absOrRel: string, projectRoot: string): string | undefined {  l
     if (rel.startsWith("..") || rel === "") return undefined;
   }
   return rel;
+}
+
+/** TS-LS verify round: for each applied job, check its on-disk edited content
+ *  against the pre-edit baseline; collect files that introduced new errors. */
+function lsVerifyRound(
+  lsVer: ReturnType<typeof createLsVerifier>,
+  jobs: FileJob[],
+  projectRoot: string,
+): { ran: boolean; reason?: string; fileErrors: Map<string, string> } {
+  if (!lsVer) {
+    return {
+      ran: false,
+      reason: "TS-LS verifier unavailable (SDK absent)",
+      fileErrors: new Map(),
+    };
+  }
+  const fileErrors = new Map<string, string>();
+  for (const job of jobs) {
+    if (job.status !== "applied") continue;
+    const edited = readFileText(projectRoot, job.file);
+    if (!edited) continue;
+    const newErrors = lsVer.check(edited);
+    if (newErrors.length > 0) fileErrors.set(job.file, newErrors.join("\n"));
+  }
+  return { ran: true, fileErrors };
 }
 
 async function mapPool<T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>): Promise<void> {

@@ -186,7 +186,7 @@ program
       if (write && aiOpts && byFile.size > 0) {
         aiModel = aiOpts.model;
         aiBaseUrl = aiOpts.baseUrl;
-        aiResult = await runAiRewrite(projectRoot, byFile, map, aiOpts, true);
+        aiResult = await runAiRewrite(projectRoot, byFile, map, aiOpts, true, scopedFile);
       } else if (!aiOpts) {
         console.warn(
           "Warning: --use-ai set but AI config incomplete (baseUrl/apiKey/model). Configure via a .env file (run `harmony-deprecate ai-config`), --env-file, --ai-* flags, or OHOS_MIGRATOR_AI_*/OPENAI_* env. Skipping AI replacement.",
