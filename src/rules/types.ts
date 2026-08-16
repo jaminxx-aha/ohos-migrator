@@ -207,4 +207,13 @@ export interface Finding {
    *  human-chosen argument). The call site stays deprecated-but-compiling and
    *  is reported for review. */
   humanOnly?: boolean;
+  /** SDK kit identity (e.g. '@ohos.X'), set by the scanner for findings whose
+   *  call-site binding is NOT an import (e.g. instance calls on a `declare let`
+   *  variable) so the AI context builder can still resolve the deprecated +
+   *  replacement SDK declaration slices. Undefined when the binding IS an
+   *  import (the import map already carries the kit). */
+  kit?: string;
+  /** Enclosing container (the class/namespace the member is on), set alongside
+   *  `kit` so the SDK slice is scoped to the right declaration body. */
+  container?: string;
 }

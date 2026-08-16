@@ -107,16 +107,23 @@ test("missing override file path leaves the builtin table active", () => {
   assert.deepEqual(after, before);
 });
 
-test("abilityAccessCtrl AtManager.verifyAccessToken -> manual + humanOnly (signature change)", () => {
+test("abilityAccessCtrl AtManager.verifyAccessToken -> manual, humanOnly (not sent to AI)", () => {
   // Same-kit instance-method rename whose param type tightened string ->
   // Permissions: instanceSafe only checks the receiver type, so the scanner
   // would otherwise auto-splice `var.checkAccessToken` and break the call site
-  // (TS2345). Curated manual (no splice) + humanOnly (the AI can't choose the
-  // permission). Keyed by the full chain [AtManager, verifyAccessToken].
+  // (TS2345). Curated manual (no splice) AND humanOnly — NOT sent to the AI.
+  // Tried letting the AI self-recognize the tightening via both-overload slice +
+  // Permissions summary (data signal sufficient), but the prompt rules added to
+  // steer it (signature-tightening + independent-eval) made glm-5.2 over-cautious
+  // — {edits:[]} for the whole file incl. the migratable createModuleContext,
+  // which worked without those rules (11:03-13:03 logs). Root cause = the prompt
+  // rules, not the signal: reverted humanOnly + the prompt rules, kept the
+  // data-side signal for future un-curated cases + stronger models. Keyed by the
+  // full chain [AtManager, verifyAccessToken].
   const r = findSymbolOverride("@ohos.abilityAccessCtrl", "abilityAccessCtrl", ["AtManager", "verifyAccessToken"]);
   assert.ok(r, "verifyAccessToken override must exist in the builtin table");
   assert.equal(r!.manual, true);
-  assert.equal(r!.humanOnly, true);
+  assert.equal(r!.humanOnly, true); // excluded from the AI residuals (glm-5.2 over-cautious)
   assert.equal(r!.replacement, "checkAccessToken");
   assert.match(r!.note ?? "", /Permissions/);
   // The container-only chain is NOT overridden (no leaf -> not auto-splicable).

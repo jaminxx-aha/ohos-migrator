@@ -16,7 +16,7 @@
  */
 
 import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { extractBindingMap } from "../scanner/member-scanner.js";
 import type { Finding, DeprecationMap } from "../rules/types.js";
 
@@ -58,7 +58,7 @@ export function extractDeclSlice(
   file: string,
   member: string,
   container?: string,
-  maxLines = 40,
+  maxLines = 60,
 ): string {
   if (!member) return "";
   let text: string;
@@ -95,34 +95,150 @@ export function extractDeclSlice(
       `${escapeRe(member)}\\s*[(<:=?]`,
   );
 
-  let declIdx = -1;
+  // Collect EVERY overload of `member` within the container scope. A tightened
+  // signature is often visible only by comparing overloads — e.g.
+  // verifyAccessToken has both a `permissionName: Permissions` overload and a
+  // deprecated `permissionName: string` overload; taking only the first match
+  // would hide the deprecated overload the call site actually resolves to, so
+  // the AI would see the deprecated and replacement sides as identical and
+  // wrongly conclude the signature is unchanged.
+  const declIndices: number[] = [];
   for (let i = startFrom; i < endAt; i++) {
-    if (declRe.test(lines[i])) {
-      declIdx = i;
-      break;
-    }
+    if (declRe.test(lines[i])) declIndices.push(i);
   }
-  if (declIdx < 0) return "";
+  if (declIndices.length === 0) return "";
 
-  // Walk back to include a preceding JSDoc block (/** ... */ or ` * ` lines).
-  let sliceStart = declIdx;
-  if (declIdx > 0) {
-    let j = declIdx - 1;
-    while (j >= 0 && /^\s*(\*|\/\*\*|\*\/)/.test(lines[j])) {
-      sliceStart = j;
-      j--;
+  const sliceLines: string[] = [];
+  const used = new Set<number>();
+  for (const di of declIndices) {
+    // Walk back to this overload's preceding JSDoc (`/** … */` / ` * ` lines).
+    // Stop at a non-JSDoc line so we never bleed into the previous overload's
+    // signature or a neighbouring member.
+    let s = di;
+    if (di > 0) {
+      let j = di - 1;
+      while (j >= 0 && /^\s*(\*|\/\*\*|\*\/)/.test(lines[j]) && !used.has(j)) {
+        s = j;
+        j--;
+      }
     }
+    // Walk forward to capture the full signature (until a `;` line or `}`).
+    // Start AT the declaration line so a single-line decl terminates
+    // immediately (otherwise we'd scan into the next member's JSDoc/decl).
+    let e = di + 1;
+    for (let j = di; j < Math.min(endAt, di + maxLines); j++) {
+      e = j + 1;
+      if (/;\s*$/.test(lines[j]) || /^\s*\}/.test(lines[j])) break;
+    }
+    for (let k = s; k < e; k++) {
+      if (used.has(k)) continue;
+      used.add(k);
+      sliceLines.push(lines[k]);
+    }
+    if (sliceLines.length >= maxLines) break;
   }
-  // Walk forward to capture the full signature (until a `;` line or `}`).
-  // Start AT the declaration line so a single-line decl terminates immediately
-  // (otherwise we'd scan into the next member's JSDoc/decl).
-  let sliceEnd = declIdx + 1;
-  for (let j = declIdx; j < Math.min(endAt, declIdx + maxLines); j++) {
-    sliceEnd = j + 1;
-    if (/;\s*$/.test(lines[j]) || /^\s*\}/.test(lines[j])) break;
+  return sliceLines.slice(0, maxLines).join("\n");
+}
+
+/** Built-in / ubiquitous type names we never try to resolve cross-file. */
+const BUILTIN_TYPES = new Set([
+  "number", "string", "boolean", "void", "undefined", "null", "object",
+  "any", "unknown", "never", "Promise", "Record", "Array", "Map", "Set",
+  "ReadonlyArray", "ReadonlyMap", "ReadonlySet", "Object", "Function",
+  "Date", "Error", "RegExp", "Uint8Array", "ArrayBuffer", "JSON", "PromiseLike",
+]);
+
+/**
+ * Best-effort one-line summary of a cross-file type referenced by a decl slice.
+ *
+ * The decl slice for a member carries only the *name* of a parameter type
+ * (e.g. `permissionName: Permissions`), not the type's definition — which lives
+ * in another `.d.ts` reached via an `import`. The AI therefore can't tell
+ * whether `Permissions` is a loose `string` alias (a bare-literal argument
+ * like `''` would be fine) or a restricted literal union (it would NOT). This
+ * resolves the import, reads the type definition, and returns a one-line hint
+ * classifying it: "literal union (restricted, no bare string)" vs "contains
+ * string (loose)" vs nothing when the definition can't be found.
+ *
+ * Focused on the one question that decides argument compatibility — is this
+ * type a restricted literal union or does it admit a bare `string`? — so it
+ * never dumps a 2978-line union into the prompt; it counts the literals and
+ * reports the shape only.
+ */
+export function summarizeTypeRef(hostFile: string, typeName: string): string {
+  if (!typeName || BUILTIN_TYPES.has(typeName)) return "";
+
+  let hostText: string;
+  try {
+    hostText = readFileSync(hostFile, "utf8");
+  } catch {
+    return "";
   }
-  // Cap total span.
-  return lines.slice(sliceStart, sliceEnd).slice(0, maxLines).join("\n");
+  // Resolve the import that brings `typeName` in:
+  // `import { … typeName … } from './path'` (named) — default imports are out
+  // of scope (default-imported types are the namespace itself, not a param type).
+  const importRe = new RegExp(
+    `import\\s+(?:type\\s+)?\\{[^}]*\\b${escapeRe(typeName)}\\b[^}]*\\}\\s+from\\s+['"]([^'"]+)['"]`,
+  );
+  const im = importRe.exec(hostText);
+  if (!im) return "";
+  const spec = im[1];
+  // Only resolve relative specifiers; kit-level bare re-exports are out of scope.
+  if (!spec.startsWith(".")) return "";
+
+  const dir = dirname(hostFile);
+  // Try the specifier as-is, then with the common declaration extensions.
+  const candidates = [spec, `${spec}.d.ts`, `${spec}.d.ets`, `${spec}.ts`];
+  let srcFile = "";
+  for (const c of candidates) {
+    const p = join(dir, c);
+    if (existsSync(p)) { srcFile = p; break; }
+  }
+  if (!srcFile) return "";
+
+  let srcText: string;
+  try {
+    srcText = readFileSync(srcFile, "utf8");
+  } catch {
+    return "";
+  }
+  const srcLines = srcText.split("\n");
+  // Locate `export type typeName =` (a large literal union may span far).
+  const defRe = new RegExp(`^\\s*export\\s+type\\s+${escapeRe(typeName)}\\s*=`);
+  let defStart = -1;
+  for (let i = 0; i < srcLines.length; i++) {
+    if (defRe.test(srcLines[i])) { defStart = i; break; }
+  }
+  if (defStart < 0) return "";
+
+  // Gather the full definition until the terminating `;`. Only the
+  // classification needs the text, not the content, so cap the scan to stay
+  // bounded even for a 2978-line union.
+  const defParts: string[] = [];
+  for (let i = defStart; i < Math.min(srcLines.length, defStart + 4000); i++) {
+    defParts.push(srcLines[i]);
+    if (/;\s*$/.test(srcLines[i])) break;
+  }
+  const def = defParts.join("\n");
+
+  // Quoted literals anywhere in the union (the actual members).
+  const literals = def.match(/'[^']*'/g) ?? [];
+  // A bare `string` keyword used as a type — i.e. `string` outside quotes,
+  // like `= string` or `| string |` — means the type admits any string.
+  const hasBareString = /\bstring\b/.test(def);
+
+  if (literals.length > 0 && !hasBareString) {
+    // Representative prefix from the first literal, e.g.
+    // 'ohos.permission.ACCESS_BIOMETRIC' -> "ohos.permission.*".
+    const first = literals[0]!;
+    const captured = first.match(/^'([^.]+)/)?.[1];
+    const prefix = captured ? `${captured}.*` : "...";
+    return `// ${typeName} = literal union (${literals.length} literals like '${prefix}', no bare string — restricted)`;
+  }
+  if (hasBareString) {
+    return `// ${typeName} = contains string (loose — bare 'string' member present)`;
+  }
+  return `// ${typeName} = interface/alias (not a literal union — see ${spec})`;
 }
 
 /** Build the full context payload for one file. */
@@ -164,8 +280,24 @@ export function buildFileContext(
     if (!existsSync(file)) continue;
     const slice = extractDeclSlice(file, t.member ?? "", t.container);
     if (slice) {
+      // Attach one-line summaries for cross-file type references the slice
+      // names but doesn't define (e.g. `permissionName: Permissions` -> where
+      // `Permissions` lives and whether it's a restricted literal union), so
+      // the AI can judge argument compatibility without dumping whole type
+      // files into the prompt.
+      const refNames = new Set<string>();
+      for (const m of slice.matchAll(/:\s*([A-Z][A-Za-z0-9_]*)/g)) {
+        const n = m[1];
+        if (!BUILTIN_TYPES.has(n)) refNames.add(n);
+      }
+      const summaries: string[] = [];
+      for (const n of refNames) {
+        const s = summarizeTypeRef(file, n);
+        if (s) summaries.push(s);
+      }
+      const body = summaries.length ? `${slice}\n${summaries.join("\n")}` : slice;
       sdkSlices.push(
-        `// ${t.label}: ${t.kit}${t.container ? `.${t.container}` : ""}${t.member ? `.${t.member}` : ""}\n${slice}`,
+        `// ${t.label}: ${t.kit}${t.container ? `.${t.container}` : ""}${t.member ? `.${t.member}` : ""}\n${body}`,
       );
     } else if (t.member == null) {
       // No member (import-level): list the kit's importable exports instead.
@@ -198,13 +330,16 @@ function resolveTargets(
     if (dot > 0) {
       const binding = f.oldSymbol.slice(0, dot);
       const chain = f.oldSymbol.slice(dot + 1);
-      const kit = bindingMap.get(binding);
+      // Prefer the import binding's kit; fall back to the finding's `kit`
+      // (set by the scanner for instance calls whose binding is a `declare let`
+      // variable, NOT an import — bindingMap can't resolve those).
+      const kit = bindingMap.get(binding) ?? f.kit;
       if (kit) {
         const segs = chain.split(".");
         out.push({
           kit,
           member: segs[segs.length - 1],
-          container: segs.length > 1 ? segs[0] : undefined,
+          container: segs.length > 1 ? segs[0] : f.container,
           label: "deprecated",
         });
       }
@@ -252,6 +387,19 @@ function resolveTargets(
           label: "replacement",
         });
       }
+      return out;
+    }
+    // Case 3b: newSymbol is a bare member name — a same-kit instance rename
+    // from a curated override that set only the leaf (e.g. "checkAccessToken"),
+    // so there is no binding to resolve. Kit + container come from the finding
+    // itself (the scanner set them from the deprecated entry's identity).
+    if (f.kit) {
+      out.push({
+        kit: f.kit,
+        member: f.newSymbol,
+        container: f.container,
+        label: "replacement",
+      });
       return out;
     }
   }

@@ -902,6 +902,8 @@ export function instanceFinding(
       file, line: lineAt(content, offset), oldSymbol, newSymbol: null,
       since: e.since, rule: "manual", needsManual: true,
       note: "no @useinstead replacement",
+      kit: e.dep.kit,
+      container: e.dep.members && e.dep.members.length > 1 ? e.dep.members[0] : undefined,
     };
   }
   // Curated per-symbol override (highest trust): a human-verified exception to
@@ -919,6 +921,12 @@ export function instanceFinding(
       newSymbol: cur.replacement, since: e.since,
       rule: "manual", needsManual: true, note: cur.note,
       ...(cur.humanOnly ? { humanOnly: true } : {}),
+      // Identity for SDK slice resolution: instance calls bind to a `declare let`
+      // variable (not an import), so the AI context builder can't recover the kit
+      // from the import map — carry it on the finding so the deprecated +
+      // replacement decl slices (and cross-file type summaries) still resolve.
+      kit: e.dep.kit,
+      container: e.dep.members && e.dep.members.length > 1 ? e.dep.members[0] : undefined,
     };
   }
   // Container cross-kit drop-in coverage: when this member's enclosing export

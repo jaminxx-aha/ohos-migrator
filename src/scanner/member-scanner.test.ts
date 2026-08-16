@@ -282,8 +282,14 @@ test("instanceFinding: signature-change rename (manual override) -> manual, huma
   // instanceSafe (both are instance methods on AtManager) BUT the SDK tightened
   // param 2 string -> Permissions, so a blind `var.checkAccessToken` splice
   // leaves `''` in place and breaks the call site (TS2345). The builtin override
-  // marks it manual + humanOnly: instanceFinding must honor that over the
-  // instance-safe auto-rename. Mirror of the real corpus call site.
+  // marks it manual (no splice) AND humanOnly — NOT sent to the AI. Tried
+  // self-recognition via both-overload slice + Permissions summary (data signal
+  // sufficient), but the prompt rules added to steer it made glm-5.2 over-cautious
+  // — {edits:[]} for the whole file incl. migratable createModuleContext (worked
+  // without those rules, 11:03-13:03 logs). Root cause = the prompt rules, not
+  // the signal: reverted humanOnly + the prompt rules, kept the data-side signal
+  // (both-overload slices + type summaries + Finding.kit/container) for stronger
+  // models. Mirror of the real corpus.
   const e = instEntry(
     "@ohos.abilityAccessCtrl", "abilityAccessCtrl", ["AtManager", "verifyAccessToken"],
     { kit: "@ohos.abilityAccessCtrl", members: ["AtManager", "checkAccessToken"] },
@@ -295,7 +301,7 @@ test("instanceFinding: signature-change rename (manual override) -> manual, huma
   assert.ok(f);
   assert.equal(f!.rule, "manual");
   assert.equal(f!.needsManual, true);
-  assert.equal(f!.humanOnly, true);
+  assert.equal(f!.humanOnly, true); // excluded from the AI residuals (glm-5.2 over-cautious)
   assert.equal(f!.replacement, undefined); // no splice — stays on the deprecated API
   assert.equal(f!.newSymbol, "checkAccessToken"); // guidance only
 });

@@ -172,9 +172,12 @@ function literalSubTable(
  * type, arity) — `instanceSafe` only verifies the receiver type is preserved,
  * NOT that the call-site args still compile, so a blind `var.<newLeaf>` splice
  * breaks the call site. Each is `manual` (no splice — the deprecated API still
- * compiles, leave it for review) + `humanOnly` (don't send to the AI: the model
- * can't choose the now-required argument and would either guess a silent-wrong
- * value or trigger a file-level revert that takes down unrelated AI edits).
+ * compiles) and is SENT to the AI: the SDK decl slice now carries EVERY
+ * overload (`extractDeclSlice`) plus a one-line cross-file type summary
+ * (`summarizeTypeRef`), giving the model enough signal to recognize the
+ * tightened signature and OMIT an edit (per SYSTEM_PROMPT's "signature
+ * tightened -> omit" rule) rather than guess the now-required argument. The
+ * deprecated API stays compilable in place until a human picks the value.
  *
  *   - `@ohos.abilityAccessCtrl` `AtManager.verifyAccessToken` ->
  *     `checkAccessToken`: param 2 tightened `string` -> `Permissions` (a
@@ -191,6 +194,18 @@ const MANUAL_SIGNATURE_CHANGES: SymbolOverrideTable = {
     replacement: "checkAccessToken",
     note: "signature changed: param 2 type string -> Permissions; rename to checkAccessToken needs a human-chosen permission name (deprecated API still compiles — left for review)",
     manual: true,
+    // humanOnly: NOT sent to the AI. Tried letting the AI self-recognize the
+    // tightened signature (param 2 string -> Permissions literal union) and OMIT
+    // this finding: the data signal WAS sufficient — extractDeclSlice carries
+    // BOTH overloads + a Permissions type summary (restricted, no bare string),
+    // so the AI could see the tightening. But the prompt rules added to steer it
+    // (signature-tightening + independent-eval) made glm-5.2 (2026-08-17) over-
+    // cautious: {edits:[]} for the whole file, omitting not just this (correct)
+    // but also the fully-migratable createModuleContext, which migrated reliably
+    // WITHOUT those rules (11:03-13:03 logs). Root cause was the prompt rules,
+    // not the signal — so reverted humanOnly AND the prompt rules; the data-side
+    // signal (both-overload slices + type summaries + Finding.kit/container)
+    // stays for future un-curated cases + stronger models.
     humanOnly: true,
   },
 };
