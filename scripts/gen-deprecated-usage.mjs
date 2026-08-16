@@ -895,7 +895,7 @@ function safeIdent(s) {
 // -------------------------------------------------------------- per-kit build
 /** Sanitize a kit into a file-name-safe stem. */
 function kitTag(kit) {
-  return kit.replace(/^@/, "").replace(/[^A-Za-z0-9_.]+/g, "_").replace(/^_+|_+$/g, "");
+  return kit.replace(/^@/, "").replace(/[^A-Za-z0-9_.]+/g, "_").replace(/\./g, "-").replace(/^_+|_+$/g, "");
 }
 
 /**
