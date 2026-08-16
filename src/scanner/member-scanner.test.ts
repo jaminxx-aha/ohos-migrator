@@ -277,6 +277,42 @@ test("instanceFinding: single-leaf instanceSafe still auto-fixes", () => {
   assert.equal(f!.replacement, "rm.getStringValue");
 });
 
+test("instanceFinding: signature-change rename (manual override) -> manual, humanOnly, no splice", () => {
+  // @ohos.abilityAccessCtrl AtManager.verifyAccessToken -> checkAccessToken:
+  // instanceSafe (both are instance methods on AtManager) BUT the SDK tightened
+  // param 2 string -> Permissions, so a blind `var.checkAccessToken` splice
+  // leaves `''` in place and breaks the call site (TS2345). The builtin override
+  // marks it manual + humanOnly: instanceFinding must honor that over the
+  // instance-safe auto-rename. Mirror of the real corpus call site.
+  const e = instEntry(
+    "@ohos.abilityAccessCtrl", "abilityAccessCtrl", ["AtManager", "verifyAccessToken"],
+    { kit: "@ohos.abilityAccessCtrl", members: ["AtManager", "checkAccessToken"] },
+    { instanceSafe: true },
+  );
+  const f = instanceFinding(
+    "p.ts", 0, 10, "_v0.verifyAccessToken(0, '');", "_v0", ["verifyAccessToken"], e, noMove,
+  );
+  assert.ok(f);
+  assert.equal(f!.rule, "manual");
+  assert.equal(f!.needsManual, true);
+  assert.equal(f!.humanOnly, true);
+  assert.equal(f!.replacement, undefined); // no splice — stays on the deprecated API
+  assert.equal(f!.newSymbol, "checkAccessToken"); // guidance only
+});
+
+test("instanceFinding: manual override does NOT over-match an unrelated instanceSafe rename", () => {
+  // Window.show -> showWindow has no override entry -> the instance-safe
+  // auto-rename still applies (the verifyAccessToken override is keyed to a
+  // different kit/exportName/member chain).
+  const e = instEntry("@ohos.window", "window", ["Window", "show"],
+    { kit: "@ohos.window", members: ["Window", "showWindow"] }, { instanceSafe: true });
+  const f = instanceFinding("p.ts", 0, 10, "win.show();", "win", ["show"], e, noMove);
+  assert.ok(f);
+  assert.equal(f!.rule, "rename-member");
+  assert.equal(f!.replacement, "win.showWindow");
+  assert.equal(f!.humanOnly, undefined);
+});
+
 // --- instanceFinding: container cross-kit drop-in coverage -----------------
 // An instance member whose *container* (exportName) moved cross-kit via a
 // same-name drop-in is covered by the import-specifier rewrite: after the

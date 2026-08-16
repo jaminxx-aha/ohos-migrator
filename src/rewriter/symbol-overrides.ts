@@ -32,7 +32,7 @@
  */
 
 import { readFileSync, existsSync } from "node:fs";
-import type { SymbolOverrideTable } from "../rules/types.js";
+import type { SymbolOverride, SymbolOverrideTable } from "../rules/types.js";
 
 /** Build the table key `${kit}\0${exportName}\0${members.join(".")}`. */
 export function symbolOverrideKey(
@@ -140,6 +140,8 @@ const WANT_CONSTANT = "@ohos.ability.wantConstant";
 const WANT_CONSTANT_NS = "wantConstant";
 const COMMON_EVENT_MANAGER = "@ohos.commonEventManager";
 const COMMON_EVENT_MANAGER_NS = "commonEventManager";
+const ABILITY_ACCESS_CTRL = "@ohos.abilityAccessCtrl";
+const ABILITY_ACCESS_CTRL_NS = "abilityAccessCtrl";
 
 /**
  * Build a sub-table of literal-substitution overrides for one deprecated
@@ -165,7 +167,36 @@ function literalSubTable(
   return out;
 }
 
+/**
+ * Same-kit instance-method renames whose SIGNATURE changed (param/return
+ * type, arity) — `instanceSafe` only verifies the receiver type is preserved,
+ * NOT that the call-site args still compile, so a blind `var.<newLeaf>` splice
+ * breaks the call site. Each is `manual` (no splice — the deprecated API still
+ * compiles, leave it for review) + `humanOnly` (don't send to the AI: the model
+ * can't choose the now-required argument and would either guess a silent-wrong
+ * value or trigger a file-level revert that takes down unrelated AI edits).
+ *
+ *   - `@ohos.abilityAccessCtrl` `AtManager.verifyAccessToken` ->
+ *     `checkAccessToken`: param 2 tightened `string` -> `Permissions` (a
+ *     literal union of permission-name strings). Verified against the SDK
+ *     `@ohos.abilityAccessCtrl.d.ts` (both are instance methods on `AtManager`;
+ *     `@useinstead ohos.abilityAccessCtrl.AtManager#checkAccessToken`). The
+ *     map entry's `dep.exportName` is the namespace `abilityAccessCtrl` and
+ *     `dep.members` is `[AtManager, verifyAccessToken]`, so the key uses that
+ *     full chain (same convention as the wantConstant `[container, member]`
+ *     literal entries).
+ */
+const MANUAL_SIGNATURE_CHANGES: SymbolOverrideTable = {
+  [symbolOverrideKey(ABILITY_ACCESS_CTRL, ABILITY_ACCESS_CTRL_NS, ["AtManager", "verifyAccessToken"])]: {
+    replacement: "checkAccessToken",
+    note: "signature changed: param 2 type string -> Permissions; rename to checkAccessToken needs a human-chosen permission name (deprecated API still compiles — left for review)",
+    manual: true,
+    humanOnly: true,
+  },
+};
+
 const BUILTIN: SymbolOverrideTable = {
+  ...MANUAL_SIGNATURE_CHANGES,
   ...literalSubTable(WANT_CONSTANT, WANT_CONSTANT_NS, "Action", ACTION_LITERALS),
   ...literalSubTable(WANT_CONSTANT, WANT_CONSTANT_NS, "Entity", ENTITY_LITERALS),
   ...literalSubTable(COMMON_EVENT_MANAGER, COMMON_EVENT_MANAGER_NS, "Support", COMMON_EVENT_LITERALS),
@@ -181,6 +212,8 @@ export interface SymbolOverrideEntry {
   members?: string[];
   replacement: string;
   note: string;
+  manual?: boolean;
+  humanOnly?: boolean;
 }
 
 /**
@@ -203,6 +236,8 @@ export function loadSymbolOverrides(path: string | undefined): SymbolOverrideTab
     merged[symbolOverrideKey(e.kit, e.exportName, e.members)] = {
       replacement: e.replacement,
       note: e.note,
+      ...(e.manual ? { manual: true } : {}),
+      ...(e.humanOnly ? { humanOnly: true } : {}),
     };
   }
   active = merged;
@@ -223,6 +258,6 @@ export function findSymbolOverride(
   kit: string,
   exportName: string | undefined,
   members: string[] | undefined,
-): { replacement: string; note: string } | null {
+): SymbolOverride | null {
   return active[symbolOverrideKey(kit, exportName, members)] ?? null;
 }

@@ -106,3 +106,19 @@ test("missing override file path leaves the builtin table active", () => {
   const after = findSymbolOverride(KC, NS, ["Action", "ACTION_HOME"]);
   assert.deepEqual(after, before);
 });
+
+test("abilityAccessCtrl AtManager.verifyAccessToken -> manual + humanOnly (signature change)", () => {
+  // Same-kit instance-method rename whose param type tightened string ->
+  // Permissions: instanceSafe only checks the receiver type, so the scanner
+  // would otherwise auto-splice `var.checkAccessToken` and break the call site
+  // (TS2345). Curated manual (no splice) + humanOnly (the AI can't choose the
+  // permission). Keyed by the full chain [AtManager, verifyAccessToken].
+  const r = findSymbolOverride("@ohos.abilityAccessCtrl", "abilityAccessCtrl", ["AtManager", "verifyAccessToken"]);
+  assert.ok(r, "verifyAccessToken override must exist in the builtin table");
+  assert.equal(r!.manual, true);
+  assert.equal(r!.humanOnly, true);
+  assert.equal(r!.replacement, "checkAccessToken");
+  assert.match(r!.note ?? "", /Permissions/);
+  // The container-only chain is NOT overridden (no leaf -> not auto-splicable).
+  assert.equal(findSymbolOverride("@ohos.abilityAccessCtrl", "abilityAccessCtrl", ["AtManager"]), null);
+});

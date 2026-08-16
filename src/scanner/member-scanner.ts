@@ -394,11 +394,13 @@ function memberFinding(
   // derivation — it's human-verified identity data, the highest trust tier.
   const cur = findSymbolOverride(e.dep.kit, e.dep.exportName, members);
   const ov = findMemberOverride(e.dep.kit, members, e.repl, ctx);
-  const desc: MemberReplacement = cur
-    ? { newSymbol: cur.replacement, rule: "override", note: cur.note, replacement: cur.replacement }
-    : ov
-      ? { newSymbol: ov.replacement, rule: "override", note: ov.note, replacement: ov.replacement }
-      : describeMemberReplacement(binding, e.dep.kit, members, e.repl, kitMove);
+  const desc: MemberReplacement = cur?.manual
+    ? { newSymbol: cur.replacement, rule: "manual", note: cur.note }
+    : cur
+      ? { newSymbol: cur.replacement, rule: "override", note: cur.note, replacement: cur.replacement }
+      : ov
+        ? { newSymbol: ov.replacement, rule: "override", note: ov.note, replacement: ov.replacement }
+        : describeMemberReplacement(binding, e.dep.kit, members, e.repl, kitMove);
   // Suppressed: the call site is covered by another rule (e.g. an aligned kit
   // move via rewrite-import). Emit no finding.
   if (desc.suppressed) return null;
@@ -412,6 +414,7 @@ function memberFinding(
     rule: desc.rule,
     needsManual,
     note: desc.note,
+    ...(cur?.manual && cur.humanOnly ? { humanOnly: true } : {}),
   };
   // Override and rename-member both splice replacement text at the match offsets.
   if (desc.replacement) {
@@ -899,6 +902,23 @@ export function instanceFinding(
       file, line: lineAt(content, offset), oldSymbol, newSymbol: null,
       since: e.since, rule: "manual", needsManual: true,
       note: "no @useinstead replacement",
+    };
+  }
+  // Curated per-symbol override (highest trust): a human-verified exception to
+  // the instance-safe rename — e.g. a same-class instance method rename whose
+  // SIGNATURE changed (param/return type) so a blind `var.<newLeaf>` splice
+  // leaves the call args intact and breaks the call site. `manual` emits no
+  // replacement (the call site stays on the deprecated, still-compiling API);
+  // `humanOnly` additionally excludes it from the AI residual set (the model
+  // cannot choose a now-required argument). Checked BEFORE the instance-safe
+  // auto-rename and the drop-in suppression so curation wins.
+  const cur = findSymbolOverride(e.dep.kit, e.dep.exportName, e.dep.members);
+  if (cur?.manual) {
+    return {
+      file, line: lineAt(content, offset), oldSymbol,
+      newSymbol: cur.replacement, since: e.since,
+      rule: "manual", needsManual: true, note: cur.note,
+      ...(cur.humanOnly ? { humanOnly: true } : {}),
     };
   }
   // Container cross-kit drop-in coverage: when this member's enclosing export

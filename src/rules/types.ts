@@ -113,8 +113,20 @@ export type CrossKitDropin = Record<string, string>;
  */
 export type CrossKitRenameExport = Record<string, string>;
 
-/** Curated per-symbol override: `${kit}\0${exportName}\0${members.join(".")}` -> `{ replacement, note }`. */
-export type SymbolOverrideTable = Record<string, { replacement: string; note: string }>;
+/** One curated override entry. `manual` emits a `manual` finding with NO
+ *  spliced replacement (the call site stays on the deprecated, still-compiling
+ *  API); `humanOnly` additionally excludes it from the AI residual set — the
+ *  model cannot choose a now-required argument (e.g. a tightened param type
+ *  that needs a human-picked literal), so guessing would be a silent bug or a
+ *  file-level revert that takes down unrelated AI edits. */
+export interface SymbolOverride {
+  replacement: string;
+  note: string;
+  manual?: boolean;
+  humanOnly?: boolean;
+}
+/** Curated per-symbol override: `${kit}\0${exportName}\0${members.join(".")}` -> SymbolOverride. */
+export type SymbolOverrideTable = Record<string, SymbolOverride>;
 
 /** The deprecation map, persisted as JSON. */
 export interface DeprecationMap {
@@ -190,4 +202,9 @@ export interface Finding {
   matchEnd?: number;
   /** Exact replacement text to splice at matchStart..matchEnd (when auto-fixable). */
   replacement?: string;
+  /** True when this manual finding must NOT be sent to the AI (it needs human
+   *  judgment the model can't supply — e.g. a signature change requiring a
+   *  human-chosen argument). The call site stays deprecated-but-compiling and
+   *  is reported for review. */
+  humanOnly?: boolean;
 }

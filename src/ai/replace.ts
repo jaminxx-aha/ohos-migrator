@@ -15,6 +15,19 @@ import { applyTargetedEdits } from "./apply-edits.js";
 import { applyFindingsToContent, isAutoFixable } from "../rewriter/rewriter.js";
 import type { Finding, DeprecationMap } from "../rules/types.js";
 
+/**
+ * Pick the findings that need the AI model's judgment: those the deterministic
+ * splice cannot handle (not `isAutoFixable`) AND that are not `humanOnly`.
+ * `humanOnly` manuals need a human-chosen argument the model can't supply
+ * (e.g. a signature change tightening a param to a literal union) and stay on
+ * the deprecated-but-compiling API for review — sending them to the model would
+ * either produce a silent-wrong guess or a file-level revert that takes down
+ * unrelated AI edits in the same file.
+ */
+export function selectResiduals(findings: Finding[]): Finding[] {
+  return findings.filter((f) => !isAutoFixable(f) && !f.humanOnly);
+}
+
 export interface AiReplaceInput {
   file: string;
   findings: Finding[];
@@ -54,9 +67,11 @@ export async function aiReplaceFile(
   const detApplied = det.edits.length;
 
   // 2. Residuals = findings the deterministic splice cannot handle (no
-  //    replacement — genuine manual / signature-change). Only these need the
-  //    model's judgment.
-  const residuals = input.findings.filter((f) => !isAutoFixable(f));
+  //    replacement — genuine manual / signature-change). `humanOnly` findings
+  //    are excluded: they need human judgment the model can't supply (e.g. a
+  //    signature change requiring a human-chosen argument) and are left on the
+  //    deprecated-but-compiling API for review. Only the rest need the model.
+  const residuals = selectResiduals(input.findings);
   const aiInvoked = residuals.length > 0;
 
   if (residuals.length === 0) {
