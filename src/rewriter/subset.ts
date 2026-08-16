@@ -135,13 +135,20 @@ function isWholeKitSwap(
   return true;
 }
 
-/** All `binding.<ident>` accesses in the file (value-position member reads). */
+/** All `binding.<ident>` accesses in the file (value-position member reads).
+ *  Comments are stripped first so a `binding.x` that appears only in a comment
+ *  (e.g. a JSDoc `@useinstead` line or a module-move note like
+ *  `@ohos.kit.binding.binding`) doesn't masquerade as a real member access and
+ *  reject an otherwise-safe whole-kit swap. */
 function accessedMembers(content: string, binding: string): Set<string> {
   const out = new Set<string>();
   if (!binding) return out;
+  const code = content
+    .replace(/\/\*[\s\S]*?\*\//g, " ") // block comments
+    .replace(/\/\/[^\n]*/g, ""); // line comments
   const re = new RegExp(`\\b${escapeRe(binding)}\\.([A-Za-z_$][\\w$]*)`, "g");
   let m: RegExpExecArray | null;
-  while ((m = re.exec(content)) !== null) out.add(m[1]);
+  while ((m = re.exec(code)) !== null) out.add(m[1]);
   return out;
 }
 
