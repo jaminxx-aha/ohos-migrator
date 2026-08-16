@@ -12,6 +12,7 @@
 import { buildFileContext, type FindingBrief } from "./sdk-context.js";
 import { requestEdits, type AiClientOpts } from "./client.js";
 import { applyTargetedEdits } from "./apply-edits.js";
+import { applyFindingsToContent, isAutoFixable } from "../rewriter/rewriter.js";
 import type { Finding, DeprecationMap } from "../rules/types.js";
 
 export interface AiReplaceInput {
@@ -28,6 +29,9 @@ export interface AiReplaceOutcome {
   applied: number;
   skipped: number;
   note: string;
+  /** True iff the model was actually invoked (residuals > 0). False when the
+   *  deterministic splice covered every finding. */
+  aiInvoked: boolean;
 }
 
 export async function aiReplaceFile(
@@ -37,21 +41,67 @@ export async function aiReplaceFile(
 ): Promise<AiReplaceOutcome> {
   const ctx = buildFileContext(input.projectRoot, input.file, input.findings, input.map);
 
+  // 1. Deterministic pass: splice every auto-fixable finding (rewrite-import,
+  //    member/override/inject/rename-export with a concrete replacement) into
+  //    the content directly — exactly like the subset rewriter. These edits
+  //    are computed from SDK metadata, not free-form, and the model applies
+  //    such coordinated sets unreliably: on a partial kit-move it skips the
+  //    import swap/inject and leaves a pointless binding rename with zero
+  //    migration. Splice them ourselves so the binding-split (and every other
+  //    deterministic edit) always lands.
+  const det = applyFindingsToContent(ctx.fileContent, input.findings);
+  const content = det.content;
+  const detApplied = det.edits.length;
+
+  // 2. Residuals = findings the deterministic splice cannot handle (no
+  //    replacement — genuine manual / signature-change). Only these need the
+  //    model's judgment.
+  const residuals = input.findings.filter((f) => !isAutoFixable(f));
+  const aiInvoked = residuals.length > 0;
+
+  if (residuals.length === 0) {
+    // The deterministic pass covered everything; no model call needed.
+    if (detApplied === 0) {
+      return {
+        changed: false,
+        content: ctx.fileContent,
+        applied: 0,
+        skipped: 0,
+        note: "no auto-fixable findings and no residuals",
+        aiInvoked,
+      };
+    }
+    return {
+      changed: true,
+      content,
+      applied: detApplied,
+      skipped: 0,
+      note: `applied ${detApplied} deterministic edit(s); 0 residuals for AI`,
+      aiInvoked,
+    };
+  }
+
+  // 3. Send ONLY the residuals to the model, on the deterministically-edited
+  //    content. Re-derive briefs/slices for the residual set (slices are
+  //    kit/member-keyed so unaffected by the in-memory edit; brief line numbers
+  //    are from the pre-edit scan — flagged below so the model locates by
+  //    symbol text, not line).
+  const resCtx = buildFileContext(input.projectRoot, input.file, residuals, input.map);
   const user = [
-    `## File: ${input.file} (with line numbers)`,
-    numberLines(ctx.fileContent),
+    `## File: ${input.file} (with line numbers; deterministic import/member edits already applied)`,
+    numberLines(content),
     "",
-    "## Deprecated call sites to fix (line | oldSymbol -> newSymbol | rule | note)",
-    ...ctx.findingBriefs.map((b) => briefLine(b)),
+    "## Remaining deprecated call sites needing AI judgment (locate by oldSymbol text — line numbers are from the pre-edit scan and may have shifted)",
+    ...resCtx.findingBriefs.map((b) => briefLine(b)),
     "",
     "## SDK declarations (deprecated + replacement, from the SDK .d.ts)",
-    ctx.sdkSlices.length ? ctx.sdkSlices.join("\n\n") : "(none resolvable — rely on the call-site notes)",
+    resCtx.sdkSlices.length ? resCtx.sdkSlices.join("\n\n") : "(none resolvable — rely on the call-site notes)",
   ].join("\n");
 
   const { edits, raw } = await requestEdits(client, user, retryErrors);
-  const result = applyTargetedEdits(ctx.fileContent, edits);
+  const result = applyTargetedEdits(content, edits);
 
-  if (result.applied === 0) {
+  if (detApplied === 0 && result.applied === 0) {
     return {
       changed: false,
       content: ctx.fileContent,
@@ -60,14 +110,16 @@ export async function aiReplaceFile(
       note: edits.length === 0
         ? "model returned no edits"
         : `model returned ${edits.length} edit(s) but none applied (${result.skipped.length} skipped: ${summarizeSkipped(result.skipped)})`,
+      aiInvoked,
     };
   }
   return {
     changed: true,
     content: result.content,
-    applied: result.applied,
+    applied: detApplied + result.applied,
     skipped: result.skipped.length,
-    note: `applied ${result.applied} edit(s)${result.skipped.length ? `, skipped ${result.skipped.length}` : ""}`,
+    note: `applied ${detApplied} deterministic + ${result.applied} AI edit(s)${result.skipped.length ? `, skipped ${result.skipped.length}` : ""}`,
+    aiInvoked,
   };
 }
 

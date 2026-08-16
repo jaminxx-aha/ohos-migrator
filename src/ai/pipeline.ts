@@ -27,6 +27,10 @@ export interface AiRewriteResult {
    *  the TS-LS single-file diagnostics delta. */
   verifyMode?: "hvigor" | "ts-ls";
   reason?: string;
+  /** True iff the model was actually invoked for at least one file (residuals
+   *  existed after the deterministic pass). False when every finding was
+   *  auto-fixable and the deterministic splice did all the work. */
+  aiInvoked?: boolean;
 }
 
 interface FileJob {
@@ -35,6 +39,8 @@ interface FileJob {
   preAi: string;
   applied: number;
   status: "applied" | "reverted" | "failed";
+  /** Whether the model was invoked for this file (residuals > 0). */
+  aiInvoked: boolean;
 }
 
 /**
@@ -69,7 +75,7 @@ export async function runAiRewrite(
     } catch {
       continue; // file unreadable — skip
     }
-    jobs.push({ file, findings, preAi, applied: 0, status: "reverted" });
+    jobs.push({ file, findings, preAi, applied: 0, status: "reverted", aiInvoked: false });
   }
 
   // For `--file`, verify with the TS LanguageService (single-file diagnostics
@@ -87,6 +93,7 @@ export async function runAiRewrite(
         aiOpts,
       );
       job.applied = out.applied;
+      job.aiInvoked = out.aiInvoked;
       if (out.changed) {
         writeFileSync(join(projectRoot, ...job.file.split("/")), out.content, "utf8");
         job.status = "applied"; // provisional — pending hvigor
@@ -130,6 +137,7 @@ export async function runAiRewrite(
       hvigorRan: false,
       verifyMode: useLs ? "ts-ls" : "hvigor",
       reason: verifyReason ?? "verifier unavailable",
+      aiInvoked: jobs.some((j) => j.aiInvoked),
     };
   }
 
@@ -153,6 +161,7 @@ export async function runAiRewrite(
         fileErrors1.get(job.file),
       );
       job.applied = out.applied;
+      job.aiInvoked = out.aiInvoked;
       if (out.changed) {
         writeFileSync(join(projectRoot, ...job.file.split("/")), out.content, "utf8");
         job.status = "applied"; // provisional — pending final hvigor
@@ -191,6 +200,7 @@ export async function runAiRewrite(
     perFile: jobs.map((j) => ({ file: j.file, applied: j.applied, status: j.status })),
     hvigorRan: true,
     verifyMode: useLs ? "ts-ls" : "hvigor",
+    aiInvoked: jobs.some((j) => j.aiInvoked),
   };
 }
 

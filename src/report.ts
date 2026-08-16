@@ -63,6 +63,9 @@ export interface RewriteSummaryInput {
      *  TS-LS single-file delta used under `--file`). */
     verifyMode?: "hvigor" | "ts-ls";
     reason?: string;
+    /** True iff the model was actually invoked. False when every finding was
+     *  auto-fixable (deterministic splice did all the work, no AI call). */
+    aiInvoked?: boolean;
   };
   aiModel?: string;
   aiBaseUrl?: string;
@@ -81,16 +84,22 @@ export function printRewriteSummary(s: RewriteSummaryInput): string {
         const a = s.ai;
         const verLabel = a.verifyMode === "ts-ls" ? "TS-LS verified, single-file" : "hvigor-verified";
         const verNoun = a.verifyMode === "ts-ls" ? "TS-LS verification" : "hvigor verification";
+        // When every finding was auto-fixable, the deterministic splice did all
+        // the work and the model was never called — label it as such so the
+        // report doesn't claim an AI run that didn't happen.
+        const head = a.aiInvoked === false ? "Deterministic rewrite" : "AI rewrite";
         if (!a.hvigorRan) {
           lines.push(
-            `AI rewrite: reverted (no ${verNoun}: ${a.reason ?? "unavailable"}); ${a.appliedFiles} file(s) left at original state.`,
+            `${head}: reverted (no ${verNoun}: ${a.reason ?? "unavailable"}); ${a.appliedFiles} file(s) left at original state.`,
           );
         } else {
           lines.push(
-            `AI rewrite (${verLabel}): ${a.appliedFiles} file(s) replaced; ${a.retriedFiles} retried with compiler feedback; ${a.stillFailedFiles} still failing (reverted to original).`,
+            `${head} (${verLabel}): ${a.appliedFiles} file(s) replaced; ${a.retriedFiles} retried with compiler feedback; ${a.stillFailedFiles} still failing (reverted to original).`,
           );
         }
-        if (s.aiModel) {
+        if (a.aiInvoked === false) {
+          lines.push("  (no model invoked — all findings were auto-fixable; deterministic splice only)");
+        } else if (s.aiModel) {
           lines.push(`  model: ${s.aiModel}${s.aiBaseUrl ? ` @ ${s.aiBaseUrl}` : ""}`);
         }
       } else if (s.leftForAiFindings === 0) {
