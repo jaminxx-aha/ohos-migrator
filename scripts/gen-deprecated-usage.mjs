@@ -20,10 +20,11 @@
  *
  * Run:   node scripts/gen-deprecated-usage.mjs [apiVersion] [--check]
  */
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, basename } from "node:path";
 import { createRequire } from "node:module";
+import { spawnSync } from "node:child_process";
 
 import { Project, SyntaxKind } from "ts-morph";
 import ts from "typescript";
@@ -37,6 +38,11 @@ const TS_LIB_DIR = dirname(require.resolve("typescript")).replace(/[\\/]+$/, "")
 // -------------------------------------------------------------- CLI
 const argv = process.argv.slice(2);
 const check = argv.includes("--check");
+// --arkts: after the TS-LS self-repair, run the real ArkTSCheck (hvigorw
+// default@CompileArkTS) self-repair loop to comment out any residual arkts-*
+// errors (FA-only, non-TS field types, unresolvable nested types) so the
+// corpus fully compiles. Requires DevEco SDK (NODE_HOME/DEVECO_SDK_HOME).
+const arkts = argv.includes("--arkts");
 const apiVersion = argv.find((a) => !a.startsWith("-")) ?? "24";
 const generatedAt = new Date().toISOString();
 
@@ -294,49 +300,13 @@ function pickOverload(cands) {
 
 // -------------------------------------------------------------- argument mapper
 /**
- * Map a parameter's type text to a best-effort argument placeholder. `({} as any)`
- * is the universal fallback — `any` is assignable to every type, so it can never
- * produce a type error. Primitives/callbacks/arrays get nicer literals.
+ * Map a parameter's type text to an ArkTS-legal argument placeholder. Delegates
+ * to placeholderForType (no `any`/`as`/untyped `{}`). Genuinely-unconstructible
+ * types return the `__omit__` sentinel — the emitted line then errors (2304) and
+ * the hvigor self-repair comments it.
  */
 function placeholderFor(typeText, ctx) {
-  const t = (typeText ?? "").trim();
-  if (!t) return "({} as any)";
-  // Optional / union containing undefined handled by caller (only required
-  // params reach here), but strip a trailing `| undefined` defensively.
-  const core = t.replace(/\s*\|\s*undefined\s*$/, "").replace(/\s*\|\s*void\s*$/, "").trim();
-
-  // Primitive-ish.
-  if (/^(string|String)$/.test(core)) return "''";
-  if (/^(number|Number)$/.test(core)) return "0";
-  if (/^(bigint)$/.test(core)) return "0n";
-  if (/^(boolean|Boolean)$/.test(core)) return "false";
-  if (core === "null") return "null";
-
-  // String/number literal union → first literal.
-  const lit = core.match(/^'[^']*'|^"[^"]*"|^\d+(\.\d+)?$/);
-  if (lit) return lit[0];
-
-  // Callback / function type.
-  if (/\bAsyncCallback\b/.test(core)) return "() => {}";
-  if (core.startsWith("(") || /=>/.test(core) || /\bFunction\b/.test(core)) return "() => {}";
-  if (/^(ErrorCallback|Callback)<.*>/.test(core)) return "() => {}";
-
-  // Array / tuple / Record / object.
-  if (/\[\]$/.test(core) || core.startsWith("Array<") || core.startsWith("ReadonlyArray<")) return "[]";
-  if (core.startsWith("[")) return "({} as any)"; // tuple `[a, b, ...]` — `[]` is not assignable to a fixed-length tuple; `any` is
-  if (core === "object" || core === "Object") return "{}";
-  if (core.startsWith("Record<") || core.startsWith("Partial<") || core.startsWith("Pick<") || core.startsWith("Omit<")) return "{}";
-
-  // Promise / Uint8Array / Map / Set / Date / Error -> safe-ish literals.
-  if (core.startsWith("Promise<")) return "({} as any)";
-  if (core.startsWith("Uint8Array") || core.startsWith("ArrayBuffer")) return "({} as any)";
-
-  // Named type (interface/class/enum/type alias): a `({} as any)` arg is
-  // universally assignable (any → every type) and avoids the 2339/2614 traps
-  // of binding-qualifying or named-importing a type that may be a non-exported
-  // namespace member or a re-export. Arity (the real-usage signal) is
-  // preserved; the receiver/call shape carries the "real usage".
-  return "({} as any)";
+  return placeholderForType(typeText, ctx, 0);
 }
 
 /**
@@ -465,7 +435,8 @@ function typeArgsOfEnclosingContainer(decl) {
       [];
     const n = Array.isArray(tps) ? tps.length : 0;
     if (n <= 0) return "";
-    return "<" + Array(n).fill("any").join(", ") + ">";
+    // ArkTS forbids `any`/`unknown` type args; use `string` (concrete).
+    return "<" + Array(n).fill("string").join(", ") + ">";
   } catch {
     return "";
   }
@@ -480,7 +451,10 @@ function ownTypeArgs(decl) {
       decl.compilerNode?.typeParameters ??
       [];
     const n = Array.isArray(tps) ? tps.length : 0;
-    return n > 0 ? "<" + Array(n).fill("any").join(", ") + ">" : "";
+    // ArkTS forbids `any`/`unknown` in type-arg position (arkts-no-any-unknown);
+    // use `string` as a concrete filler (valid for most unconstrained generics;
+    // constrained generics are caught by the hvigor self-repair).
+    return n > 0 ? "<" + Array(n).fill("string").join(", ") + ">" : "";
   } catch {
     return "";
   }
@@ -631,6 +605,171 @@ function exportedModuleLevelName(topSf, name) {
   return false;
 }
 
+// -------------------------------------------------------------- ArkTS-legal construction
+//
+// ArkTSCheck forbids `any`, `as` casts, and untyped object literals. The old
+// stubs (`{} as T`, `({} as any)`) compiled only under the scanner's relaxed
+// TS-LS. The helpers below build REAL, ArkTS-legal values:
+//   - data interface → typed object literal `{ field: <placeholder>, ... }`
+//     (contextual type = the interface, so the literal is typed, not untyped)
+//   - class with ctor → `new T(<typed-arg placeholders>)`
+//   - call-signature interface → function literal `() => {}`
+//   - enum → `Enum.FIRST_MEMBER`
+//   - primitives/callbacks/arrays → literals
+// Genuinely-unconstructible types (method-bearing interfaces like
+// ResourceManager, tuples, Promise-typed args) yield the sentinel `__omit__`,
+// which errors (2304 cannot find name) and the hvigor self-repair comments it.
+
+const TYPE_DECL_KINDS = [
+  SyntaxKind.InterfaceDeclaration,
+  SyntaxKind.ClassDeclaration,
+  SyntaxKind.EnumDeclaration,
+  SyntaxKind.TypeAliasDeclaration,
+];
+const OMIT = "__omit__";
+
+/** JSDoc text of a declaration (for @FAModelOnly detection). Defensive. */
+function jsDocText(decl) {
+  if (!decl) return "";
+  try {
+    const docs = typeof decl.getJsDocs === "function" ? decl.getJsDocs() : [];
+    return docs.map((d) => { try { return d.getText(); } catch { return ""; } }).join("\n");
+  } catch {
+    return "";
+  }
+}
+/** True if the declaration's JSDoc marks it FA-model-only (unusable in stageMode). */
+function declIsFAModelOnly(decl) {
+  if (!decl) return false;
+  return /@FAModelOnly\b/.test(jsDocText(decl));
+}
+
+/** Resolve a bare type name to its declaration in the kit's top file or the
+ *  symbol's source file. Returns { decl, kind } or undefined. */
+function resolveTypeDecl(name, ctx) {
+  if (!name || !/^[A-Za-z_$][\w$]*$/.test(name)) return undefined;
+  for (const sf of [ctx.topSf, ctx.sf].filter(Boolean)) {
+    for (const k of TYPE_DECL_KINDS) {
+      for (const d of getDescendantsOfKind(sf, k)) {
+        if (getName(d) === name) return { decl: d, kind: k };
+      }
+    }
+  }
+  return undefined;
+}
+
+/** Does an interface/class decl declare any method (→ not a data type; can't be
+ *  object-literal'd)? Defensive. */
+function interfaceHasMethods(decl) {
+  if (!decl) return false;
+  try {
+    if ((getDescendantsOfKind(decl, SyntaxKind.MethodSignature) ?? []).length > 0) return true;
+  } catch { /* ignore */ }
+  try {
+    if ((getDescendantsOfKind(decl, SyntaxKind.MethodDeclaration) ?? []).length > 0) return true;
+  } catch { /* ignore */ }
+  return false;
+}
+
+/** Required (non-optional) data fields of an interface/class decl, as
+ *  { name, typeText }. Returns null if the decl has methods (not a data type)
+ *  or has no enumerable required fields. Does not chase `extends` (inherited
+ *  fields missing from the literal are caught by self-repair). */
+function interfaceFields(decl) {
+  if (!decl) return null;
+  const k = decl.getKind();
+  if (k !== SyntaxKind.InterfaceDeclaration && k !== SyntaxKind.ClassDeclaration) return null;
+  if (interfaceHasMethods(decl)) return null;
+  const fields = [];
+  for (const pk of [SyntaxKind.PropertySignature, SyntaxKind.PropertyDeclaration]) {
+    for (const p of getDescendantsOfKind(decl, pk)) {
+      try {
+        if (p?.isOptional?.()) continue;
+        const nm = getName(p);
+        if (!nm) continue;
+        const tn = p.getTypeNode?.();
+        fields.push({ name: nm, typeText: tn ? tn.getText() : "" });
+      } catch { /* skip */ }
+    }
+  }
+  return fields.length > 0 ? fields : null;
+}
+
+/** Build an ArkTS-legal typed object literal for a data interface/class decl:
+ *  `{ field: <placeholder>, ... }` for each required field. Returns OMIT if
+ *  not constructible (methods / an unconstructible field type). */
+function objectLiteralFor(decl, ctx, depth) {
+  const fields = interfaceFields(decl);
+  if (!fields) return OMIT;
+  const parts = [];
+  for (const f of fields) {
+    const ph = placeholderForType(f.typeText, ctx, depth + 1);
+    if (ph === OMIT) return OMIT;
+    parts.push(`${f.name}: ${ph}`);
+  }
+  return `{ ${parts.join(", ")} }`;
+}
+
+/**
+ * Map a type text to an ArkTS-legal value placeholder (NO any/as/untyped {}).
+ * Returns OMIT (`__omit__`) when no legal placeholder can be built — the
+ * emitted line then errors (2304) and the hvigor self-repair comments it.
+ */
+function placeholderForType(typeText, ctx, depth = 0) {
+  const t = (typeText ?? "").trim();
+  if (!t) return OMIT;
+  if (depth > 3) return OMIT;
+  const core = t.replace(/\s*\|\s*(undefined|void)\s*$/, "").trim();
+  if (!core) return OMIT;
+  if (/^(string|String)$/.test(core)) return "''";
+  if (/^(number|Number)$/.test(core)) return "0";
+  if (/^(bigint)$/.test(core)) return "0n";
+  if (/^(boolean|Boolean)$/.test(core)) return "false";
+  if (core === "null") return "null";
+  const lit = core.match(/^'[^']*'|^"[^"]*"|^\d+(\.\d+)?$/);
+  if (lit) return lit[0];
+  if (/\bAsyncCallback\b/.test(core) || core.startsWith("(") || /=>/.test(core) ||
+      /\bFunction\b/.test(core) || /^(ErrorCallback|Callback)</.test(core)) return "() => {}";
+  if (/\[\]$/.test(core) || core.startsWith("Array<") || core.startsWith("ReadonlyArray<")) return "[]";
+  if (core.startsWith("[")) return OMIT; // tuple — element-wise construction is unreliable
+  if (/^Uint8Array/.test(core) || core.startsWith("ArrayBuffer")) return "new Uint8Array(0)";
+  if (core.startsWith("Promise<")) return OMIT; // no value placeholder for a Promise-typed arg
+  if (core === "object" || core === "Object") return OMIT;
+  if (core.startsWith("Record<") || core.startsWith("Partial<") || core.startsWith("Pick<") || core.startsWith("Omit<")) return OMIT;
+  // Named type: strip qualified prefix (ns.Type → Type) and generic args.
+  const simple = core.replace(/^[\w$]+\./, "").replace(/<.*>$/, "").trim();
+  if (!/^[A-Za-z_$][\w$]*$/.test(simple)) return OMIT;
+  const resolved = resolveTypeDecl(simple, ctx);
+  if (!resolved) return OMIT;
+  const { decl: rd, kind: rk } = resolved;
+  if (rk === SyntaxKind.EnumDeclaration) {
+    const member = firstEnumMember(rd);
+    if (!member) return OMIT;
+    // Qualify if the enum is a namespace member (reached via the binding),
+    // not a module-level named export.
+    const ref = exportedNamespaceMember(ctx.topSf, ctx.binding, simple)
+      ? `${ctx.binding}.${simple}` : simple;
+    return `${ref}.${member}`;
+  }
+  if (rk === SyntaxKind.ClassDeclaration) {
+    // A class-typed arg would need `new` with a correctly-qualified name and
+    // constructible ctor args — unreliable for namespace-member classes.
+    // Conservative: OMIT (self-repair comments; class-typed args are rare).
+    return OMIT;
+  }
+  if (rk === SyntaxKind.InterfaceDeclaration || rk === SyntaxKind.TypeAliasDeclaration) {
+    // Type alias to a function type (e.g. `type EventListener = (e) => void`)
+    // → function literal. Common for callback params.
+    if (rk === SyntaxKind.TypeAliasDeclaration) {
+      const tn = rd.getTypeNode?.();
+      const tk = tn?.getKind?.();
+      if (tk === SyntaxKind.FunctionType || tk === SyntaxKind.ConstructSignature) return "() => {}";
+    }
+    return objectLiteralFor(rd, ctx, depth + 1);
+  }
+  return OMIT;
+}
+
 // -------------------------------------------------------------- form selection
 /**
  * Build the usage lines for one symbol. Returns { lines: string[],
@@ -647,6 +786,17 @@ function emitUsage(sym, ctx) {
   const { kit, binding, exportName, members, entry, decl } = ctx;
   let m = members ?? [];
   const note = `// since ${entry.since ?? "?"}; useinstead ${replText(entry.repl)}`;
+
+  // FA-model-only symbols cannot be referenced in a stageMode module (ArkTSCheck
+  // rejects "used only in FA Mode"). Comment them out — the honest treatment;
+  // scanner detection drops these ~113 (acceptable; they're stage-unusable).
+  if (declIsFAModelOnly(decl)) {
+    return {
+      lines: [`${note}\n// ${sym}: FA-model-only; not referenceable in stageMode (omitted)`],
+      namedImports: [],
+      fallback: true,
+    };
+  }
 
   // Module-move (deprecated kit -> new kit): detection is import-level — the
   // import specifier itself triggers the rewrite-import scanner — so no body
@@ -695,6 +845,7 @@ function emitUsage(sym, ctx) {
     binding,
     namedExportsSet: ctx.namedExportsSet,
     sf: ctx.sf,
+    topSf: ctx.topSf,
     probedNested: ctx.probedNested,
     addNamedImport: (n) => namedImports.push(n),
     nextVar: ctx.nextVar,
@@ -727,24 +878,23 @@ function emitUsage(sym, ctx) {
       case SyntaxKind.ClassDeclaration:
       case SyntaxKind.InterfaceDeclaration:
       case SyntaxKind.TypeAliasDeclaration: {
-        // Use the declaration's OWN type params (e.g. `class Vector<T>` ->
-        // `Vector<any>`) so a generic type reference compiles (TS2314).
-        const ta = ownTypeArgs(decl);
-        const te = `${r}${ta}`;
+        // Reference the deprecated type in a type annotation (declare-only,
+        // no initializer) — fires 6385 on the type reference and is always
+        // ArkTS-legal (no `as`/`any`/object construction needed). For a generic
+        // type, ownTypeArgs supplies concrete `<string, ...>` args.
+        const te = `${r}${ownTypeArgs(decl)}`;
         const v = argCtx.nextVar();
-        return { lines: [`${note}\nlet ${v}: ${te} = {} as ${te};`], namedImports };
+        return { lines: [`${note}\nlet ${v}: ${te};`], namedImports };
       }
       case SyntaxKind.EnumDeclaration:
         return { lines: [`${note}\nconst ${argCtx.nextVar()} = ${r}.${firstEnumMember(decl) ?? "0"};`], namedImports };
       case SyntaxKind.ModuleDeclaration: {
-        // The deprecated namespace itself. A value reference `const _ = binding`
-        // 2708s for type-only namespaces (only interfaces). Only emit it when
-        // the namespace exposes value members; otherwise comment-only.
-        if (namespaceHasValueMembers(ctx.topSf, r)) {
-          return { lines: [`${note}\nconst ${argCtx.nextVar()} = ${r};`], namedImports };
-        }
+        // The deprecated namespace itself. ArkTS forbids using a namespace as
+        // an object value (`const _ = binding` → arkts-no-ns-as-obj), and a
+        // deprecated namespace/module is detected at the IMPORT line (the
+        // `import binding from '<kit>'` fires 6385), so the body is comment-only.
         return {
-          lines: [`${note}\n// ${sym}: type-only namespace; no value usage; omitted`],
+          lines: [`${note}\n// ${sym}: deprecated namespace; detected via the import line; usage omitted`],
           namedImports: [],
           fallback: true,
         };
@@ -800,26 +950,34 @@ function emitUsage(sym, ctx) {
 function emitMember(typeExpr, leaf, kind, decl, note, argCtx, namedImports) {
   // Type-only leaves (interface / type alias referenced as the deprecated
   // symbol itself, e.g. huks's `export interface HuksHandle` attributed as
-  // members=[HuksHandle]). A value-position reference (`const _ = binding.Leaf`)
-  // 2339s — interfaces/type aliases have no runtime value, so `binding.Leaf` in
-  // value position is a property lookup that fails. Emit in TYPE position
-  // (`let v: binding.Leaf = {} as binding.Leaf`), which resolves to the exported
-  // namespace type member and fires 6385.
+  // members=[HuksHandle]). Reference in TYPE position (declare-only local):
+  // `let v: binding.Leaf;` resolves to the exported namespace type member and
+  // fires 6385. No value construction (interfaces/type aliases have no runtime
+  // value) and no `as` (ArkTS-legal).
   if (kind === SyntaxKind.InterfaceDeclaration || kind === SyntaxKind.TypeAliasDeclaration) {
     const rt = `${typeExpr}.${leaf}${ownTypeArgs(decl)}`;
     const v = argCtx.nextVar();
-    return { lines: [`${note}\nlet ${v}: ${rt} = {} as ${rt};`], namedImports };
+    return { lines: [`${note}\nlet ${v}: ${rt};`], namedImports };
   }
   const instanceKinds = new Set([
     SyntaxKind.MethodSignature,
     SyntaxKind.PropertySignature,
   ]);
   if (instanceKinds.has(kind)) {
+    // ArkTSCheck requires definite assignment before use — a bare `let v: T;`
+    // then `v.leaf` errors "used before being assigned", and
+    // `let v: T | undefined = undefined` narrows v to `never` (ArkTS CFA sees
+    // v is definitely undefined, so `v?.leaf` operates on `never`). An AMBIENT
+    // `declare let v: T;` sidesteps both: externally-assigned (no 2454) and
+    // not CFA-narrowed (so `v.leaf` checks against the real type T). The member
+    // access still references the deprecated member (fires 6385 under the
+    // scanner's reportDeprecated), with no value construction / `as` / `any` —
+    // works for data AND method-bearing interfaces, even async-only ones.
     const rt = withTypeArgs(typeExpr, decl, kind);
     const v = argCtx.nextVar();
     const isCall = kind === SyntaxKind.MethodSignature;
     const tail = isCall ? `${v}.${leaf}(${argsFor(decl, argCtx)});` : `const ${argCtx.nextVar()} = ${v}.${leaf};`;
-    return { lines: [`${note}\nlet ${v}: ${rt} = {} as ${rt}; ${tail}`], namedImports };
+    return { lines: [`${note}\ndeclare let ${v}: ${rt}; ${tail}`], namedImports };
   }
   if (kind === SyntaxKind.MethodDeclaration) {
     if (isStatic(decl)) {
@@ -827,7 +985,7 @@ function emitMember(typeExpr, leaf, kind, decl, note, argCtx, namedImports) {
     }
     const rt = withTypeArgs(typeExpr, decl, kind);
     const v = argCtx.nextVar();
-    return { lines: [`${note}\nlet ${v}: ${rt} = {} as ${rt}; ${v}.${leaf}(${argsFor(decl, argCtx)});`], namedImports };
+    return { lines: [`${note}\ndeclare let ${v}: ${rt}; ${v}.${leaf}(${argsFor(decl, argCtx)});`], namedImports };
   }
   if (kind === SyntaxKind.PropertyDeclaration) {
     if (isStatic(decl)) {
@@ -835,7 +993,7 @@ function emitMember(typeExpr, leaf, kind, decl, note, argCtx, namedImports) {
     }
     const rt = withTypeArgs(typeExpr, decl, kind);
     const v = argCtx.nextVar();
-    return { lines: [`${note}\nlet ${v}: ${rt} = {} as ${rt}; const ${argCtx.nextVar()} = ${v}.${leaf};`], namedImports };
+    return { lines: [`${note}\ndeclare let ${v}: ${rt}; const ${argCtx.nextVar()} = ${v}.${leaf};`], namedImports };
   }
   // Namespace-value leaves (no instance stub).
   switch (kind) {
@@ -936,8 +1094,17 @@ function generateAll() {
   const stats = { kits: 0, symbols: 0, fallback: 0, files: 0, orphan, unimportable };
   const perFileErrors = []; // for --check
 
-  const outDir = join(ROOT, "test", "deprecated");
+  // Corpus lives inside the buildable stage module so ArkTSCheck compiles it.
+  const outDir = join(ROOT, "test", "deprecated", "entry", "src", "main", "ets");
   mkdirSync(outDir, { recursive: true });
+  // Clear stale corpus files from a prior (flat) generation layout.
+  for (const f of readdirSync(outDir)) {
+    if (f.endsWith(".ets") && f !== "corpus-index.ets" &&
+        !f.includes("entryability") && !f.includes("pages")) {
+      try { rmSync(join(outDir, f)); } catch { /* ignore */ }
+    }
+  }
+  const corpusFiles = [];
 
   for (const [kit, syms] of [...byKit.entries()].sort()) {
     const namedExportsSet = new Set(kitExports[kit] ?? []);
@@ -1017,10 +1184,23 @@ function generateAll() {
 
     const filePath = join(outDir, `${kitTag(kit)}.ets`);
     writeFileSync(filePath, out.join("\n"), "utf8");
+    corpusFiles.push(kitTag(kit));
     stats.files++;
     stats.kits++;
     if (fallbackCount) perFileErrors.push({ kit, fallback: fallbackCount });
   }
+
+  // corpus-index.ets: side-effect import of every corpus file so ArkTSCheck
+  // pulls them all into the compile graph (only files reachable from the entry
+  // ability are compiled). EntryAbility.ets imports this index.
+  const indexOut = [
+    "// Auto-generated by scripts/gen-deprecated-usage.mjs — do not edit.",
+    "// Side-effect imports that pull every deprecated-API corpus file into the",
+    "// ArkTS compile graph (only files reachable from the entry ability compile).",
+    ...corpusFiles.map((t) => `import './${t}';`),
+    "",
+  ];
+  writeFileSync(join(outDir, "corpus-index.ets"), indexOut.join("\n"), "utf8");
 
   return { stats, perFileErrors };
 }
@@ -1198,14 +1378,26 @@ function checkCompiles() {
   console.log(`\n--check: ${total} residual errors across ${perKit.size} kits (out of ${files.length} files)`);
 }
 
+// Scaffolding subdirs (entry ability / pages) use @kit.* imports the TS-LS
+// host can't resolve, and build/oh_modules/.hvigor hold generated artifacts —
+// exclude all from the TS-LS self-repair / check, which must only touch the
+// generated corpus files.
+const TS_LS_SKIP_DIRS = new Set([
+  "entryability", "pages",          // scaffolding
+  "build", "oh_modules", ".hvigor", // hvigor artifacts
+  "node_modules",
+]);
+
 function collectTsFiles(dir) {
   const out = [];
   const walk = (d) => {
     for (const name of readdirSync(d)) {
       const p = join(d, name);
       const s = statSync(p);
-      if (s.isDirectory()) walk(p);
-      else if (name.endsWith(".ets")) out.push(p);
+      if (s.isDirectory()) {
+        if (TS_LS_SKIP_DIRS.has(name)) continue;
+        walk(p);
+      } else if (name.endsWith(".ets")) out.push(p);
     }
   };
   if (existsSync(dir)) walk(dir);
@@ -1229,4 +1421,13 @@ console.log(`self-repair: commented ${repair.commented} un-compilable statement 
 if (check) {
   console.log("\nrunning compile check (--check)...");
   checkCompiles();
+}
+if (arkts) {
+  console.log("\nrunning ArkTSCheck self-repair (--arkts)...");
+  const r = spawnSync(process.execPath, [join(__dirname, "check-arkts.mjs")],
+    { stdio: "inherit", env: process.env });
+  if (r.status !== 0) {
+    console.error("ArkTSCheck self-repair reported residual errors (see above).");
+    process.exit(r.status ?? 1);
+  }
 }
