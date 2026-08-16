@@ -75,44 +75,57 @@ function clearCaches() {
   }
 }
 
-/** Resolve the SDK ets/api dir: prefer the deprecation map's sdkPath (matches
- *  the SDK the indexer scanned), fall back to DEVECO_SDK_HOME. */
-function sdkApiDir() {
+/** Resolve the SDK root (the dir holding openharmony/ + hms/), from the
+ *  deprecation map's sdkPath (e.g. .../openharmony/ets/api) or DEVECO_SDK_HOME. */
+function sdkRoot() {
   const mapPath = join(ROOT, ".harmony-deprecate", "deprecation-map.24.json");
   if (existsSync(mapPath)) {
     try {
       const m = JSON.parse(readFileSync(mapPath, "utf8"));
-      if (m.sdkPath) return m.sdkPath;
+      if (m.sdkPath) {
+        // .../<root>/openharmony/ets/api  ->  .../<root>
+        return m.sdkPath.replace(/\/openharmony\/ets\/api$/, "");
+      }
     } catch { /* fall through */ }
   }
-  return join(DEVECO_SDK_HOME, "default", "openharmony", "ets", "api");
+  return join(DEVECO_SDK_HOME, "default");
 }
 
-/** Append the Lite syscaps to every SDK device-define JSON so ArkTSCheck's
- *  device-capability intersection includes them (idempotent; append-only). */
+/** All device-define dirs across the SDK variants ace-server may read: ace-server
+ *  unions getPopularDeviceDefineSyscap (.json) + getHmsPopularDeviceDefineSyscap
+ *  (-hmos.json), across openharmony and hms, ets and js. Patch them all so the
+ *  device syscap set includes Lite capabilities regardless of which variant
+ *  ace-server resolves for runtimeOS=HarmonyOS. Idempotent; append-only. */
 function patchSdkDeviceDefine() {
-  const dd = join(sdkApiDir(), "device-define");
-  if (!existsSync(dd)) {
-    console.log(`patch: device-define dir not found at ${dd} — skipping syscap patch`);
-    return;
-  }
+  const root = sdkRoot();
+  const dirs = [
+    join(root, "openharmony", "ets", "api", "device-define"),
+    join(root, "openharmony", "js", "api", "device-define"),
+    join(root, "hms", "ets", "api", "device-define"),
+    join(root, "hms", "js", "api", "device-define"),
+  ];
   let total = 0;
-  for (const name of readdirSync(dd)) {
-    if (!name.endsWith(".json")) continue;
-    const p = join(dd, name);
-    try {
-      const d = JSON.parse(readFileSync(p, "utf8"));
-      if (!Array.isArray(d.SysCaps)) continue;
-      const have = new Set(d.SysCaps);
-      const add = LITE_SYSCAPS.filter((x) => !have.has(x));
-      if (add.length) {
-        d.SysCaps.push(...add);
-        writeFileSync(p, JSON.stringify(d, null, 2) + "\n", "utf8");
-        total += add.length;
-      }
-    } catch { /* skip malformed file */ }
+  let seen = 0;
+  for (const dd of dirs) {
+    if (!existsSync(dd)) continue;
+    seen++;
+    for (const name of readdirSync(dd)) {
+      if (!name.endsWith(".json")) continue;
+      const p = join(dd, name);
+      try {
+        const d = JSON.parse(readFileSync(p, "utf8"));
+        if (!Array.isArray(d.SysCaps)) continue;
+        const have = new Set(d.SysCaps);
+        const add = LITE_SYSCAPS.filter((x) => !have.has(x));
+        if (add.length) {
+          d.SysCaps.push(...add);
+          writeFileSync(p, JSON.stringify(d, null, 2) + "\n", "utf8");
+          total += add.length;
+        }
+      } catch { /* skip malformed file */ }
+    }
   }
-  console.log(`patch: added ${total} Lite syscap(s) to device-define JSONs (phone/tablet/2in1 now include Lite capabilities)`);
+  console.log(`patch: added ${total} Lite syscap(s) across ${seen} device-define dir(s) under ${root} (covers .json + -hmos.json, openharmony + hms)`);
 }
 
 /** Run hvigorw CompileArkTS; return the raw stdout+stderr text. */
