@@ -52,6 +52,16 @@ export interface RewriteSummaryInput {
   /** Residual deprecated findings after the subset (for `--use-ai`). */
   leftForAiFindings: number;
   leftForAiFiles: number;
+  /** When `--use-ai --write` ran, the batch AI replacement result. */
+  ai?: {
+    appliedFiles: number;
+    retriedFiles: number;
+    stillFailedFiles: number;
+    hvigorRan: boolean;
+    reason?: string;
+  };
+  aiModel?: string;
+  aiBaseUrl?: string;
 }
 
 export function printRewriteSummary(s: RewriteSummaryInput): string {
@@ -93,11 +103,29 @@ export function printRewriteSummary(s: RewriteSummaryInput): string {
 
   if (s.useAi) {
     lines.push("");
-    if (s.leftForAiFindings > 0) {
+    if (s.ai) {
+      const a = s.ai;
+      if (!a.hvigorRan) {
+        lines.push(
+          `--use-ai: AI edits reverted (no hvigor verification: ${a.reason ?? "unavailable"}); ${a.appliedFiles} file(s) left at pre-AI state.`,
+        );
+      } else {
+        lines.push(
+          `--use-ai: AI replaced ${a.appliedFiles} file(s); ${a.retriedFiles} retried with compiler feedback; ${a.stillFailedFiles} still failing (reverted to pre-AI).`,
+        );
+      }
+      if (s.aiModel) {
+        lines.push(`  model: ${s.aiModel}${s.aiBaseUrl ? ` @ ${s.aiBaseUrl}` : ""}`);
+      }
+    } else if (s.leftForAiFindings > 0) {
       lines.push(
         `--use-ai: ${s.leftForAiFindings} residual finding(s) across ${s.leftForAiFiles} file(s).`,
       );
-      lines.push("  AI replacement not yet implemented (TODO step 2); residuals left unchanged.");
+      if (s.write) {
+        lines.push("  (AI not configured — set --ai-base-url/--ai-api-key/--ai-model; skipping AI replacement.)");
+      } else {
+        lines.push("  (dry-run — AI not invoked; rerun with --write to apply AI replacement.)");
+      }
     } else {
       lines.push("--use-ai: no residual deprecated usages after the subset. Nothing to send to AI.");
     }

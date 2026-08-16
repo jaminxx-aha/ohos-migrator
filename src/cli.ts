@@ -24,7 +24,7 @@ import { rewriteProject } from "./rewriter/rewriter.js";
 import { filterObviousSubset } from "./rewriter/subset.js";
 import { revertBrokenEdits } from "./rewriter/verify-revert.js";
 import { runHvigor } from "./verify/hvigor.js";
-import { aiReplaceFile } from "./ai/replace.js";
+import { runAiRewrite, type AiRewriteResult } from "./ai/pipeline.js";
 import { printScanSummary, printRewriteSummary } from "./report.js";
 import {
   cacheFile,
@@ -106,7 +106,10 @@ program
   .option("--window-expr <expr>", "Window expression for window overrides", "this.window")
   .option("--symbol-overrides <path>", "JSON file of per-symbol overrides (merged over builtin)")
   .option("--write", "write changes to disk (default: dry-run)")
-  .option("--use-ai", "after the subset, send residual deprecated usages to an AI for replacement (skeleton: AI call is TODO)")
+  .option("--use-ai", "after the subset, send residual deprecated usages to an AI (OpenAI-compatible) for replacement")
+  .option("--ai-base-url <url>", "OpenAI-compatible base URL (env OHOS_MIGRATOR_AI_BASE_URL)")
+  .option("--ai-api-key <key>", "API key for the AI endpoint (env OHOS_MIGRATOR_AI_API_KEY)")
+  .option("--ai-model <name>", "model name (env OHOS_MIGRATOR_AI_MODEL)")
   .option("--patch-syscap", "allow patching the SDK device-define for @system.* syscap errors (TODO)")
   .action(async (opts) => {
     const map = loadMap(opts.sdk);
@@ -181,9 +184,14 @@ program
     const appliedFiles = new Set(kept.map((f) => f.file)).size;
 
     // --use-ai: residuals = findings the subset did NOT fix (dropped + reverted).
-    // Stub: hand them per-file to aiReplaceFile (which is a TODO) and report.
+    // Real AI path: per-file OpenAI-compatible replacement + hvigor verify +
+    // file-level revert + one retry. Only when --write and AI is configured;
+    // dry-run just reports the residual count.
     let leftForAiFindings = 0;
     let leftForAiFiles = 0;
+    let aiResult: AiRewriteResult | undefined;
+    let aiModel: string | undefined;
+    let aiBaseUrl: string | undefined;
     if (opts.useAi) {
       const keptSet = new Set(kept);
       const residual = findings.filter((f) => !keptSet.has(f));
@@ -195,8 +203,15 @@ program
         arr.push(f);
         byFile.set(f.file, arr);
       }
-      for (const [file, fileFindings] of byFile) {
-        await aiReplaceFile({ file, findings: fileFindings, map, projectRoot });
+      const aiOpts = resolveAiOpts(opts);
+      if (write && aiOpts && byFile.size > 0) {
+        aiModel = aiOpts.model;
+        aiBaseUrl = aiOpts.baseUrl;
+        aiResult = await runAiRewrite(projectRoot, byFile, map, aiOpts, true);
+      } else if (!aiOpts) {
+        console.warn(
+          "Warning: --use-ai set but AI base_url/api_key/model not configured. Set --ai-base-url/--ai-api-key/--ai-model or OHOS_MIGRATOR_AI_{BASE_URL,API_KEY,MODEL}; skipping AI replacement.",
+        );
       }
     }
 
@@ -214,9 +229,25 @@ program
         useAi: !!opts.useAi,
         leftForAiFindings,
         leftForAiFiles,
+        ai: aiResult,
+        aiModel,
+        aiBaseUrl,
       }),
     );
   });
+
+/** Resolve AI client config: flag > env. Returns undefined when incomplete. */
+function resolveAiOpts(opts: {
+  aiBaseUrl?: string;
+  aiApiKey?: string;
+  aiModel?: string;
+}): { baseUrl: string; apiKey: string; model: string } | undefined {
+  const baseUrl = opts.aiBaseUrl || process.env.OHOS_MIGRATOR_AI_BASE_URL;
+  const apiKey = opts.aiApiKey || process.env.OHOS_MIGRATOR_AI_API_KEY;
+  const model = opts.aiModel || process.env.OHOS_MIGRATOR_AI_MODEL;
+  if (!baseUrl || !apiKey || !model) return undefined;
+  return { baseUrl, apiKey, model };
+}
 
 function loadMap(sdk?: string): DeprecationMap {
   // Try cache for the resolved apiVersion first.
