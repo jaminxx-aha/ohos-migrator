@@ -982,7 +982,7 @@ function emitMember(typeExpr, leaf, kind, decl, note, argCtx, namedImports) {
     const rt = withTypeArgs(typeExpr, decl, kind);
     const v = argCtx.nextVar();
     const isCall = kind === SyntaxKind.MethodSignature;
-    const tail = isCall ? `${v}.${leaf}(${argsFor(decl, argCtx)});` : `const ${argCtx.nextVar()} = ${v}.${leaf};`;
+    const tail = isCall ? `${v}.${leaf}(${argsFor(decl, argCtx)});` : `${v}.${leaf};`;
     return { lines: [`${note}\ndeclare let ${v}: ${rt}; ${tail}`], namedImports };
   }
   if (kind === SyntaxKind.MethodDeclaration) {
@@ -995,11 +995,11 @@ function emitMember(typeExpr, leaf, kind, decl, note, argCtx, namedImports) {
   }
   if (kind === SyntaxKind.PropertyDeclaration) {
     if (isStatic(decl)) {
-      return { lines: [`${note}\nconst ${argCtx.nextVar()} = ${typeExpr}.${leaf};`], namedImports };
+      return { lines: [`${note}\n${typeExpr}.${leaf};`], namedImports };
     }
     const rt = withTypeArgs(typeExpr, decl, kind);
     const v = argCtx.nextVar();
-    return { lines: [`${note}\ndeclare let ${v}: ${rt}; const ${argCtx.nextVar()} = ${v}.${leaf};`], namedImports };
+    return { lines: [`${note}\ndeclare let ${v}: ${rt}; ${v}.${leaf};`], namedImports };
   }
   // Namespace-value leaves (no instance stub).
   switch (kind) {
@@ -1010,10 +1010,10 @@ function emitMember(typeExpr, leaf, kind, decl, note, argCtx, namedImports) {
     case SyntaxKind.EnumMember:
     case SyntaxKind.EnumDeclaration:
     case SyntaxKind.ModuleDeclaration:
-      return { lines: [`${note}\nconst ${argCtx.nextVar()} = ${typeExpr}.${leaf};`], namedImports };
+      return { lines: [`${note}\n${typeExpr}.${leaf};`], namedImports };
     default:
       // Best-effort bare reference (no call) — still resolves + fires 6385.
-      return { lines: [`${note}\nconst ${argCtx.nextVar()} = ${typeExpr}.${leaf};`], namedImports };
+      return { lines: [`${note}\n${typeExpr}.${leaf};`], namedImports };
   }
 }
 
