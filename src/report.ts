@@ -49,7 +49,7 @@ export interface RewriteSummaryInput {
   hvigorReason?: string;
   /** Whether `--use-ai` was requested. */
   useAi: boolean;
-  /** Residual deprecated findings after the subset (for `--use-ai`). */
+  /** Deprecated findings sent to the AI under `--use-ai` (ALL findings; no subset pass). */
   leftForAiFindings: number;
   leftForAiFiles: number;
   /** When `--use-ai --write` ran, the batch AI replacement result. */
@@ -66,17 +66,56 @@ export interface RewriteSummaryInput {
 
 export function printRewriteSummary(s: RewriteSummaryInput): string {
   const lines: string[] = [];
+
+  if (s.useAi) {
+    // Direct-AI path: no "obvious subset" pass. Report AI replacement only.
+    if (s.write) {
+      if (s.ai) {
+        const a = s.ai;
+        if (!a.hvigorRan) {
+          lines.push(
+            `AI rewrite: reverted (no hvigor verification: ${a.reason ?? "unavailable"}); ${a.appliedFiles} file(s) left at original state.`,
+          );
+        } else {
+          lines.push(
+            `AI rewrite (hvigor-verified): ${a.appliedFiles} file(s) replaced; ${a.retriedFiles} retried with compiler feedback; ${a.stillFailedFiles} still failing (reverted to original).`,
+          );
+        }
+        if (s.aiModel) {
+          lines.push(`  model: ${s.aiModel}${s.aiBaseUrl ? ` @ ${s.aiBaseUrl}` : ""}`);
+        }
+      } else if (s.leftForAiFindings === 0) {
+        lines.push("AI rewrite: no deprecated usages found. Nothing to send to AI.");
+      } else {
+        lines.push(
+          `AI rewrite: ${s.leftForAiFindings} finding(s) across ${s.leftForAiFiles} file(s) would be sent to AI.`,
+        );
+        lines.push(
+          "  (AI not configured — run `harmony-deprecate ai-config` / set --env-file / OHOS_MIGRATOR_AI_* env; skipping.)",
+        );
+      }
+    } else {
+      // dry-run + --use-ai
+      if (s.leftForAiFindings === 0) {
+        lines.push("Dry-run — no deprecated usages found. Nothing to send to AI.");
+      } else {
+        lines.push(
+          `Dry-run — would send ${s.leftForAiFindings} finding(s) across ${s.leftForAiFiles} file(s) to AI for replacement.`,
+        );
+        lines.push("  (AI not invoked; rerun with --write to apply.)");
+      }
+    }
+    return lines.join("\n");
+  }
+
+  // Default (subset) path.
   if (s.write) {
     lines.push("Applied rewrites (obvious subset, hvigor-verified):");
     lines.push(`  ${s.appliedEdits} edit(s) applied across ${s.appliedFiles} file(s).`);
     if (s.revertedEdits > 0) {
-      lines.push(
-        `  ${s.revertedEdits} edit(s) reverted (introduced compile errors; left for --use-ai).`,
-      );
+      lines.push(`  ${s.revertedEdits} edit(s) reverted (introduced compile errors).`);
     }
-    lines.push(
-      `  ${s.droppedForAi} finding(s) not in the obvious subset (left for --use-ai).`,
-    );
+    lines.push(`  ${s.droppedForAi} finding(s) not in the obvious subset.`);
     lines.push(`  ${s.skippedManual} manual finding(s) left untouched (need human review).`);
     if (s.hvigorRan) {
       lines.push("  hvigor: real compile check ran.");
@@ -94,41 +133,9 @@ export function printRewriteSummary(s: RewriteSummaryInput): string {
       }
     }
     lines.push(`  ${s.appliedEdits} edit(s) would apply across ${s.appliedFiles} file(s).`);
-    lines.push(
-      `  ${s.droppedForAi} finding(s) not in the obvious subset (left for --use-ai).`,
-    );
+    lines.push(`  ${s.droppedForAi} finding(s) not in the obvious subset.`);
     lines.push(`  ${s.skippedManual} manual finding(s) left untouched (need human review).`);
     lines.push("  hvigor: SKIPPED (dry-run).");
-  }
-
-  if (s.useAi) {
-    lines.push("");
-    if (s.ai) {
-      const a = s.ai;
-      if (!a.hvigorRan) {
-        lines.push(
-          `--use-ai: AI edits reverted (no hvigor verification: ${a.reason ?? "unavailable"}); ${a.appliedFiles} file(s) left at pre-AI state.`,
-        );
-      } else {
-        lines.push(
-          `--use-ai: AI replaced ${a.appliedFiles} file(s); ${a.retriedFiles} retried with compiler feedback; ${a.stillFailedFiles} still failing (reverted to pre-AI).`,
-        );
-      }
-      if (s.aiModel) {
-        lines.push(`  model: ${s.aiModel}${s.aiBaseUrl ? ` @ ${s.aiBaseUrl}` : ""}`);
-      }
-    } else if (s.leftForAiFindings > 0) {
-      lines.push(
-        `--use-ai: ${s.leftForAiFindings} residual finding(s) across ${s.leftForAiFiles} file(s).`,
-      );
-      if (s.write) {
-        lines.push("  (AI not configured — set --ai-base-url/--ai-api-key/--ai-model; skipping AI replacement.)");
-      } else {
-        lines.push("  (dry-run — AI not invoked; rerun with --write to apply AI replacement.)");
-      }
-    } else {
-      lines.push("--use-ai: no residual deprecated usages after the subset. Nothing to send to AI.");
-    }
   }
   return lines.join("\n");
 }

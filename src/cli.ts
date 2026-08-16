@@ -20,7 +20,7 @@ import { scanProject } from "./scanner/scanner.js";
 import { scanProjectExportRenames } from "./scanner/scanner.js";
 import { scanProjectCrossKitDropin } from "./scanner/scanner.js";
 import { scanProjectDeprecatedMembers } from "./scanner/tsc-diagnostics-scanner.js";
-import { rewriteProject } from "./rewriter/rewriter.js";
+import { rewriteProject, type RewriteResult } from "./rewriter/rewriter.js";
 import { filterObviousSubset } from "./rewriter/subset.js";
 import { revertBrokenEdits } from "./rewriter/verify-revert.js";
 import { runHvigor } from "./verify/hvigor.js";
@@ -144,67 +144,37 @@ program
     const memberFindings = tsc.findings;
     const findings = [...mod.findings, ...memberFindings, ...exp.findings, ...drp.findings];
 
-    // STEP 1 — the "obviously-correct" subset only. Everything else is left
-    // untouched (source unchanged) for `--use-ai`.
-    const subset = filterObviousSubset(findings, projectRoot, map);
-    const droppedForAi = findings.length - subset.length;
-    const skippedManual = findings.filter((f) => f.needsManual).length;
     const write = !!opts.write;
 
-    // Backup originals of every file the subset touches (for verify-revert).
-    const originalContents = new Map<string, string>();
-    for (const rel of new Set(subset.map((f) => f.file))) {
-      try {
-        originalContents.set(rel, readFileSync(join(projectRoot, ...rel.split("/")), "utf8"));
-      } catch {
-        // file absent on disk — nothing to back up / revert
-      }
-    }
-
-    // Dry-run: compute (but don't write) the subset for diff display.
-    const dryRunResult = write ? undefined : rewriteProject(projectRoot, subset, { write: false });
-
-    let kept: Finding[] = subset;
+    // Summary accumulators shared by both paths.
+    let appliedEdits = 0;
+    let appliedFiles = 0;
     let revertedEdits = 0;
+    let droppedForAi = 0;
+    let skippedManual = 0;
     let hvigorRan = false;
     let hvigorReason: string | undefined;
-
-    if (write) {
-      // Apply the subset for real, then ground-truth it with hvigor.
-      rewriteProject(projectRoot, subset, { write: true });
-      if (subset.length > 0) {
-        const hv = runHvigor({ projectRoot, patchSyscap: opts.patchSyscap });
-        const vr = revertBrokenEdits(projectRoot, originalContents, subset, hv, map);
-        hvigorRan = vr.hvigorRan;
-        hvigorReason = vr.reason;
-        kept = vr.kept;
-        revertedEdits = vr.reverted.length;
-      }
-    }
-
-    const appliedEdits = kept.length;
-    const appliedFiles = new Set(kept.map((f) => f.file)).size;
-
-    // --use-ai: residuals = findings the subset did NOT fix (dropped + reverted).
-    // Real AI path: per-file OpenAI-compatible replacement + hvigor verify +
-    // file-level revert + one retry. Only when --write and AI is configured;
-    // dry-run just reports the residual count.
+    let dryRunResult: RewriteResult | undefined;
     let leftForAiFindings = 0;
     let leftForAiFiles = 0;
     let aiResult: AiRewriteResult | undefined;
     let aiModel: string | undefined;
     let aiBaseUrl: string | undefined;
+
     if (opts.useAi) {
-      const keptSet = new Set(kept);
-      const residual = findings.filter((f) => !keptSet.has(f));
-      leftForAiFindings = residual.length;
-      leftForAiFiles = new Set(residual.map((f) => f.file)).size;
+      // Direct AI path: send ALL deprecated findings to the AI (OpenAI-compatible)
+      // for replacement — NO prior "obvious subset" pass. The AI pipeline backs up
+      // each file's original content, applies AI edits, grounds them with hvigor,
+      // reverts broken files to their original (compilable) state, and retries
+      // once with compiler feedback. The rule-based subset is skipped entirely.
       const byFile = new Map<string, Finding[]>();
-      for (const f of residual) {
+      for (const f of findings) {
         const arr = byFile.get(f.file) ?? [];
         arr.push(f);
         byFile.set(f.file, arr);
       }
+      leftForAiFindings = findings.length;
+      leftForAiFiles = byFile.size;
       const aiOpts = resolveAiConfig(opts, projectRoot);
       if (write && aiOpts && byFile.size > 0) {
         aiModel = aiOpts.model;
@@ -215,6 +185,42 @@ program
           "Warning: --use-ai set but AI config incomplete (baseUrl/apiKey/model). Configure via a .env file (run `harmony-deprecate ai-config`), --env-file, --ai-* flags, or OHOS_MIGRATOR_AI_*/OPENAI_* env. Skipping AI replacement.",
         );
       }
+    } else {
+      // Default path: apply ONLY the "obviously-correct" subset (same-kit member
+      // rename / whole-kit import swap), then verify with a real hvigor compile
+      // and revert any edit that introduced an error — so written output compiles.
+      const subset = filterObviousSubset(findings, projectRoot, map);
+      droppedForAi = findings.length - subset.length;
+      skippedManual = findings.filter((f) => f.needsManual).length;
+
+      // Backup originals of every file the subset touches (for verify-revert).
+      const originalContents = new Map<string, string>();
+      for (const rel of new Set(subset.map((f) => f.file))) {
+        try {
+          originalContents.set(rel, readFileSync(join(projectRoot, ...rel.split("/")), "utf8"));
+        } catch {
+          // file absent on disk — nothing to back up / revert
+        }
+      }
+
+      // Dry-run: compute (but don't write) the subset for diff display.
+      dryRunResult = write ? undefined : rewriteProject(projectRoot, subset, { write: false });
+
+      let kept: Finding[] = subset;
+      if (write) {
+        // Apply the subset for real, then ground-truth it with hvigor.
+        rewriteProject(projectRoot, subset, { write: true });
+        if (subset.length > 0) {
+          const hv = runHvigor({ projectRoot, patchSyscap: opts.patchSyscap });
+          const vr = revertBrokenEdits(projectRoot, originalContents, subset, hv, map);
+          hvigorRan = vr.hvigorRan;
+          hvigorReason = vr.reason;
+          kept = vr.kept;
+          revertedEdits = vr.reverted.length;
+        }
+      }
+      appliedEdits = kept.length;
+      appliedFiles = new Set(kept.map((f) => f.file)).size;
     }
 
     console.log(
