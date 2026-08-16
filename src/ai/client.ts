@@ -72,6 +72,7 @@ Rules:
 - oldText MUST be an exact substring that appears exactly once in the file. Copy enough surrounding context (e.g. the whole statement) to make it unique.
 - newText is the text that replaces that exact substring.
 - @ohos.* kits are usually default-exported namespaces (their .d.ts is 'declare namespace X { ... } export default X'), so a slice showing 'export function f(...)' is a namespace member, not a top-level named export — prefer "import X from '@ohos.kit'" then call 'X.f(...)'. If a previous attempt failed with TS2614 ("Module has no exported member 'f'"), switch to that default-import form rather than retrying 'import { f }'.
+- Edit ONLY the deprecated call sites listed in 'Remaining deprecated call sites'. You may ADD a new import line for a replacement symbol (e.g. a new 'import X from @ohos.kit'), but you MUST NOT modify any existing import line — do not change the module specifier or bindings of an import already in the file (e.g. do NOT rewrite 'import { Context } from @ohos.abilityAccessCtrl' to point at another kit). Existing imports are not deprecated call sites; changing them breaks the build.
 - If you cannot safely fix a finding, omit an edit for it (do not guess).
 - Output ONLY the JSON object, no prose, no markdown fences.`;
 
