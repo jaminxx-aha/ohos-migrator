@@ -71,6 +71,7 @@ Return STRICT JSON only, of the shape:
 Rules:
 - oldText MUST be an exact substring that appears exactly once in the file. Copy enough surrounding context (e.g. the whole statement) to make it unique.
 - newText is the text that replaces that exact substring.
+- @ohos.* kits are usually default-exported namespaces (their .d.ts is 'declare namespace X { ... } export default X'), so a slice showing 'export function f(...)' is a namespace member, not a top-level named export — prefer "import X from '@ohos.kit'" then call 'X.f(...)'. If a previous attempt failed with TS2614 ("Module has no exported member 'f'"), switch to that default-import form rather than retrying 'import { f }'.
 - If you cannot safely fix a finding, omit an edit for it (do not guess).
 - Output ONLY the JSON object, no prose, no markdown fences.`;
 
@@ -92,7 +93,11 @@ export async function requestEdits(
   const openai = new OpenAI({
     baseURL: client.baseUrl,
     apiKey: client.apiKey,
-    maxRetries: 2, // SDK-level retry on connection-setup / 5xx only (NOT mid-stream)
+    maxRetries: 0, // we run our own STREAM_ATTEMPTS self-heal loop; SDK-level
+    // retries here are harmful — they can swallow our idle/total
+    // AbortController aborts (re-dispatching on a stalled keep-alive socket)
+    // and stack dead time on top of our own retry, so a hung server stalls the
+    // whole run instead of failing fast into the catch below.
     // No SDK `timeout`: the primary timeout is the streaming idle-gap watchdog
     // below, so a steady-but-slow stream completes while a stall aborts fast.
   });
@@ -203,6 +208,18 @@ async function streamCompletion(
       if (fr === "length" || fr === "content_filter") {
         throw new Error(`stream truncated by finish_reason=${fr} after ${acc.length} chars`);
       }
+    }
+    // openai SDK v7 swallows a mid-stream controller.abort(): the stream's
+    // async iterator returns NORMALLY on abort (it catches AbortError and
+    // returns — "exit without throwing" by design) instead of rejecting. So a
+    // for-await that ends here may be a genuine end OR an aborted end. If our
+    // watchdog aborted, treat it as a timeout so the self-heal loop retries —
+    // otherwise a stalled server silently yields acc="" and parses as "no
+    // edits" (a false success) instead of failing.
+    if (controller.signal.aborted) {
+      throw new Error(
+        `stream ${abortReason}-timeout (idle=${params.idleMs}ms total=${params.totalMs}ms) after receiving ${acc.length} chars`,
+      );
     }
     return acc;
   } catch (e) {
