@@ -2,13 +2,18 @@
 /**
  * harmony-deprecate CLI
  *
- *   index   --sdk <path>            build/refresh the deprecation map cache
- *   scan    --project <path> [--sdk <path>] [--since N]
- *   rewrite --project <path> [--write] [--since N]
+ *   index   --sdk <path>                       build/refresh the deprecation map cache
+ *   scan    --project <path> [--sdk] [--since N]   TS-LS scan + show deprecated usages
+ *   rewrite --project <path> [--write] [--since N] [--use-ai] [--patch-syscap]
+ *
+ * `rewrite` applies ONLY the "obviously-correct" subset (same-kit member
+ * rename / whole-kit import swap), then verifies with a real hvigor compile
+ * and reverts any edit that introduced an error — so written output compiles.
+ * Everything else is left untouched for `--use-ai` (skeleton only this step).
  */
 
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
-import { resolve, basename } from "node:path";
+import { resolve, basename, join } from "node:path";
 import { Command } from "commander";
 import { buildDeprecationMap } from "./indexer/sdk-indexer.js";
 import { scanProject } from "./scanner/scanner.js";
@@ -16,6 +21,10 @@ import { scanProjectExportRenames } from "./scanner/scanner.js";
 import { scanProjectCrossKitDropin } from "./scanner/scanner.js";
 import { scanProjectDeprecatedMembers } from "./scanner/tsc-diagnostics-scanner.js";
 import { rewriteProject } from "./rewriter/rewriter.js";
+import { filterObviousSubset } from "./rewriter/subset.js";
+import { revertBrokenEdits } from "./rewriter/verify-revert.js";
+import { runHvigor } from "./verify/hvigor.js";
+import { aiReplaceFile } from "./ai/replace.js";
 import { printScanSummary, printRewriteSummary } from "./report.js";
 import {
   cacheFile,
@@ -24,7 +33,7 @@ import {
   resolveSdkApiDir,
 } from "./config.js";
 import { walkFiles } from "./walk.js";
-import type { DeprecationMap } from "./rules/types.js";
+import type { Finding, DeprecationMap } from "./rules/types.js";
 
 const program = new Command();
 
@@ -88,7 +97,7 @@ program
 
 program
   .command("rewrite")
-  .description("Apply safe rewrites (dry-run unless --write).")
+  .description("Apply the obviously-correct subset (dry-run unless --write).")
   .requiredOption("--project <path>", "project root directory")
   .option("--sdk <path>", "SDK ets/api directory (to build map if missing)")
   .option("--since <n>", "only rewrite deprecations with since <= N", (v) => Number(v), 0)
@@ -97,7 +106,9 @@ program
   .option("--window-expr <expr>", "Window expression for window overrides", "this.window")
   .option("--symbol-overrides <path>", "JSON file of per-symbol overrides (merged over builtin)")
   .option("--write", "write changes to disk (default: dry-run)")
-  .action((opts) => {
+  .option("--use-ai", "after the subset, send residual deprecated usages to an AI for replacement (skeleton: AI call is TODO)")
+  .option("--patch-syscap", "allow patching the SDK device-define for @system.* syscap errors (TODO)")
+  .action(async (opts) => {
     const map = loadMap(opts.sdk);
     const projectRoot = resolve(opts.project);
     const mod = scanProject({ projectRoot, map, since: opts.since || 0 });
@@ -108,8 +119,8 @@ program
     // (mod/exp/drp) run alongside TS-LS — NOT as a fallback — because they
     // cover kit moves / export renames / cross-kit drop-ins that TS-LS cannot
     // see (it emits no diagnostic on the import statement). Their findings feed
-    // `rewriteProject` so the rewritten imports stay in sync and the output
-    // compiles, even though they are not shown by `scan`.
+    // the subset gate so import-level edits are considered alongside member
+    // renames, even though they are not shown by `scan`.
     const tsc = scanProjectDeprecatedMembers({
       projectRoot,
       map,
@@ -127,8 +138,84 @@ program
     }
     const memberFindings = tsc.findings;
     const findings = [...mod.findings, ...memberFindings, ...exp.findings, ...drp.findings];
-    const result = rewriteProject(projectRoot, findings, { write: !!opts.write });
-    console.log(printRewriteSummary(result, !!opts.write));
+
+    // STEP 1 — the "obviously-correct" subset only. Everything else is left
+    // untouched (source unchanged) for `--use-ai`.
+    const subset = filterObviousSubset(findings, projectRoot, map);
+    const droppedForAi = findings.length - subset.length;
+    const skippedManual = findings.filter((f) => f.needsManual).length;
+    const write = !!opts.write;
+
+    // Backup originals of every file the subset touches (for verify-revert).
+    const originalContents = new Map<string, string>();
+    for (const rel of new Set(subset.map((f) => f.file))) {
+      try {
+        originalContents.set(rel, readFileSync(join(projectRoot, ...rel.split("/")), "utf8"));
+      } catch {
+        // file absent on disk — nothing to back up / revert
+      }
+    }
+
+    // Dry-run: compute (but don't write) the subset for diff display.
+    const dryRunResult = write ? undefined : rewriteProject(projectRoot, subset, { write: false });
+
+    let kept: Finding[] = subset;
+    let revertedEdits = 0;
+    let hvigorRan = false;
+    let hvigorReason: string | undefined;
+
+    if (write) {
+      // Apply the subset for real, then ground-truth it with hvigor.
+      rewriteProject(projectRoot, subset, { write: true });
+      if (subset.length > 0) {
+        const hv = runHvigor({ projectRoot, patchSyscap: opts.patchSyscap });
+        const vr = revertBrokenEdits(projectRoot, originalContents, subset, hv, map);
+        hvigorRan = vr.hvigorRan;
+        hvigorReason = vr.reason;
+        kept = vr.kept;
+        revertedEdits = vr.reverted.length;
+      }
+    }
+
+    const appliedEdits = kept.length;
+    const appliedFiles = new Set(kept.map((f) => f.file)).size;
+
+    // --use-ai: residuals = findings the subset did NOT fix (dropped + reverted).
+    // Stub: hand them per-file to aiReplaceFile (which is a TODO) and report.
+    let leftForAiFindings = 0;
+    let leftForAiFiles = 0;
+    if (opts.useAi) {
+      const keptSet = new Set(kept);
+      const residual = findings.filter((f) => !keptSet.has(f));
+      leftForAiFindings = residual.length;
+      leftForAiFiles = new Set(residual.map((f) => f.file)).size;
+      const byFile = new Map<string, Finding[]>();
+      for (const f of residual) {
+        const arr = byFile.get(f.file) ?? [];
+        arr.push(f);
+        byFile.set(f.file, arr);
+      }
+      for (const [file, fileFindings] of byFile) {
+        await aiReplaceFile({ file, findings: fileFindings, map, projectRoot });
+      }
+    }
+
+    console.log(
+      printRewriteSummary({
+        write,
+        dryRunResult,
+        appliedFiles,
+        appliedEdits,
+        revertedEdits,
+        droppedForAi,
+        skippedManual,
+        hvigorRan,
+        hvigorReason,
+        useAi: !!opts.useAi,
+        leftForAiFindings,
+        leftForAiFiles,
+      }),
+    );
   });
 
 function loadMap(sdk?: string): DeprecationMap {

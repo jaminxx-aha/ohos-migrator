@@ -30,14 +30,77 @@ export function printScanSummary(result: ScanResult): string {
   return lines.join("\n");
 }
 
-export function printRewriteSummary(result: RewriteResult, write: boolean): string {
+export interface RewriteSummaryInput {
+  write: boolean;
+  /** Dry-run only: the subset rewrite result, for showing candidate diffs. */
+  dryRunResult?: RewriteResult;
+  /** Distinct files whose edits survived verification. */
+  appliedFiles: number;
+  /** Edits that survived verification (still on disk). */
+  appliedEdits: number;
+  /** Edits reverted because they introduced compile errors. */
+  revertedEdits: number;
+  /** Findings the subset gate dropped (left for `--use-ai`). */
+  droppedForAi: number;
+  /** Findings with no `@useinstead` / override (need human review). */
+  skippedManual: number;
+  /** Whether the hvigor ground-truth check ran. */
+  hvigorRan: boolean;
+  hvigorReason?: string;
+  /** Whether `--use-ai` was requested. */
+  useAi: boolean;
+  /** Residual deprecated findings after the subset (for `--use-ai`). */
+  leftForAiFindings: number;
+  leftForAiFiles: number;
+}
+
+export function printRewriteSummary(s: RewriteSummaryInput): string {
   const lines: string[] = [];
-  lines.push(write ? "Applied rewrites:" : "Dry-run — would apply rewrites:");
-  for (const cf of result.changedFiles) {
-    lines.push(`  ${cf.file}`);
-    if (cf.diff) lines.push(cf.diff);
+  if (s.write) {
+    lines.push("Applied rewrites (obvious subset, hvigor-verified):");
+    lines.push(`  ${s.appliedEdits} edit(s) applied across ${s.appliedFiles} file(s).`);
+    if (s.revertedEdits > 0) {
+      lines.push(
+        `  ${s.revertedEdits} edit(s) reverted (introduced compile errors; left for --use-ai).`,
+      );
+    }
+    lines.push(
+      `  ${s.droppedForAi} finding(s) not in the obvious subset (left for --use-ai).`,
+    );
+    lines.push(`  ${s.skippedManual} manual finding(s) left untouched (need human review).`);
+    if (s.hvigorRan) {
+      lines.push("  hvigor: real compile check ran.");
+    } else {
+      lines.push(
+        `  hvigor: SKIPPED (${s.hvigorReason ?? "unavailable"}); subset applied without compile verification.`,
+      );
+    }
+  } else {
+    lines.push("Dry-run — would apply the obvious subset:");
+    if (s.dryRunResult) {
+      for (const cf of s.dryRunResult.changedFiles) {
+        lines.push(`  ${cf.file}`);
+        if (cf.diff) lines.push(cf.diff);
+      }
+    }
+    lines.push(`  ${s.appliedEdits} edit(s) would apply across ${s.appliedFiles} file(s).`);
+    lines.push(
+      `  ${s.droppedForAi} finding(s) not in the obvious subset (left for --use-ai).`,
+    );
+    lines.push(`  ${s.skippedManual} manual finding(s) left untouched (need human review).`);
+    lines.push("  hvigor: SKIPPED (dry-run).");
   }
-  lines.push(`${result.changedFiles.length} file(s) ${write ? "changed" : "would change"}.`);
-  lines.push(`${result.skippedManual} manual finding(s) left untouched (need human review).`);
+
+  if (s.useAi) {
+    lines.push("");
+    if (s.leftForAiFindings > 0) {
+      lines.push(
+        `--use-ai: ${s.leftForAiFindings} residual finding(s) across ${s.leftForAiFiles} file(s).`,
+      );
+      lines.push("  AI replacement not yet implemented (TODO step 2); residuals left unchanged.");
+    } else {
+      lines.push("--use-ai: no residual deprecated usages after the subset. Nothing to send to AI.");
+    }
+  }
   return lines.join("\n");
 }
