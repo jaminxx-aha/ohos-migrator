@@ -14,7 +14,7 @@
  *
  * Env: NODE_HOME + DEVECO_SDK_HOME point at the DevEco bundled node + SDK.
  */
-import { readdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync, statSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -46,8 +46,18 @@ function corpusFiles() {
   return out;
 }
 
+/** Wipe hvigor/ArkTS incremental caches so each compile is a true full build
+ *  (stale incremental state can mask errors after source edits). */
+function clearCaches() {
+  for (const rel of ["entry/build", ".hvigor", "build"]) {
+    const p = join(MODULE_DIR, rel);
+    if (existsSync(p)) rmSync(p, { recursive: true, force: true });
+  }
+}
+
 /** Run hvigorw CompileArkTS; return the raw stdout+stderr text. */
 function runCompile() {
+  clearCaches();
   const r = spawnSync(HVIGORW,
     ["--mode", "module", "-p", "module=entry@default", "-p", "product=default",
      "default@CompileArkTS", "--no-daemon"],

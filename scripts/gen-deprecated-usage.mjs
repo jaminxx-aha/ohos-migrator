@@ -133,13 +133,19 @@ const paramTypeText = (p) => {
     return "";
   }
 };
-const isParamOptional = (p) => {
+// `PropertySignature.isOptional` / `ParameterDeclaration.isOptional` are NOT
+// functions in this ts-morph version (TypeError at runtime). Detect optionality
+// via the underlying compiler node's question token, which is set for `field?:`
+// signatures and `param?:` parameters.
+const isOptionalNode = (p) => {
   try {
-    return p?.isOptional?.() ?? false;
+    if (typeof p?.isOptional === "function") return p.isOptional();
+    return !!p?.compilerNode?.questionToken;
   } catch {
     return false;
   }
 };
+const isParamOptional = (p) => isOptionalNode(p);
 const hasInitializer = (p) => {
   try {
     return p?.hasInitializer?.() ?? false;
@@ -684,7 +690,7 @@ function interfaceFields(decl) {
   for (const pk of [SyntaxKind.PropertySignature, SyntaxKind.PropertyDeclaration]) {
     for (const p of getDescendantsOfKind(decl, pk)) {
       try {
-        if (p?.isOptional?.()) continue;
+        if (isOptionalNode(p)) continue;
         const nm = getName(p);
         if (!nm) continue;
         const tn = p.getTypeNode?.();
