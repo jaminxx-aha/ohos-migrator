@@ -22,6 +22,10 @@
           { "entities": ["entity.system.home"], "actions": ["action.system.home"] }
         ]
       }
+    ],
+    "requestPermissions": [
+      { "name": "ohos.permission.MANAGE_LOCAL_ACCOUNTS" },
+      { "name": "ohos.permission.INTERACT_ACROSS_LOCAL_ACCOUNTS" }
     ]
   }
 }

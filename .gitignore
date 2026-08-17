@@ -15,4 +15,7 @@ logs/
 # IDE 配置
 .idea/
 
+# 系统文件
+.DS_Store
+
 # 测试样本工程自身的构建产物由 test/deprecated/.gitignore 管（build/ oh_modules/ .hvigor/ 等）
