@@ -1,0 +1,219 @@
+/**
+ * scan.js — 扫描核心：scanFile 复用 scan-deprecated.js 的编译器原理，返回结构化 hits。
+ * 每条 hit 额外带 start 偏移、callee、member 段、memberOffset、depModule
+ * （废弃声明所在 SDK 模块，如 @ohos.accessibility），供 rewrite 精确定位与同模块判定。
+ */
+const path = require('path');
+const fs = require('fs');
+const os = require('os');
+const { loadTs, resolveTargets } = require('./common');
+
+function tagName(t) {
+  if (t.tagName && t.tagName.text) return t.tagName.text;
+  if (typeof t.name === 'string') return t.name;
+  return '';
+}
+function tagText(tag) {
+  let s;
+  if (tag.comment != null) s = String(tag.comment);
+  else if (tag.text == null) s = '';
+  else if (typeof tag.text === 'string') s = tag.text;
+  else s = tag.text.map((p) => p.text).join('');
+  return s.replace(/\s*\n\s*/g, ' ').replace(/\s{2,}/g, ' ').trim();
+}
+function getContainingClass(decl) {
+  if (!decl) return '';
+  const parent = decl.parent;
+  if (parent && parent.name) return parent.name.getText();
+  return '';
+}
+
+// 把 SDK 声明文件名归一成 import 模块名，如 .../api/@ohos.accessibility.d.ts -> @ohos.accessibility
+function declFileToModule(ts, decl) {
+  if (!decl) return '';
+  let fn = '';
+  try { fn = decl.getSourceFile().fileName; } catch (_) { return ''; }
+  const base = path.basename(fn).replace(/\.d\.ts$/i, '');
+  return base.startsWith('@') ? base : '';
+}
+
+// 解析 useinstead。返回 { module, member, hasSlash }
+//   ohos.accessibility#isOpenAccessibilitySync  -> @ohos.accessibility / isOpenAccessibilitySync / false
+//   ohos.app.ability.dataUriUtils/dataUriUtils#getId -> @ohos.app.ability.dataUriUtils / getId / true
+//   成员缺省（无 #）时 member 为空。
+function parseUseinstead(str) {
+  if (!str) return null;
+  const s = str.trim();
+  const hashIdx = s.indexOf('#');
+  if (hashIdx < 0) return { module: normMod(s), member: '', hasSlash: s.includes('/') };
+  const left = s.slice(0, hashIdx);
+  const member = s.slice(hashIdx + 1).trim();
+  return { module: normMod(left), member, hasSlash: left.includes('/') };
+}
+function normMod(left) {
+  let m = left.trim();
+  if (m.startsWith('@')) return m;
+  if (m.startsWith('ohos.')) return '@' + m;
+  if (m.startsWith('system.')) return '@' + m;
+  return m;
+}
+
+/**
+ * 扫描单个文件，返回 { file, deprecatedCount, hits }。
+ * hit 字段：file,line,col,callee,qualifiedName,useinstead,depModule,start,member,memberOffset
+ */
+function scanFile(file, ts, sdkPath, ohTsPath) {
+  const norm = (p) => p.replace(/[\\]/g, '/');
+  const isEts = file.toLowerCase().endsWith('.ets');
+  const rootName = isEts
+    ? path.join(os.tmpdir(), `_scan_${path.basename(file).replace(/\.ets$/, '')}.ts`)
+    : file;
+  const srcText = fs.readFileSync(file, 'utf8');
+  if (isEts) fs.writeFileSync(rootName, srcText, 'utf8');
+
+  const host = ts.createCompilerHost({});
+  const realGetSF = host.getSourceFile.bind(host);
+  const realFileExists = ts.sys.fileExists ? ts.sys.fileExists.bind(ts.sys) : host.fileExists;
+
+  host.fileExists = (fn) => {
+    const n = norm(fn);
+    if (n.startsWith('@ohos.') || n.startsWith('@system.')) {
+      return fs.existsSync(`${sdkPath}/${n}.d.ts`);
+    }
+    return realFileExists(fn);
+  };
+  host.getSourceFile = (fn, lang, onErr, ...rest) => {
+    if (norm(fn) === norm(rootName)) return ts.createSourceFile(rootName, srcText, lang, true);
+    return realGetSF(fn, lang, onErr, ...rest);
+  };
+
+  const program = ts.createProgram({
+    rootNames: [rootName],
+    options: {
+      target: ts.ScriptTarget.ES2021,
+      module: ts.ModuleKind.ESNext,
+      moduleResolution: ts.ModuleResolutionKind.NodeJs,
+      noEmit: true, strict: false, skipLibCheck: false, types: [],
+      baseUrl: sdkPath,
+      paths: {
+        '@ohos.*': [`${sdkPath}/@ohos.*.d.ts`],
+        '@system.*': [`${sdkPath}/@system.*.d.ts`],
+      },
+    },
+    host,
+  });
+  const checker = program.getTypeChecker();
+  const sf = program.getSourceFile(rootName);
+  if (!sf) return { file, deprecatedCount: 0, hits: [] };
+
+  const seen = new Set();
+  const hits = [];
+
+  function record(node, sym, preferDecl, calleeText) {
+    if (!sym) return;
+    const symTags = sym.getJsDocTags ? sym.getJsDocTags() : [];
+    if (!symTags.some((t) => tagName(t) === 'deprecated')) return;
+
+    const start = node.getStart(sf);
+    const lc = ts.getLineAndCharacterOfPosition(sf, start);
+    const line = lc.line + 1, col = lc.character + 1;
+
+    let depDecl = null;
+    for (const d of sym.declarations || []) {
+      const tg = ts.getJSDocTags ? ts.getJSDocTags(d) : [];
+      if (tg.some((t) => tagName(t) === 'deprecated')) { depDecl = d; break; }
+    }
+    const decl = depDecl || preferDecl || (sym.declarations && sym.declarations[0]);
+    const nodeTags = depDecl && ts.getJSDocTags ? ts.getJSDocTags(depDecl) : [];
+    const tags = (nodeTags && nodeTags.length) ? nodeTags : symTags;
+
+    const symName = checker.symbolToString(sym);
+    const key = `${symName}|${line}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+
+    let useinstead = '';
+    let deprecated = '';
+    for (const t of tags) {
+      const n = tagName(t);
+      if (n === 'useinstead') useinstead = tagText(t);
+      else if (n === 'deprecated') deprecated = tagText(t);
+    }
+
+    const cls = getContainingClass(decl);
+    // callee 的成员段（最后一个 `.` 之后，或整段）及其在文件中的偏移
+    const lastDotAt = calleeText.lastIndexOf('.');
+    const member = lastDotAt >= 0 ? calleeText.slice(lastDotAt + 1) : calleeText;
+    const memberOffset = lastDotAt >= 0 ? start + lastDotAt + 1 : start;
+
+    hits.push({
+      file, line, col,
+      callee: calleeText,
+      qualifiedName: cls ? `${cls}.${symName}` : symName,
+      deprecated,
+      useinstead,
+      depModule: declFileToModule(ts, decl),
+      start,
+      member,
+      memberOffset,
+    });
+  }
+
+  function visit(node) {
+    let probeNode = null, calleeText = null;
+    if (ts.isCallExpression(node)) {
+      probeNode = node.expression;
+      calleeText = node.expression.getText();
+    } else if (ts.isPropertyAccessExpression(node)) {
+      probeNode = node;
+      calleeText = node.getText();
+    } else if (ts.isIdentifier(node)) {
+      probeNode = node;
+      calleeText = node.getText();
+    }
+    if (probeNode) {
+      const sym = checker.getSymbolAtLocation(probeNode);
+      if (sym) {
+        let decl = sym.valueDeclaration || (sym.declarations && sym.declarations[0]);
+        if (ts.isCallExpression(node)) {
+          try { const sig = checker.getResolvedSignature(node); if (sig && sig.declaration) decl = sig.declaration; } catch (_) {}
+        }
+        record(node, sym, decl, calleeText);
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(sf);
+
+  if (isEts) { try { fs.unlinkSync(rootName); } catch (_) {} }
+  return { file, deprecatedCount: hits.length, hits };
+}
+
+// ============================================================================
+// scan 子命令
+// ============================================================================
+function cmdScan(opts) {
+  const ts = loadTs(opts.ohTsPath);
+  const { root, files } = resolveTargets(opts);
+  let totalDeprecated = 0;
+  let filesWithDeprecated = 0;
+  const allHits = [];
+  for (const f of files) {
+    let res;
+    try { res = scanFile(f, ts, opts.sdkPath, opts.ohTsPath); }
+    catch (e) { console.error(`[scan error] ${f}: ${e.message}`); continue; }
+    if (res.deprecatedCount > 0) {
+      filesWithDeprecated++;
+      totalDeprecated += res.deprecatedCount;
+      allHits.push(res);
+      console.log(`\n${f}  — ${res.deprecatedCount} deprecated usage(s)`);
+      for (const h of res.hits) {
+        console.log(`  ■ ${h.qualifiedName}  (use: ${h.callee})  at ${h.line}:${h.col}`);
+        console.log(`        deprecated: ${h.deprecated}   useinstead: ${h.useinstead || '(none)'}`);
+      }
+    }
+  }
+  console.log(`\n==== scan done: ${files.length} file(s), ${filesWithDeprecated} with deprecated, ${totalDeprecated} usage(s) ====`);
+}
+
+module.exports = { scanFile, parseUseinstead, normMod, declFileToModule, cmdScan };
