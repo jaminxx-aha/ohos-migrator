@@ -52,13 +52,17 @@ function envNum(name) {
   return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
-function defaultLogFile(root) {
-  return path.join(root || process.cwd(), 'logs', 'ai-conversation.log');
+/**
+ * 默认日志路径：当前工程目录（运行 ohos-migrator 时的 cwd）下 log/ai-conversation.log。
+ * 与被扫描的 HarmonyOS 工程目录解耦——否则 --file 模式会把日志写到源文件所在目录。
+ */
+function defaultLogFile() {
+  return path.join(process.cwd(), 'log', 'ai-conversation.log');
 }
-function sanitizeLogFile(raw, root) {
+function sanitizeLogFile(raw) {
   const lf = String(raw || '').trim().toLowerCase();
   if (lf === '' || lf === '/dev/null' || lf === 'nul' || lf === 'off' || lf === 'none') return undefined;
-  if (!lf.endsWith('.log')) return defaultLogFile(root);
+  if (!lf.endsWith('.log')) return defaultLogFile();
   return raw;
 }
 
@@ -75,7 +79,7 @@ function resolveAiConfig(root) {
     );
   }
   const rawLog = (process.env.OHOS_MIGRATOR_AI_LOG_FILE || '').trim();
-  const logFile = rawLog === '' ? defaultLogFile(root) : sanitizeLogFile(rawLog, root);
+  const logFile = rawLog === '' ? defaultLogFile() : sanitizeLogFile(rawLog);
   return {
     baseURL, apiKey, model,
     idleMs: envNum('OHOS_MIGRATOR_AI_TIMEOUT_MS') || 120000,

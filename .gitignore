@@ -5,7 +5,7 @@
 node_modules/
 
 # AI 运行日志与产物
-logs/
+log/
 .ohos-migrator/
 *.log
 
