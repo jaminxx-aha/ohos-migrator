@@ -15,6 +15,25 @@ const { resolveAiConfig } = require('./ai-config');
 const { tsStamp, logAppend, logHeader, logDelta } = require('./ai-log');
 const hv = require('./verify/hvigor');
 
+// SIGINT/SIGTERM 恢复：runAgent 在 list_deprecated 时会把半改 content 落盘，中途被
+// Ctrl+C 强杀会留下半改文件。注册一次性信号处理器，退出前把"当前正在处理的文件"
+// 恢复到进入 rewriteFileWithAi 前的原文；已成功完成的文件保持改后状态。
+let _restoreOnSignal = null;
+let _signalHandlerInstalled = false;
+function _signalRestoreAndExit() {
+  if (_restoreOnSignal) {
+    try { fs.writeFileSync(_restoreOnSignal.file, _restoreOnSignal.content, 'utf8'); }
+    catch (_) {}
+  }
+  process.exit(130);
+}
+function installSignalRestore() {
+  if (_signalHandlerInstalled) return;
+  process.on('SIGINT', _signalRestoreAndExit);
+  process.on('SIGTERM', _signalRestoreAndExit);
+  _signalHandlerInstalled = true;
+}
+
 // agent 可用的工具（OpenAI function-calling schema）。
 const AGENT_TOOLS = [
   { type: 'function', function: { name: 'read_file', description: '读取目标文件的当前内容（含已做的编辑）。', parameters: { type: 'object', properties: {}, required: [] } } },
@@ -201,9 +220,10 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors)
     }
     if (shouldBreak) break;
   }
-  logAppend(cfg.logFile, `[agent] ended after ${step} steps, doneCalled=${doneCalled}\n`);
+  const stepsRun = Math.min(step, MAX_AGENT_STEPS);
+  logAppend(cfg.logFile, `[agent] ended after ${stepsRun} steps, doneCalled=${doneCalled}\n`);
   fs.writeFileSync(file, content, 'utf8'); // 落盘最终内容供校验
-  return { content, steps: step, changed: content !== origContent, doneCalled };
+  return { content, steps: stepsRun, changed: content !== origContent, doneCalled };
 }
 
 /**
@@ -338,6 +358,9 @@ async function cmdRewriteAi(opts) {
             const r = hv.relFile(abs, projectRoot);
             if (r) baselineByFile.set(r, new Set(lines));
           }
+          // 已知限制：baseline 一次性按"全工程原文"计算；逐文件迁移成功后该文件留改后状态，
+          // 后续文件 delta 仍对照原文 baseline。因成功文件已通过 compileGate（编译干净），
+          // 引入跨文件新错误的概率极低；严格修复需每文件重算 baseline（hvigor 跑 N+ 次，过慢）。
           hvCtx = { projectRoot, sdkHome, baselineByFile };
           console.log(`[ai] compile-verify: baseline ran in ${el}s, ${baselineByFile.size} file(s) with pre-existing errors`);
           logAppend(cfg.logFile, `[${tsStamp()}] hvigor baseline ran in ${el}s, ${baselineByFile.size} files with pre-existing errors\n`);
@@ -362,16 +385,23 @@ async function cmdRewriteAi(opts) {
   if (targets.length === 0) return;
 
   // 第二步：逐文件交给 AI
+  installSignalRestore();
   let ok = 0, fail = 0;
   for (const t of targets) {
     console.log(`\n[ai] processing ${t.file}  (${t.count} deprecated)`);
     logAppend(cfg.logFile, `\n${'#'.repeat(60)}\n[${tsStamp()}] >>>> FILE ${t.file}\n`);
-    const r = await rewriteFileWithAi(t.file, ts2, opts.sdkPath, opts.ohTsPath, cfg, hvCtx);
-    if (r.ok) { ok++; console.log(`  [ai] ✓ done (${r.attempts} attempt(s))`); }
-    else {
-      fail++;
-      console.log(`  [ai] ✗ FAILED after ${r.attempts} attempt(s), reverted. reason: ${r.error}`);
-      console.log(`  [ai] ⚠ WARN: ${t.file} 未能完成迁移，已回退原文件，请人工处理。`);
+    // 记录进入前原文供信号处理器恢复；await 返回后（成功保留改后/失败已 revert）清空。
+    _restoreOnSignal = { file: t.file, content: fs.readFileSync(t.file, 'utf8') };
+    try {
+      const r = await rewriteFileWithAi(t.file, ts2, opts.sdkPath, opts.ohTsPath, cfg, hvCtx);
+      if (r.ok) { ok++; console.log(`  [ai] ✓ done (${r.attempts} attempt(s))`); }
+      else {
+        fail++;
+        console.log(`  [ai] ✗ FAILED after ${r.attempts} attempt(s), reverted. reason: ${r.error}`);
+        console.log(`  [ai] ⚠ WARN: ${t.file} 未能完成迁移，已回退原文件，请人工处理。`);
+      }
+    } finally {
+      _restoreOnSignal = null;
     }
   }
   console.log(`\n==== rewrite(ai) done: ${targets.length} processed, ${ok} ok, ${fail} failed/reverted ====`);

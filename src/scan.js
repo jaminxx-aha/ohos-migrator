@@ -47,8 +47,16 @@ function parseUseinstead(str) {
   const hashIdx = s.indexOf('#');
   if (hashIdx < 0) return { module: normMod(s), member: '', hasSlash: s.includes('/') };
   const left = s.slice(0, hashIdx);
-  const member = s.slice(hashIdx + 1).trim();
-  return { module: normMod(left), member, hasSlash: left.includes('/') };
+  const right = s.slice(hashIdx + 1).trim();
+  // 事件限定格式 `module.path.member#event:<name>`：`#` 右是事件名而非成员名，真正的
+  // member 是 left 末段（如 ...A2dpSourceProfile.off#event:connectionStateChange → off）。
+  // 常规格式 `module#member`：member 即 `#` 右。按 right 是否 event: 前缀区分。
+  // 事件格式当前因 hasSlash 在 simple 模式被跳过、AI 模式传原始串，member 修正仅为语义正确。
+  if (right.startsWith('event:')) {
+    const lastDot = left.lastIndexOf('.');
+    return { module: normMod(left), member: lastDot >= 0 ? left.slice(lastDot + 1) : left, hasSlash: left.includes('/'), event: right.slice(6) };
+  }
+  return { module: normMod(left), member: right, hasSlash: left.includes('/') };
 }
 function normMod(left) {
   let m = left.trim();
