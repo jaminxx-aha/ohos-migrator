@@ -89,8 +89,28 @@ function resolveTargets(opts) {
   return { root, files: listArktsFiles(root) };
 }
 
+/**
+ * 启动期 SDK 路径体检：ohTsPath（OH 版 typescript 模块目录）与 sdkPath（OpenHarmony
+ * ets/api 目录）任一为空或不存在则友好报错退出。避免 sdkPath='' 时 scanFile 的
+ * host.fileExists 静默找不到 @ohos.*.d.ts 声明（getSymbolAtLocation 返回 undefined），
+ * 造成"0 命中、0 报错"的假干净。loadTs 已覆盖 ohTsPath 的 require 失败，此处提前阻断更清晰。
+ */
+function ensureSdkPaths(opts) {
+  const problems = [];
+  if (!opts.ohTsPath) problems.push('OH 版 typescript 路径为空（DevEco SDK 未找到）');
+  else if (!fs.existsSync(opts.ohTsPath)) problems.push(`OH 版 typescript 目录不存在: ${opts.ohTsPath}`);
+  if (!opts.sdkPath) problems.push('OpenHarmony ets/api 路径为空（DevEco SDK 未找到）');
+  else if (!fs.existsSync(opts.sdkPath)) problems.push(`OpenHarmony ets/api 目录不存在: ${opts.sdkPath}`);
+  if (problems.length) {
+    console.error('SDK 路径配置异常：');
+    for (const p of problems) console.error('  - ' + p);
+    console.error('请设置 DEVECO_SDK_HOME 环境变量指向 DevEco Studio 的 sdk 目录（如 /Applications/DevEco-Studio.app/Contents/sdk），或安装 DevEco Studio。');
+    process.exit(1);
+  }
+}
+
 module.exports = {
   DEVECO, DEFAULT_OH_TS, DEFAULT_SDK, SKIP_DIRS, ARKTS_EXT,
   MAX_AI_ATTEMPTS, MAX_AGENT_STEPS,
-  findDevEcoSdkHome, loadTs, listArktsFiles, resolveTargets,
+  findDevEcoSdkHome, loadTs, listArktsFiles, resolveTargets, ensureSdkPaths,
 };

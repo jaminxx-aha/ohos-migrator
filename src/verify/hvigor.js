@@ -6,7 +6,7 @@
  * 只解析 `At File:`（arkts ERROR），不解析 `ArkTS:WARN`（废弃警告是扫描器的预期信号，
  * 不能算迁移回归）。runHvigor 返回 ran=false 时带 reason，调用方据此降级为 skip+warn。
  */
-const { existsSync, statSync } = require('fs');
+const { existsSync, statSync, readFileSync } = require('fs');
 const { join, dirname } = require('path');
 const { spawnSync } = require('child_process');
 const { findDevEcoSdkHome } = require('../common');
@@ -65,6 +65,39 @@ function findProjectRootFromFile(file) {
 }
 
 /**
+ * 宽容解析 json5：去行注释、块注释、尾逗号，再 JSON.parse。行注释不误删 URL 的双斜杠。
+ * build-profile.json5 通常无注释，但模板偶带行注释；宽容解析避免单点失败回退硬编码。
+ * 解析异常由调用方兜底，不在此抛。
+ */
+function stripJson5(s) {
+  return s
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1')
+    .replace(/,(\s*[}\]])/g, '$1');
+}
+
+/**
+ * 从工程根 build-profile.json5 解析 hvigorw 的 module/product：
+ *   modules[0].name + targets[0].name -> `<module>@<target>`
+ *   app.products[0].name              -> product
+ * 取代硬编码 entry@default：非 entry 模块名（feature/library/hsp）工程才能编译到正确目标。
+ * build-profile.json5 缺失或解析失败一律回退 entry@default，保持旧行为不回归。
+ */
+function resolveHvigorTargets(projectRoot) {
+  const fallback = { module: 'entry@default', product: 'default' };
+  const bp = join(projectRoot, 'build-profile.json5');
+  if (!existsSync(bp)) return fallback;
+  let json;
+  try { json = JSON.parse(stripJson5(readFileSync(bp, 'utf8'))); }
+  catch (_) { return fallback; }
+  const mod = json.modules && json.modules[0];
+  const moduleName = (mod && mod.name) || 'entry';
+  const targetName = (mod && mod.targets && mod.targets[0] && mod.targets[0].name) || 'default';
+  const productName = (json.app && json.app.products && json.app.products[0] && json.app.products[0].name) || 'default';
+  return { module: `${moduleName}@${targetName}`, product: productName };
+}
+
+/**
  * 跑 `hvigorw default@CompileArkTS` 并解析错误位点。
  * 返回 { ran, reason?, errors: Map<absPath, number[]>, raw }。ran=false 时 errors 空、带 reason。
  */
@@ -81,11 +114,14 @@ function runHvigor(opts) {
   if (!looksLikeHarmonyProject(opts.projectRoot)) {
     return { ...empty, reason: `${opts.projectRoot} 不是 HarmonyOS stage module（缺 entry/build-profile.json5）` };
   }
+  // module/product 名从 build-profile.json5 解析，不再硬编码 entry@default——
+  // 非 entry 模块名（feature/library/hsp）工程才能编译到正确目标。
+  const targets = resolveHvigorTargets(opts.projectRoot);
   const args = [
     hvigorwJs,
     '--mode', 'module',
-    '-p', 'module=entry@default',
-    '-p', 'product=default',
+    '-p', `module=${targets.module}`,
+    '-p', `product=${targets.product}`,
     'default@CompileArkTS',
     '--no-daemon',
   ];
@@ -111,7 +147,7 @@ function runHvigor(opts) {
  */
 function parseErrorLines(output) {
   const byFile = new Map();
-  const re = /At File: (\S+):(\d+):(\d+)/g;
+  const re = /At File: (.+?):(\d+):(\d+)/g;
   let m;
   while ((m = re.exec(output)) !== null) {
     const file = m[1];
@@ -144,7 +180,7 @@ function relFile(absPath, projectRoot) {
 function groupRawByFile(raw, projectRoot) {
   const out = new Map();
   let buf = [];
-  const re = /At File: (\S+):(\d+):(\d+)/;
+  const re = /At File: (.+?):(\d+):(\d+)/;
   for (const line of raw.split('\n')) {
     const m = line.match(re);
     if (m) {
@@ -180,7 +216,7 @@ function errorsForFileFiltered(raw, projectRoot, absFile, lineSet) {
   if (!rel || lineSet.size === 0) return [];
   const out = [];
   let buf = [];
-  const re = /At File: (\S+):(\d+):(\d+)/;
+  const re = /At File: (.+?):(\d+):(\d+)/;
   for (const line of raw.split('\n')) {
     const m = line.match(re);
     if (m) {
@@ -203,6 +239,6 @@ function errorsForFileFiltered(raw, projectRoot, absFile, lineSet) {
 
 module.exports = {
   IS_WIN, resolveDevEcoSdkHome, devEcoRoot, nodeExe, hvigorwJsPath, nodeHome,
-  looksLikeHarmonyProject, findProjectRootFromFile,
+  looksLikeHarmonyProject, findProjectRootFromFile, resolveHvigorTargets,
   runHvigor, parseErrorLines, relFile, groupRawByFile, errorsForFileFiltered,
 };
