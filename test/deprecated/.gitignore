@@ -6,3 +6,8 @@
 *.hap
 *.hsp
 *.har
+
+# scratch 产物（参考工程跑出来的输出/副本）
+/after2.json
+/.subagent-prompt.md
+/scan-deprecated.js
