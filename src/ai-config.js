@@ -1,6 +1,6 @@
 /**
  * ai-config.js — AI 客户端配置：dotenv 语义加载 .env + process.env 读取。
- * 优先级：OHOS_MIGRATOR_AI_* > OPENAI_*。discovery：<root>/.env → cwd/.env → ~/.env。
+ * 变量名统一为 OHOS_MIGRATOR_AI_*（无 OPENAI_* 别名回退）。discovery：<root>/.env → cwd/.env → ~/.env。
  * 日志路径必须 .log 结尾，否则回落默认（防 attacker 控制的 .env 把对话写进 .zshrc→RCE）。
  */
 const path = require('path');
@@ -65,13 +65,13 @@ function sanitizeLogFile(raw, root) {
 /** 解析完整 AI 配置。缺 baseURL/apiKey/model 任一即抛错。 */
 function resolveAiConfig(root) {
   const envPath = loadAiEnv(root);
-  const baseURL = (firstEnv('OHOS_MIGRATOR_AI_BASE_URL', 'OPENAI_BASE_URL', 'OPENAI_URL', 'OPENAI_API_BASE') || '').replace(/\/$/, '');
-  const apiKey = firstEnv('OHOS_MIGRATOR_AI_API_KEY', 'OPENAI_API_KEY') || '';
-  const model = firstEnv('OHOS_MIGRATOR_AI_MODEL', 'OPENAI_MODEL') || '';
+  const baseURL = (firstEnv('OHOS_MIGRATOR_AI_BASE_URL') || '').replace(/\/$/, '');
+  const apiKey = firstEnv('OHOS_MIGRATOR_AI_API_KEY') || '';
+  const model = firstEnv('OHOS_MIGRATOR_AI_MODEL') || '';
   if (!baseURL || !apiKey || !model) {
     throw new Error(
       `.env 配置缺失：需 OHOS_MIGRATOR_AI_BASE_URL / OHOS_MIGRATOR_AI_API_KEY / OHOS_MIGRATOR_AI_MODEL` +
-      `（也接受 OPENAI_* 别名）${envPath ? '（来源 ' + envPath + '）' : '（未找到 .env）'}`,
+      `${envPath ? '（来源 ' + envPath + '）' : '（未找到 .env）'}`,
     );
   }
   const rawLog = (process.env.OHOS_MIGRATOR_AI_LOG_FILE || '').trim();
