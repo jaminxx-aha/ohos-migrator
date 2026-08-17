@@ -25,9 +25,18 @@ function resolveDevEcoSdkHome(explicit) {
 
 /** sdkHome 是 `.../sdk`，DevEco 根是其父目录 `.../DevEco Studio`。hvigorw/node 都在 <root>/tools/。 */
 function devEcoRoot(sdkHome) { return dirname(sdkHome); }
-/** bundled node 可执行：`<root>/tools/node/node(.exe)`。 */
+/**
+ * bundled node 可执行。DevEco 布局跨平台不一致：mac 在 <root>/tools/node/bin/node，
+ * Windows 在 <root>/tools/node/node.exe（无 bin/）。探测候选谁存在用谁；都不在则回退
+ * 首选（让 spawnSync 报 ENOENT，由 runHvigor 捕获转成清晰错误而非误报成功）。
+ */
 function nodeExe(sdkHome) {
-  return join(nodeHome(sdkHome), IS_WIN ? 'node.exe' : 'node');
+  const home = nodeHome(sdkHome);
+  const cands = IS_WIN
+    ? [join(home, 'node.exe'), join(home, 'bin', 'node.exe')]
+    : [join(home, 'bin', 'node'), join(home, 'node')];
+  for (const c of cands) if (existsSync(c)) return c;
+  return cands[0];
 }
 /** hvigorw.js 入口：`<root>/tools/hvigor/bin/hvigorw.js`。用 node 直跑，避开 .bat 路径空格引号坑。 */
 function hvigorwJsPath(sdkHome) {
@@ -81,12 +90,17 @@ function runHvigor(opts) {
     '--no-daemon',
   ];
   // 用 bundled node 直跑 hvigorw.js：args 数组不经 shell，路径含空格也安全。
-  const r = spawnSync(nodeExe(sdkHome), args, {
+  const node = nodeExe(sdkHome);
+  const r = spawnSync(node, args, {
     cwd: opts.projectRoot,
     env: { ...process.env, NODE_HOME: nodeHome(sdkHome), DEVECO_SDK_HOME: sdkHome },
     encoding: 'utf8',
     maxBuffer: 128 * 1024 * 1024,
   });
+  // spawnSync 启动失败（ENOENT 等）或被信号终止必须判 ran=false，否则空输出会被
+  // 误判为"编译无错误"——这正是之前 nodeExe 路径错时"compiles clean"假象的根因。
+  if (r.error) return { ...empty, reason: `hvigorw 启动失败：${r.error.code || r.error.message}（${node}）` };
+  if (r.status === null) return { ...empty, reason: `hvigorw 被信号终止：${r.signal || '?'}` };
   const out = (r.stdout ?? '') + (r.stderr ?? '');
   return { ran: true, errors: parseErrorLines(out), raw: out };
 }
@@ -136,8 +150,13 @@ function groupRawByFile(raw, projectRoot) {
     if (m) {
       const rel = relFile(m[1], projectRoot);
       if (rel) {
+        // hvigor 实际格式：`Error Message: <msg> At File: <path>:<line>:<col>` 同行。
+        // 优先取同行消息段；回退累积 buf（兼容消息在独立行的旧/其他格式）。去 ANSI 色码。
+        const same = line.match(/Error Message:\s*(.*?)\s+At File:/);
+        const msg = (same ? same[1] : buf.join(' ')) || '';
+        const clean = msg.replace(/\x1b\[[0-9;]*m/g, '').trim();
         const arr = out.get(rel) || [];
-        arr.push(`${buf.join(' ').trim()} [line ${m[2]}]`.trim());
+        arr.push(`${clean} [line ${m[2]}]`.trim());
         out.set(rel, arr);
       }
       buf = [];
@@ -168,8 +187,11 @@ function errorsForFileFiltered(raw, projectRoot, absFile, lineSet) {
       const ln = Number(m[2]);
       const mrel = relFile(m[1], projectRoot);
       if (mrel === rel && lineSet.has(ln)) {
-        const msg = buf.join(' ').trim();
-        if (msg) out.push(`${msg} (line ${ln})`);
+        // 同 groupRawByFile：优先取同行 Error Message 段，回退 buf。去 ANSI 色码。
+        const same = line.match(/Error Message:\s*(.*?)\s+At File:/);
+        const msg = (same ? same[1] : buf.join(' ')) || '';
+        const clean = msg.replace(/\x1b\[[0-9;]*m/g, '').trim();
+        if (clean) out.push(`${clean} (line ${ln})`);
       }
       buf = [];
     } else if (line.startsWith(' ') && !line.includes('WARN')) {
