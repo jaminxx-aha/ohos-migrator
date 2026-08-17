@@ -173,41 +173,6 @@ function relFile(absPath, projectRoot) {
 }
 
 /**
- * 把 raw hvigor 输出按 relFile 归集错误消息文本。`At File:` 标记跟在它描述的错误消息后，
- * 故累积其前的消息行（排除 WARN 行），在遇到 `At File:` 时 flush 给该文件。每文件最多 10 条。
- * 移植自参考 pipeline.ts:groupRawByFile。
- */
-function groupRawByFile(raw, projectRoot) {
-  const out = new Map();
-  let buf = [];
-  const re = /At File: (.+?):(\d+):(\d+)/;
-  for (const line of raw.split('\n')) {
-    const m = line.match(re);
-    if (m) {
-      const rel = relFile(m[1], projectRoot);
-      if (rel) {
-        // hvigor 实际格式：`Error Message: <msg> At File: <path>:<line>:<col>` 同行。
-        // 优先取同行消息段；回退累积 buf（兼容消息在独立行的旧/其他格式）。去 ANSI 色码。
-        const same = line.match(/Error Message:\s*(.*?)\s+At File:/);
-        const msg = (same ? same[1] : buf.join(' ')) || '';
-        const clean = msg.replace(/\x1b\[[0-9;]*m/g, '').trim();
-        const arr = out.get(rel) || [];
-        arr.push(`${clean} [line ${m[2]}]`.trim());
-        out.set(rel, arr);
-      }
-      buf = [];
-    } else if (line.startsWith(' ') && !line.includes('WARN')) {
-      // 错误消息行以空格开头（如 " Classes cannot be used as objects (arkts-no-classes-as-obj)），
-      // flush 给下一个 At File:。排除 ArkTS:WARN（废弃警告，非 build-breaking）。
-      buf.push(line.trim());
-    }
-  }
-  const joined = new Map();
-  for (const [f, msgs] of out) joined.set(f, msgs.slice(0, 10).join('\n'));
-  return joined;
-}
-
-/**
  * 返回 raw 中属于 absFile 且行号在 lineSet 内的错误消息（含行号）。
  * 用于把"新增"编译错误的消息文本喂回 agent，过滤掉 baseline 已有的 pre-existing 错误。
  */
@@ -223,7 +188,7 @@ function errorsForFileFiltered(raw, projectRoot, absFile, lineSet) {
       const ln = Number(m[2]);
       const mrel = relFile(m[1], projectRoot);
       if (mrel === rel && lineSet.has(ln)) {
-        // 同 groupRawByFile：优先取同行 Error Message 段，回退 buf。去 ANSI 色码。
+        // 优先取同行 Error Message 段，回退 buf。去 ANSI 色码。
         const same = line.match(/Error Message:\s*(.*?)\s+At File:/);
         const msg = (same ? same[1] : buf.join(' ')) || '';
         const clean = msg.replace(/\x1b\[[0-9;]*m/g, '').trim();
@@ -240,5 +205,5 @@ function errorsForFileFiltered(raw, projectRoot, absFile, lineSet) {
 module.exports = {
   IS_WIN, resolveDevEcoSdkHome, devEcoRoot, nodeExe, hvigorwJsPath, nodeHome,
   looksLikeHarmonyProject, findProjectRootFromFile, resolveHvigorTargets,
-  runHvigor, parseErrorLines, relFile, groupRawByFile, errorsForFileFiltered,
+  runHvigor, parseErrorLines, relFile, errorsForFileFiltered,
 };

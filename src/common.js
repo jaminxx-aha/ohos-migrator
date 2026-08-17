@@ -39,7 +39,6 @@ function deriveDevEcoPaths(sdkHome) {
 }
 
 const _dev = deriveDevEcoPaths(findDevEcoSdkHome());
-const DEVECO = _dev.root;        // DevEco 安装根（向后兼容导出，无直接消费者）
 const DEFAULT_OH_TS = _dev.ohTs;
 const DEFAULT_SDK = _dev.sdk;
 
@@ -110,7 +109,7 @@ function ensureSdkPaths(opts) {
 }
 
 module.exports = {
-  DEVECO, DEFAULT_OH_TS, DEFAULT_SDK, SKIP_DIRS, ARKTS_EXT,
+  DEFAULT_OH_TS, DEFAULT_SDK, SKIP_DIRS, ARKTS_EXT,
   MAX_AI_ATTEMPTS, MAX_AGENT_STEPS,
   findDevEcoSdkHome, loadTs, listArktsFiles, resolveTargets, ensureSdkPaths,
 };

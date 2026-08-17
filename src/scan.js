@@ -93,7 +93,7 @@ function scanFile(file, ts, sdkPath, ohTsPath) {
       target: ts.ScriptTarget.ES2021,
       module: ts.ModuleKind.ESNext,
       moduleResolution: ts.ModuleResolutionKind.NodeJs,
-      noEmit: true, strict: false, skipLibCheck: false, types: [],
+      noEmit: true, strict: false, skipLibCheck: true, types: [],
       baseUrl: sdkPath,
       paths: {
         '@ohos.*': [`${sdkPath}/@ohos.*.d.ts`],
@@ -128,6 +128,13 @@ function scanFile(file, ts, sdkPath, ohTsPath) {
     const tags = (nodeTags && nodeTags.length) ? nodeTags : symTags;
 
     const symName = checker.symbolToString(sym);
+    // 去重键 symName|line：visit 递归时 CallExpression、其子 PropertyAccess、以及 PA.name
+    // identifier 会探到同一调用点（同 sym 同行），需折叠避免重复计数。注意——键不能改用
+    // start 偏移：PA.name identifier 的 start（成员名位置）与调用点最左标识符不同，会逃过
+    // 折叠；而 PA 节点对"容器符号"（deprecated enum/namespace 经成员访问引用，如
+    // huks.HuksErrorCode.MEMBER 里的 HuksErrorCode）常解析不到 symbol，仅靠 name identifier
+    // 命中，跳过 name 会漏报。symName|line 折叠重复、保留独立命中，是经验证的正确粒度。
+    // 唯一理论边缘：同一行两处调用同一废弃符号会并成一条——真实代码罕见，语料不触发。
     const key = `${symName}|${line}`;
     if (seen.has(key)) return;
     seen.add(key);

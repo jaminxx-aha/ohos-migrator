@@ -34,11 +34,5 @@ function logHeader(cfg, system, user, attempt) {
   logAppend(cfg.logFile, redactSecret(block, cfg.apiKey) + '\n');
 }
 function logDelta(cfg, text) { if (cfg.logFile) logAppend(cfg.logFile, text); }
-function logFooter(cfg, status, error) {
-  if (!cfg.logFile) return;
-  const sep = '─'.repeat(72);
-  const line = error ? `[${status}] ${error}` : `[${status}]`;
-  logAppend(cfg.logFile, `${line}\n${sep}\n`);
-}
 
-module.exports = { tsStamp, redactSecret, logAppend, logHeader, logDelta, logFooter };
+module.exports = { tsStamp, redactSecret, logAppend, logHeader, logDelta };

@@ -1,0 +1,17 @@
+{
+  "name": "ohos-migrator",
+  "version": "0.1.0",
+  "description": "鸿蒙 ArkTS 废弃接口扫描 / 重写工具（基于 OH 版 TS 编译器 + 可选 AI agent 迁移）",
+  "private": true,
+  "bin": {
+    "ohos-migrator": "./ohos-migrator.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "scan": "node ohos-migrator.js scan",
+    "rewrite": "node ohos-migrator.js rewrite",
+    "rewrite:ai": "node ohos-migrator.js rewrite --use-ai"
+  }
+}
