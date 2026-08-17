@@ -8,10 +8,12 @@
  * 日志路径必须 .log 结尾、API key 脱敏（见 ai-config / ai-log）。
  */
 const fs = require('fs');
+const path = require('path');
 const { loadTs, resolveTargets, MAX_AI_ATTEMPTS, MAX_AGENT_STEPS } = require('./common');
 const { scanFile } = require('./scan');
 const { resolveAiConfig } = require('./ai-config');
 const { tsStamp, logAppend, logHeader, logDelta } = require('./ai-log');
+const hv = require('./verify/hvigor');
 
 // agent 可用的工具（OpenAI function-calling schema）。
 const AGENT_TOOLS = [
@@ -143,7 +145,7 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors)
     '规则：edit_file 的 oldText 必须是当前文件内容里唯一出现的连续子串；多处改动请调用多次 edit_file；' +
     '改完用 list_deprecated 自检；确认全部替换后调 done。useinstead 格式 ohos.<模块>[/<命名空间>]#<成员>。';
   let user = `目标文件: ${file}\n\n废弃接口清单（仅含带 useinstead 的项，须全部处理）：\n${list}\n\n当前文件内容：\n${content}`;
-  if (retryErrors) user += `\n\n## 上一轮仍未清除：\n${retryErrors}\n请继续修复这些项。`;
+  if (retryErrors) user += `\n\n## 上一轮仍有问题：\n${retryErrors}\n请修复上述问题。`;
   const messages = [{ role: 'system', content: system }, { role: 'user', content: user }];
   logHeader(cfg, system, user, attempt);
 
@@ -208,7 +210,7 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors)
  * 对单文件跑 agent 迁移：先扫描，若有带 useinstead 的废弃则跑 agent；改完重新扫描校验。
  * 多次未清则回退 pre-AI 原文并告警。
  */
-async function rewriteFileWithAi(file, ts2, sdkPath, ohTsPath, cfg) {
+async function rewriteFileWithAi(file, ts2, sdkPath, ohTsPath, cfg, hvCtx) {
   const orig = fs.readFileSync(file, 'utf8');
   let lastError = null;
 
@@ -233,8 +235,22 @@ async function rewriteFileWithAi(file, ts2, sdkPath, ohTsPath, cfg) {
     const scan2 = scanFile(file, ts2, sdkPath, ohTsPath);
     const remain = scan2.hits.filter((h) => h.useinstead);
     if (remain.length === 0) {
-      logAppend(cfg.logFile, `[${tsStamp()}] [${file}] success: deprecated cleared\n`);
-      console.log(`  [ai] ✓ cleared`);
+      // 废弃已清零。接下来 hvigor 编译门禁（若可用）：只接受"编译也干净"的迁移。
+      if (hvCtx) {
+        const gate = compileGate(file, cfg, hvCtx, attempt);
+        if (gate.ok) {
+          logAppend(cfg.logFile, `[${tsStamp()}] [${file}] success: deprecated cleared + compiles clean\n`);
+          console.log(`  [ai] ✓ cleared + compiles clean`);
+          return { ok: true, attempts: attempt, changed: true };
+        }
+        lastError = gate.error;
+        logAppend(cfg.logFile, `[${file}] attempt ${attempt}: ${gate.newErrCount} compile errors\n${lastError}\n`);
+        console.log(`  [ai] attempt ${attempt}: ${gate.newErrCount} compile errors — ${attempt < MAX_AI_ATTEMPTS ? 'retry' : 'giving up'}`);
+        continue;
+      }
+      // hvigor 不可用：废弃清零即判成功（不因校验器不可用而回退有效迁移）
+      logAppend(cfg.logFile, `[${tsStamp()}] [${file}] success: deprecated cleared (compile-verify unavailable)\n`);
+      console.log(`  [ai] ✓ cleared (compile-verify unavailable)`);
       return { ok: true, attempts: attempt, changed: true };
     }
     lastError = remain.map((h) => `行${h.line} ${h.callee} -> ${h.useinstead} 仍未替换`).join('\n');
@@ -247,6 +263,38 @@ async function rewriteFileWithAi(file, ts2, sdkPath, ohTsPath, cfg) {
   return { ok: false, attempts: MAX_AI_ATTEMPTS, changed: false, error: lastError || 'unresolved deprecated usage' };
 }
 
+/**
+ * hvigor 编译门禁：对工程跑一次 CompileArkTS，取本文件相对 baseline 的"新增"错误。
+ * - hvigor 不可用（ran=false）→ 放行（废弃已清，不回退）。
+ * - 无新增错误 → ok。
+ * - 有新增错误 → 返回错误消息文本喂回 agent 重试。
+ */
+function compileGate(file, cfg, hvCtx, attempt) {
+  const absFile = path.resolve(file);
+  const rel = path.relative(hvCtx.projectRoot, absFile).replace(/\\/g, '/');
+  const t0 = Date.now();
+  const res = hv.runHvigor({ projectRoot: hvCtx.projectRoot, devecoSdkHome: hvCtx.sdkHome });
+  const el = Math.round((Date.now() - t0) / 1000);
+  if (!res.ran) {
+    console.log(`  [ai] compile-verify unavailable: ${res.reason}; accepting deprecated-cleared`);
+    logAppend(cfg.logFile, `[${tsStamp()}] [hvigor] attempt=${attempt} unavailable: ${res.reason}\n`);
+    return { ok: true, newErrCount: 0 };
+  }
+  // res.errors 按 absPath(raw 打印) 归集；统一转 relFile 再取本文件。
+  const postByRel = new Map();
+  for (const [abs, lines] of res.errors) {
+    const r = hv.relFile(abs, hvCtx.projectRoot);
+    if (r) postByRel.set(r, lines);
+  }
+  const postLines = postByRel.get(rel) || [];
+  const baseline = hvCtx.baselineByFile.get(rel) || new Set();
+  const newLines = postLines.filter((l) => !baseline.has(l));
+  logAppend(cfg.logFile, `[${tsStamp()}] [hvigor] attempt=${attempt} elapsed=${el}s file=${rel} post=${postLines.length} baseline=${baseline.size} new=${newLines.length}\n`);
+  if (newLines.length === 0) return { ok: true, newErrCount: 0 };
+  const msgs = hv.errorsForFileFiltered(res.raw, hvCtx.projectRoot, absFile, new Set(newLines));
+  return { ok: false, newErrCount: newLines.length, error: '## 编译错误（hvigor CompileArkTS，请修复这些）:\n' + msgs.join('\n') };
+}
+
 async function cmdRewriteAi(opts) {
   const ts2 = loadTs(opts.ohTsPath);
   const { root, files } = resolveTargets(opts);
@@ -257,6 +305,46 @@ async function cmdRewriteAi(opts) {
   logAppend(cfg.logFile,
     `${'#'.repeat(72)}\nohos-migrator AI rewrite  ${tsStamp()}\n` +
     `root: ${root}\nbaseURL: ${cfg.baseURL}\nmodel: ${cfg.model}\nfiles: ${files.length}\n`);
+
+  // 编译校验上下文：解析 hvigor 工程根 + SDK home + baseline（pre-existing 错误行）。
+  // baseline 用来做 delta：只把"新增"编译错误算到迁移头上，避免误伤本来就编译不过的工程。
+  let hvCtx = null; // null = 不可用（降级为 skip+warn）
+  {
+    const projectRoot = opts.project
+      ? path.resolve(opts.project)
+      : hv.findProjectRootFromFile(path.resolve(opts.file));
+    if (!projectRoot) {
+      console.log(`[ai] compile-verify: skipped (file 不在 HarmonyOS 工程内)`);
+      logAppend(cfg.logFile, `[${tsStamp()}] compile-verify skipped: file not in a HarmonyOS project\n`);
+    } else {
+      const sdkHome = hv.resolveDevEcoSdkHome();
+      if (!sdkHome) {
+        console.log(`[ai] compile-verify: skipped (DevEco SDK home 未找到)`);
+        logAppend(cfg.logFile, `[${tsStamp()}] compile-verify skipped: DevEco SDK home not found\n`);
+      } else if (!hv.looksLikeHarmonyProject(projectRoot)) {
+        console.log(`[ai] compile-verify: skipped (非 HarmonyOS stage module)`);
+        logAppend(cfg.logFile, `[${tsStamp()}] compile-verify skipped: not a HarmonyOS stage module\n`);
+      } else {
+        console.log(`[ai] compile-verify: running baseline CompileArkTS on ${projectRoot} ...`);
+        const t0 = Date.now();
+        const base = hv.runHvigor({ projectRoot, devecoSdkHome: sdkHome });
+        const el = Math.round((Date.now() - t0) / 1000);
+        if (!base.ran) {
+          console.log(`[ai] compile-verify: skipped (baseline 失败: ${base.reason})`);
+          logAppend(cfg.logFile, `[${tsStamp()}] hvigor baseline unavailable: ${base.reason}\n`);
+        } else {
+          const baselineByFile = new Map();
+          for (const [abs, lines] of base.errors) {
+            const r = hv.relFile(abs, projectRoot);
+            if (r) baselineByFile.set(r, new Set(lines));
+          }
+          hvCtx = { projectRoot, sdkHome, baselineByFile };
+          console.log(`[ai] compile-verify: baseline ran in ${el}s, ${baselineByFile.size} file(s) with pre-existing errors`);
+          logAppend(cfg.logFile, `[${tsStamp()}] hvigor baseline ran in ${el}s, ${baselineByFile.size} files with pre-existing errors\n`);
+        }
+      }
+    }
+  }
 
   // 第一步：扫描整个工程，挑出有"带 useinstead 的废弃接口"的文件
   const targets = [];
@@ -278,7 +366,7 @@ async function cmdRewriteAi(opts) {
   for (const t of targets) {
     console.log(`\n[ai] processing ${t.file}  (${t.count} deprecated)`);
     logAppend(cfg.logFile, `\n${'#'.repeat(60)}\n[${tsStamp()}] >>>> FILE ${t.file}\n`);
-    const r = await rewriteFileWithAi(t.file, ts2, opts.sdkPath, opts.ohTsPath, cfg);
+    const r = await rewriteFileWithAi(t.file, ts2, opts.sdkPath, opts.ohTsPath, cfg, hvCtx);
     if (r.ok) { ok++; console.log(`  [ai] ✓ done (${r.attempts} attempt(s))`); }
     else {
       fail++;
