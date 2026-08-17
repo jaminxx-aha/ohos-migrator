@@ -287,7 +287,12 @@ async function rewriteFileWithAi(file, ts2, sdkPath, ohTsPath, cfg, hvCtx) {
  * hvigor 编译门禁：对工程跑一次 CompileArkTS，取本文件相对 baseline 的"新增"错误。
  * - hvigor 不可用（ran=false）→ 放行（废弃已清，不回退）。
  * - 无新增错误 → ok。
- * - 有新增错误 → 返回错误消息文本喂回 agent 重试。
+ * - 有新增错误 → 返回错误消息文本（带行号）喂回 agent 重试。
+ *
+ * delta 按「错误消息文本」比对，不用行号：baseline 是原文编译的错误消息集合，
+ * agent 迁移常在文件顶部加 import 致行号整体下移，按行号比会把 pre-existing
+ * 错误（行号已偏移）误判为新增并回退正确迁移。按消息比——pre-existing 错误消息
+ * 不变即归 baseline 不算新增；agent 引入的新错误消息不在 baseline 即算新增。
  */
 function compileGate(file, cfg, hvCtx, attempt) {
   const absFile = path.resolve(file);
@@ -300,19 +305,14 @@ function compileGate(file, cfg, hvCtx, attempt) {
     logAppend(cfg.logFile, `[${tsStamp()}] [hvigor] attempt=${attempt} unavailable: ${res.reason}\n`);
     return { ok: true, newErrCount: 0 };
   }
-  // res.errors 按 absPath(raw 打印) 归集；统一转 relFile 再取本文件。
-  const postByRel = new Map();
-  for (const [abs, lines] of res.errors) {
-    const r = hv.relFile(abs, hvCtx.projectRoot);
-    if (r) postByRel.set(r, lines);
-  }
-  const postLines = postByRel.get(rel) || [];
-  const baseline = hvCtx.baselineByFile.get(rel) || new Set();
-  const newLines = postLines.filter((l) => !baseline.has(l));
-  logAppend(cfg.logFile, `[${tsStamp()}] [hvigor] attempt=${attempt} elapsed=${el}s file=${rel} post=${postLines.length} baseline=${baseline.size} new=${newLines.length}\n`);
-  if (newLines.length === 0) return { ok: true, newErrCount: 0 };
-  const msgs = hv.errorsForFileFiltered(res.raw, hvCtx.projectRoot, absFile, new Set(newLines));
-  return { ok: false, newErrCount: newLines.length, error: '## 编译错误（hvigor CompileArkTS，请修复这些）:\n' + msgs.join('\n') };
+  // res.entries 是全工程每条错误 {file,line,message}；取本文件条目，按消息做 delta。
+  const postEntries = res.entries.filter((e) => hv.relFile(e.file, hvCtx.projectRoot) === rel);
+  const baseline = hvCtx.baselineByFile.get(rel) || new Set(); // Set<message>
+  const newEntries = postEntries.filter((e) => !baseline.has(e.message));
+  logAppend(cfg.logFile, `[${tsStamp()}] [hvigor] attempt=${attempt} elapsed=${el}s file=${rel} post=${postEntries.length} baseline=${baseline.size} new=${newEntries.length}\n`);
+  if (newEntries.length === 0) return { ok: true, newErrCount: 0 };
+  const msgs = newEntries.map((e) => `${e.message} (line ${e.line})`);
+  return { ok: false, newErrCount: newEntries.length, error: '## 编译错误（hvigor CompileArkTS，请修复这些）:\n' + msgs.join('\n') };
 }
 
 async function cmdRewriteAi(opts) {
@@ -353,10 +353,15 @@ async function cmdRewriteAi(opts) {
           console.log(`[ai] compile-verify: skipped (baseline 失败: ${base.reason})`);
           logAppend(cfg.logFile, `[${tsStamp()}] hvigor baseline unavailable: ${base.reason}\n`);
         } else {
+          // baseline 按文件聚合「错误消息集合」：rel -> Set<message>。用消息而非行号——
+          // agent 增删行会令行号偏移，按行号比会把 pre-existing 错误误判为新增并回退正确迁移。
           const baselineByFile = new Map();
-          for (const [abs, lines] of base.errors) {
-            const r = hv.relFile(abs, projectRoot);
-            if (r) baselineByFile.set(r, new Set(lines));
+          for (const e of base.entries) {
+            const r = hv.relFile(e.file, projectRoot);
+            if (!r) continue;
+            const set = baselineByFile.get(r) || new Set();
+            set.add(e.message);
+            baselineByFile.set(r, set);
           }
           // 已知限制：baseline 一次性按"全工程原文"计算；逐文件迁移成功后该文件留改后状态，
           // 后续文件 delta 仍对照原文 baseline。因成功文件已通过 compileGate（编译干净），

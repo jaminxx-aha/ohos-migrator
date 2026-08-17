@@ -98,11 +98,12 @@ function resolveHvigorTargets(projectRoot) {
 }
 
 /**
- * 跑 `hvigorw default@CompileArkTS` 并解析错误位点。
- * 返回 { ran, reason?, errors: Map<absPath, number[]>, raw }。ran=false 时 errors 空、带 reason。
+ * 跑 `hvigorw default@CompileArkTS` 并解析错误条目。
+ * 返回 { ran, reason?, entries: Array<{file,line,message}>, raw }。ran=false 时 entries 空、带 reason。
+ * 按「错误消息文本」做 delta（见 ai-agent.compileGate）：行号偏移不误判 pre-existing 错误为新增。
  */
 function runHvigor(opts) {
-  const empty = { ran: false, errors: new Map(), raw: '' };
+  const empty = { ran: false, entries: [], raw: '' };
   const sdkHome = resolveDevEcoSdkHome(opts.devecoSdkHome);
   if (!sdkHome) {
     return { ...empty, reason: 'DEVECO_SDK_HOME 未找到（设置环境变量或安装 DevEco Studio）' };
@@ -138,28 +139,7 @@ function runHvigor(opts) {
   if (r.error) return { ...empty, reason: `hvigorw 启动失败：${r.error.code || r.error.message}（${node}）` };
   if (r.status === null) return { ...empty, reason: `hvigorw 被信号终止：${r.signal || '?'}` };
   const out = (r.stdout ?? '') + (r.stderr ?? '');
-  return { ran: true, errors: parseErrorLines(out), raw: out };
-}
-
-/**
- * 解析 `At File: <path>:<line>:<col>` → Map<absPath, number[]>（排序去重）。
- * ArkTS 错误跨多行，`At File:` 可能在续行，故逐行扫描（非单行 regex）。
- */
-function parseErrorLines(output) {
-  const byFile = new Map();
-  const re = /At File: (.+?):(\d+):(\d+)/g;
-  let m;
-  while ((m = re.exec(output)) !== null) {
-    const file = m[1];
-    const line = Number(m[2]);
-    if (!file || !line) continue;
-    const set = byFile.get(file) || new Set();
-    set.add(line);
-    byFile.set(file, set);
-  }
-  const out = new Map();
-  for (const [f, lines] of byFile) out.set(f, [...lines].sort((a, b) => a - b));
-  return out;
+  return { ran: true, entries: parseErrorEntries(out), raw: out };
 }
 
 /** absPath → 相对 projectRoot 的正斜杠路径；不在工程内返回 null。 */
@@ -173,37 +153,36 @@ function relFile(absPath, projectRoot) {
 }
 
 /**
- * 返回 raw 中属于 absFile 且行号在 lineSet 内的错误消息（含行号）。
- * 用于把"新增"编译错误的消息文本喂回 agent，过滤掉 baseline 已有的 pre-existing 错误。
+ * 解析 hvigor 输出里每条 `At File: <path>:<line>:<col>` 错误 → { file, line, message }。
+ * message 取同行 `Error Message:` 段；否则取该 At File 行之前累积的续行（缩进行）。去 ANSI 色码。
+ * 全量收集、不做行号过滤——delta 由 ai-agent.compileGate 按「消息文本」比对：
+ * baseline 是原文编译的错误消息集合，agent 增删行只挪行号、消息不变，故 pre-existing
+ * 错误归 baseline 不算新增；agent 引入的新错误消息不在 baseline 即算新增。
+ * 行号随条目保留，用于把新增错误行号反馈给 agent 定位（改后文件的行号）。
  */
-function errorsForFileFiltered(raw, projectRoot, absFile, lineSet) {
-  const rel = relFile(absFile, projectRoot);
-  if (!rel || lineSet.size === 0) return [];
-  const out = [];
+function parseErrorEntries(output) {
+  const entries = [];
   let buf = [];
   const re = /At File: (.+?):(\d+):(\d+)/;
-  for (const line of raw.split('\n')) {
+  for (const line of output.split('\n')) {
     const m = line.match(re);
     if (m) {
+      const file = m[1];
       const ln = Number(m[2]);
-      const mrel = relFile(m[1], projectRoot);
-      if (mrel === rel && lineSet.has(ln)) {
-        // 优先取同行 Error Message 段，回退 buf。去 ANSI 色码。
-        const same = line.match(/Error Message:\s*(.*?)\s+At File:/);
-        const msg = (same ? same[1] : buf.join(' ')) || '';
-        const clean = msg.replace(/\x1b\[[0-9;]*m/g, '').trim();
-        if (clean) out.push(`${clean} (line ${ln})`);
-      }
+      const same = line.match(/Error Message:\s*(.*?)\s+At File:/);
+      const msg = (same ? same[1] : buf.join(' ')) || '';
+      const clean = msg.replace(/\x1b\[[0-9;]*m/g, '').trim();
+      if (file && ln && clean) entries.push({ file, line: ln, message: clean });
       buf = [];
     } else if (line.startsWith(' ') && !line.includes('WARN')) {
       buf.push(line.trim());
     }
   }
-  return out;
+  return entries;
 }
 
 module.exports = {
   IS_WIN, resolveDevEcoSdkHome, devEcoRoot, nodeExe, hvigorwJsPath, nodeHome,
   looksLikeHarmonyProject, findProjectRootFromFile, resolveHvigorTargets,
-  runHvigor, parseErrorLines, relFile, errorsForFileFiltered,
+  runHvigor, parseErrorEntries, relFile,
 };

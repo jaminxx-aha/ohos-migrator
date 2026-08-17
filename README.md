@@ -83,7 +83,7 @@ node ohos-migrator.js rewrite --project path/to/project --use-ai
 
 ### 编译门禁
 
-`verify/hvigor.js` 用 DevEco bundled node 跑 `hvigorw.js default@CompileArkTS`（不经 shell，路径含空格安全），解析 `At File:` 错误位点，按 baseline delta 只把「新增」错误算到迁移头上。module/product 名从 `build-profile.json5` 解析（非 entry 模块也能编译到正确目标）。hvigor 不可用时降级为「废弃清零即成功」。
+`verify/hvigor.js` 用 DevEco bundled node 跑 `hvigorw.js default@CompileArkTS`（不经 shell，路径含空格安全），解析 `At File:` 错误条目，按「错误消息文本」做 baseline delta 只把「新增」错误算到迁移头上——用消息而非行号，agent 加 import 致行号整体偏移也不会把 pre-existing 错误误判为新增。module/product 名从 `build-profile.json5` 解析（非 entry 模块也能编译到正确目标）。hvigor 不可用时降级为「废弃清零即成功」。
 
 ## 日志
 
@@ -118,6 +118,6 @@ node ohos-migrator.js scan --project test/deprecated
 ## 已知限制
 
 - **去重键 `symName|line`**：同一行两处调用同一废弃符号会并成一条（真实代码罕见；语料每行一语句不触发）。改用 `start` 偏移会重复计数 AST 多层探测或漏报容器符号废弃，经验证当前粒度正确。
-- **AI 编译门禁 baseline** 一次性按原文计算；逐文件迁移成功后该文件留改后状态，后续 delta 仍对照原文 baseline（成功文件已编译干净，跨文件新错误概率极低）。
+- **AI 编译门禁 baseline** 一次性按原文计算；逐文件迁移成功后该文件留改后状态，后续 delta 仍对照原文 baseline（成功文件已编译干净，跨文件新错误概率极低）。delta 按错误消息文本比对，agent 增删行致的行号偏移不会把 pre-existing 错误误判为新增。
 - AI 模式 SIGINT 恢复逻辑未实跑验证（需真实 API key + 信号），靠代码审查 + 模块加载确认语法。
 - FA-only 符号（`featureAbility` / `particleAbility` 等）属隐式废弃（声明无 `@deprecated` 文本），scanner 不检测，需单独处理。
