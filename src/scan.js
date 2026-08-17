@@ -1,5 +1,5 @@
 /**
- * scan.js — 扫描核心：scanFile 复用 scan-deprecated.js 的编译器原理，返回结构化 hits。
+ * scan.js — 扫描核心：用 OH 版 TS 编译器（createProgram + getSymbolAtLocation + getJsDocTags）检测废弃调用，返回结构化 hits。
  * 每条 hit 额外带 start 偏移、callee、member 段、memberOffset、depModule
  * （废弃声明所在 SDK 模块，如 @ohos.accessibility），供 rewrite 精确定位与同模块判定。
  */
