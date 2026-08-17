@@ -1,0 +1,16 @@
+# 敏感配置（含真实 API key，绝不提交）
+.env
+
+# 依赖
+node_modules/
+
+# AI 运行日志与产物
+logs/
+.ohos-migrator/
+*.log
+
+# 临时/扫描缓存
+*.tmp
+
+# 内嵌样本工程（独立 git 仓库，不并进本仓库）
+test/deprecated/
