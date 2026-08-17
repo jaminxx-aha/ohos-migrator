@@ -8,7 +8,7 @@
  *   用 @deprecated 标签判定废弃。这正是 IDE 语言服务渲染 hover 的方式。
  *
  * 用法:
- *   node scan-deprecated.js <file.ets> [--sdk <path>] [--oh-ts <path>] [--json]
+ *   node scripts/scan-deprecated.js <file.ets> [--sdk <path>] [--oh-ts <path>] [--json]
  *
  * 依赖（均为 DevEco 自带，无需安装）:
  *   --oh-ts  OH 版 typescript 模块路径
@@ -36,7 +36,7 @@ for (let i = 0; i < args.length; i++) {
   else if (!a.startsWith('--')) file = a;
 }
 if (!file) {
-  console.error('Usage: node scan-deprecated.js <file.ets> [--sdk <path>] [--oh-ts <path>] [--json]');
+  console.error('Usage: node scripts/scan-deprecated.js <file.ets> [--sdk <path>] [--oh-ts <path>] [--json]');
   process.exit(2);
 }
 file = path.resolve(file);

@@ -78,7 +78,6 @@ function resolveAiConfig(root) {
   const logFile = rawLog === '' ? defaultLogFile(root) : sanitizeLogFile(rawLog, root);
   return {
     baseURL, apiKey, model,
-    concurrency: envNum('OHOS_MIGRATOR_AI_CONCURRENCY') || 4,
     idleMs: envNum('OHOS_MIGRATOR_AI_TIMEOUT_MS') || 120000,
     totalMs: envNum('OHOS_MIGRATOR_AI_MAX_TOTAL_MS') || 600000,
     logFile, envPath,

@@ -253,7 +253,7 @@ async function cmdRewriteAi(opts) {
   const cfg = resolveAiConfig(root);
 
   console.log(`[ai] log -> ${cfg.logFile || '(disabled)'}`);
-  console.log(`[ai] baseURL=${cfg.baseURL}  model=${cfg.model}  idle=${cfg.idleMs}ms total=${cfg.totalMs}ms concurrency=${cfg.concurrency}`);
+  console.log(`[ai] baseURL=${cfg.baseURL}  model=${cfg.model}  idle=${cfg.idleMs}ms total=${cfg.totalMs}ms`);
   logAppend(cfg.logFile,
     `${'#'.repeat(72)}\nohos-migrator AI rewrite  ${tsStamp()}\n` +
     `root: ${root}\nbaseURL: ${cfg.baseURL}\nmodel: ${cfg.model}\nfiles: ${files.length}\n`);
