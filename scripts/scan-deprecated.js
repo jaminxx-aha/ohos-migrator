@@ -12,18 +12,16 @@
  *
  * 依赖（均为 DevEco 自带，无需安装）:
  *   --oh-ts  OH 版 typescript 模块路径
- *            默认: <DevEco>/tools/hvigor/hvigor-ohos-plugin/node_modules/typescript
+ *            默认: 探测 DevEco 安装根后取 <root>/tools/hvigor/hvigor-ohos-plugin/node_modules/typescript
  *   --sdk    OpenHarmony SDK 的 ets/api 目录（.d.ts 所在）
- *            默认: <DevEco>/sdk/default/openharmony/ets/api
+ *            默认: 探测 DevEco SDK home 后取 <sdkHome>/default/openharmony/ets/api
+ *            （探测逻辑见 src/common.js 的 findDevEcoSdkHome：DEVECO_SDK_HOME > Win/mac 标准安装）
  */
 
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-
-const DEVECO = 'C:/Program Files/Huawei/DevEco Studio';
-const DEFAULT_OH_TS = `${DEVECO}/tools/hvigor/hvigor-ohos-plugin/node_modules/typescript`;
-const DEFAULT_SDK = `${DEVECO}/sdk/default/openharmony/ets/api`;
+const { DEFAULT_OH_TS, DEFAULT_SDK } = require('../src/common');
 
 // ---- parse args ----
 const args = process.argv.slice(2);

@@ -9,23 +9,18 @@
 const { existsSync, statSync } = require('fs');
 const { join, dirname } = require('path');
 const { spawnSync } = require('child_process');
+const { findDevEcoSdkHome } = require('../common');
 
 const IS_WIN = process.platform === 'win32';
 
-/** 定位 DevEco SDK home：explicit > DEVECO_SDK_HOME > Win 默认 > macOS 默认。无则 undefined。 */
+/**
+ * 定位 DevEco SDK home：explicit（运行时覆盖）> common.findDevEcoSdkHome
+ * （DEVECO_SDK_HOME > Win/mac 标准安装）。探测逻辑统一委托 common，本函数只叠加
+ * explicit 覆盖层——避免与 common 的候选列表重复维护。无则 undefined。
+ */
 function resolveDevEcoSdkHome(explicit) {
-  const candidates = [
-    explicit,
-    process.env.DEVECO_SDK_HOME,
-    // Windows 标准安装
-    'C:/Program Files/Huawei/DevEco Studio/sdk',
-    // macOS 标准安装
-    '/Applications/DevEco-Studio.app/Contents/sdk',
-  ].filter(Boolean);
-  for (const c of candidates) {
-    if (existsSync(c) && statSync(c).isDirectory()) return c;
-  }
-  return undefined;
+  if (explicit && existsSync(explicit) && statSync(explicit).isDirectory()) return explicit;
+  return findDevEcoSdkHome() || undefined;
 }
 
 /** sdkHome 是 `.../sdk`，DevEco 根是其父目录 `.../DevEco Studio`。hvigorw/node 都在 <root>/tools/。 */
