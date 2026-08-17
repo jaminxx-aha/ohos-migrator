@@ -12,5 +12,7 @@ logs/
 # 临时/扫描缓存
 *.tmp
 
-# 内嵌样本工程（独立 git 仓库，不并进本仓库）
-test/deprecated/
+# IDE 配置
+.idea/
+
+# 测试样本工程自身的构建产物由 test/deprecated/.gitignore 管（build/ oh_modules/ .hvigor/ 等）

@@ -1,0 +1,8 @@
+# hvigor build artifacts
+/build/
+/entry/build/
+/oh_modules/
+/.hvigor/
+*.hap
+*.hsp
+*.har

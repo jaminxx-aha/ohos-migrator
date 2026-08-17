@@ -1,0 +1,24 @@
+import pasteboard from '@ohos.pasteboard';
+
+declare let _v0: pasteboard.PasteData; _v0.addHtmlRecord('');
+declare let _v1: pasteboard.PasteData; _v1.addTextRecord('');
+declare let _v2: pasteboard.PasteData; _v2.addUriRecord('');
+declare let _v3: pasteboard.PasteData; _v3.addWantRecord;
+declare let _v4: pasteboard.PasteData; _v4.getRecordAt(0);
+declare let _v5: pasteboard.PasteData; _v5.hasMimeType('');
+declare let _v6: pasteboard.PasteData; _v6.removeRecordAt(0);
+declare let _v7: pasteboard.PasteData; _v7.replaceRecordAt;
+declare let _v8: pasteboard.PasteDataRecord; _v8.convertToText();
+pasteboard.ShareOption.CROSSDEVICE;
+declare let _v9: pasteboard.SystemPasteboard; _v9.clear();
+declare let _v10: pasteboard.SystemPasteboard; _v10.getPasteData();
+declare let _v11: pasteboard.SystemPasteboard; _v11.hasPasteData();
+declare let _v12: pasteboard.SystemPasteboard; _v12.setPasteData;
+pasteboard.createHtmlData('');
+pasteboard.createHtmlTextRecord('');
+pasteboard.createPlainTextData('');
+pasteboard.createPlainTextRecord('');
+pasteboard.createUriData('');
+pasteboard.createUriRecord('');
+pasteboard.createWantData;
+pasteboard.createWantRecord;

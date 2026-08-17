@@ -1,0 +1,27 @@
+import Cipher from '@system.cipher';
+import { CipherAesOptions, CipherResponse, CipherRsaOptions } from '@system.cipher';
+
+let _v0: CipherResponse;
+let _v1: CipherRsaOptions;
+let _v2: CipherAesOptions;
+let _v3: Cipher;
+declare let _v4: CipherRsaOptions; _v4.action;
+declare let _v5: CipherAesOptions; _v5.action;
+Cipher.aes({ action: '', text: '', key: '', success: () => {}, fail: () => {}, complete: () => {} });
+declare let _v6: CipherRsaOptions; _v6.complete;
+declare let _v7: CipherAesOptions; _v7.complete;
+declare let _v8: CipherRsaOptions; _v8.fail;
+declare let _v9: CipherAesOptions; _v9.fail;
+declare let _v10: CipherAesOptions; _v10.iv;
+declare let _v11: CipherAesOptions; _v11.ivLen;
+declare let _v12: CipherAesOptions; _v12.ivOffset;
+declare let _v13: CipherRsaOptions; _v13.key;
+declare let _v14: CipherAesOptions; _v14.key;
+Cipher.rsa({ action: '', text: '', key: '', success: () => {}, fail: () => {}, complete: () => {} });
+declare let _v15: CipherRsaOptions; _v15.success;
+declare let _v16: CipherAesOptions; _v16.success;
+declare let _v17: CipherResponse; _v17.text;
+declare let _v18: CipherRsaOptions; _v18.text;
+declare let _v19: CipherAesOptions; _v19.text;
+declare let _v20: CipherRsaOptions; _v20.transformation;
+declare let _v21: CipherAesOptions; _v21.transformation;

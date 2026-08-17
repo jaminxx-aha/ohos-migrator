@@ -1,0 +1,22 @@
+import Device from '@system.device';
+import { DeviceResponse, GetDeviceOptions } from '@system.device';
+
+let _v0: DeviceResponse;
+let _v1: GetDeviceOptions;
+let _v2: Device;
+declare let _v3: DeviceResponse; _v3.apiVersion;
+declare let _v4: DeviceResponse; _v4.brand;
+declare let _v5: GetDeviceOptions; _v5.complete;
+declare let _v6: DeviceResponse; _v6.deviceType;
+declare let _v7: GetDeviceOptions; _v7.fail;
+Device.getInfo();
+declare let _v8: DeviceResponse; _v8.language;
+declare let _v9: DeviceResponse; _v9.manufacturer;
+declare let _v10: DeviceResponse; _v10.model;
+declare let _v11: DeviceResponse; _v11.product;
+declare let _v12: DeviceResponse; _v12.region;
+declare let _v13: DeviceResponse; _v13.screenDensity;
+declare let _v14: DeviceResponse; _v14.screenShape;
+declare let _v15: GetDeviceOptions; _v15.success;
+declare let _v16: DeviceResponse; _v16.windowHeight;
+declare let _v17: DeviceResponse; _v17.windowWidth;

@@ -1,0 +1,7 @@
+{
+  "string": [
+    { "name": "module_desc", "value": "entry" },
+    { "name": "EntryAbility_desc", "value": "entry" },
+    { "name": "EntryAbility_label", "value": "ArktsSpike" }
+  ]
+}

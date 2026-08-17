@@ -1,0 +1,34 @@
+import wantAgent from '@ohos.wantAgent';
+import { WantAgent } from '@ohos.wantAgent';
+
+// @ohos.wantAgent.wantAgent: module-move (kit-level); covered by the import line
+let _v0: WantAgent;
+let _v1: wantAgent.CompleteData;
+declare let _v2: wantAgent.CompleteData; _v2.extraInfo;
+declare let _v3: wantAgent.CompleteData; _v3.finalCode;
+declare let _v4: wantAgent.CompleteData; _v4.finalData;
+declare let _v5: wantAgent.CompleteData; _v5.info;
+declare let _v6: wantAgent.CompleteData; _v6.want;
+wantAgent.OperationType;
+wantAgent.OperationType.SEND_COMMON_EVENT;
+wantAgent.OperationType.START_ABILITIES;
+wantAgent.OperationType.START_ABILITY;
+wantAgent.OperationType.START_SERVICE;
+wantAgent.OperationType.UNKNOWN_TYPE;
+wantAgent.WantAgentFlags;
+wantAgent.WantAgentFlags.CANCEL_PRESENT_FLAG;
+wantAgent.WantAgentFlags.CONSTANT_FLAG;
+wantAgent.WantAgentFlags.NO_BUILD_FLAG;
+wantAgent.WantAgentFlags.ONE_TIME_FLAG;
+wantAgent.WantAgentFlags.REPLACE_ACTION;
+wantAgent.WantAgentFlags.REPLACE_BUNDLE;
+wantAgent.WantAgentFlags.REPLACE_ELEMENT;
+wantAgent.WantAgentFlags.REPLACE_ENTITIES;
+wantAgent.WantAgentFlags.REPLACE_URI;
+wantAgent.WantAgentFlags.UPDATE_PRESENT_FLAG;
+wantAgent.cancel;
+wantAgent.equal;
+wantAgent.getBundleName;
+wantAgent.getUid;
+wantAgent.getWantAgent;
+wantAgent.trigger;
