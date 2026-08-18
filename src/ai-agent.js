@@ -233,6 +233,10 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors)
 async function rewriteFileWithAi(file, ts2, sdkPath, ohTsPath, cfg, hvCtx) {
   const orig = fs.readFileSync(file, 'utf8');
   let lastError = null;
+  // 流式 idle/total-timeout 属瞬时失败（模型 prefill 长 / 网络抖动），不是迁移判断失败：
+  // 原地重试同一次 attempt，不消耗 MAX_AI_ATTEMPTS 预算，最多重试 MAX_TRANSIENT_RETRIES 次。
+  const MAX_TRANSIENT_RETRIES = 2;
+  let transient = 0;
 
   for (let attempt = 1; attempt <= MAX_AI_ATTEMPTS; attempt++) {
     fs.writeFileSync(file, orig, 'utf8'); // 每轮从原文开始
@@ -251,12 +255,22 @@ async function rewriteFileWithAi(file, ts2, sdkPath, ohTsPath, cfg, hvCtx) {
       await runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, lastError);
     } catch (e) {
       lastError = e.message;
+      const isTransient = /stream (idle|total)-timeout/.test(e.message);
+      if (isTransient && transient < MAX_TRANSIENT_RETRIES) {
+        transient++;
+        console.log(`  [ai] attempt ${attempt} transient (${e.message}) — redo same attempt (${transient}/${MAX_TRANSIENT_RETRIES})`);
+        logAppend(cfg.logFile, `[${tsStamp()}] [${file}] attempt ${attempt} transient: ${e.message} — redo (${transient}/${MAX_TRANSIENT_RETRIES})\n`);
+        attempt--; // for 循环 attempt++ 抵消，原地重试本次 attempt
+        continue;
+      }
       console.log(`  [ai] agent error: ${e.message}`);
       logAppend(cfg.logFile, `[${file}] attempt ${attempt} agent error: ${e.message}\n`);
       continue;
     } finally {
       cfg.convFile = null;
     }
+    // 本轮非瞬时失败 → 重置瞬时计数（下一轮重新开始计）
+    transient = 0;
     // 校验：重新扫描
     const scan2 = scanFile(file, ts2, sdkPath, ohTsPath);
     const remain = scan2.hits.filter((h) => h.useinstead);

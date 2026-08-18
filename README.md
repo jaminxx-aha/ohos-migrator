@@ -65,8 +65,8 @@ node ohos-migrator.js rewrite --project path/to/project --use-ai
 | `OHOS_MIGRATOR_AI_BASE_URL` | 是 | OpenAI 兼容 baseURL（不带末尾 `/`） |
 | `OHOS_MIGRATOR_AI_API_KEY` | 是 | API Key |
 | `OHOS_MIGRATOR_AI_MODEL` | 是 | 模型名 |
-| `OHOS_MIGRATOR_AI_TIMEOUT_MS` | 否 | 流式 idle-gap 超时，默认 `120000` |
-| `OHOS_MIGRATOR_AI_MAX_TOTAL_MS` | 否 | 总量超时上限，默认 `600000` |
+| `OHOS_MIGRATOR_AI_TIMEOUT_MS` | 否 | 流式 idle-gap 超时（首字节间隔），默认 `300000`。超大 prompt prefill 长勿误杀 |
+| `OHOS_MIGRATOR_AI_MAX_TOTAL_MS` | 否 | 总量超时上限，默认 `1200000` |
 | `OHOS_MIGRATOR_AI_LOG_FILE` | 否 | 日志路径，须 `.log` 结尾；留空走默认 `cwd/log/ai-conversation.log`，设 `off`/`none`/`/dev/null` 禁用 |
 
 ## 工作原理
@@ -94,7 +94,7 @@ node ohos-migrator.js rewrite --project path/to/project --use-ai
 
 1. 扫描全工程，挑出有「带 useinstead 的废弃」的文件。
 2. 跑一次 baseline `hvigor CompileArkTS`，记录 pre-existing 编译错误（delta 基线）。
-3. 逐文件交 agent：把废弃清单 + 文件内容给模型，模型调 `edit_file` / `replace_file` 改、`list_deprecated` 自检、`done` 收尾（单轮 ≤ 15 步，整轮 ≤ 3 次重试）。
+3. 逐文件交 agent：把废弃清单 + 文件内容给模型，模型调 `edit_file` / `replace_file` 改、`list_deprecated` 自检、`done` 收尾（单轮 ≤ 15 步，整轮 ≤ 5 次重试）。流式 idle/total-timeout 属瞬时失败，原地重试同一次 attempt（最多 2 次），不消耗迁移重试预算。
 4. 改完重扫：废弃清零 + hvigor 无新增编译错误 → 成功；否则带错误反馈重试，失败回退原文。
 5. SIGINT / SIGTERM 被强杀时，恢复当前正在处理的文件到原文（已成功的文件保留）。
 6. 全部文件处理完后，跑一次整工程 hvigor 做**跨文件审计**：全工程错误对 baseline 做 delta，检出 per-file gate 看不到的跨文件新增错误（agent 改 A 破坏非目标文件 B 时漏检的兜底）。仅报告不回退——回退正确迁移去修别处报错反而错，交人工核查。
