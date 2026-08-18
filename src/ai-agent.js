@@ -181,27 +181,24 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors,
   let consecutiveTimeouts = 0, consecutiveEmpty = 0;
   for (step = 1; step <= MAX_AGENT_STEPS; step++) {
     logConv(cfg, `\n--- step ${step} ---\n`);
-    process.stdout.write(`  [agent] step ${step} ... `);
+    // 与 AI 的交互进度只写对话日志（logConv/logDelta），终端不打——避免刷屏。
     let res;
     try {
-      res = await streamChatWithTools(cfg, messages, AGENT_TOOLS, (p) => process.stdout.write(p));
+      res = await streamChatWithTools(cfg, messages, AGENT_TOOLS, () => {});
     } catch (e) {
       // 流式超时 / 网络中断：不结束本轮、不丢已做的 content，告诉 AI 超时、让它接着改，
       // 在同一会话里重试。连续达上限才放弃（防 API 挂死无限重试）。step-- 不消耗步数预算。
       consecutiveTimeouts++;
       if (consecutiveTimeouts > MAX_CONSECUTIVE_TIMEOUTS) {
-        console.log(`\n  [agent] stream error: ${e.message} — giving up (${consecutiveTimeouts} consecutive)`);
         logConv(cfg, `[stream error] ${e.message} — giving up after ${consecutiveTimeouts} consecutive\n`);
         break;
       }
-      console.log(`\n  [agent] stream error: ${e.message} — resume in-conversation (${consecutiveTimeouts}/${MAX_CONSECUTIVE_TIMEOUTS})`);
       logConv(cfg, `[stream error] ${e.message} — resume (${consecutiveTimeouts}/${MAX_CONSECUTIVE_TIMEOUTS})\n`);
       messages.push({ role: 'user', content: '（上一轮流式调用超时/中断，你的回复未完整返回。请基于当前文件内容接着完成迁移，不要从头重写。）' });
       step--; // 抵消 for 的 step++，纯基础设施超时不消耗 agent 步数预算
       continue;
     }
     consecutiveTimeouts = 0;
-    console.log();
     const asst = { role: 'assistant', content: res.content || null };
     if (res.toolCalls.length) asst.tool_calls = res.toolCalls;
     messages.push(asst);
@@ -261,7 +258,6 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors,
       }
       const logTail = String(result).slice(0, 8000);
       logConv(cfg, `[tool] ${name} ${tc.function.arguments.slice(0, 200)} -> ${logTail}\n`);
-      process.stdout.write(`  [tool] ${name} -> ${String(result).slice(0, 80)}\n`);
       messages.push({ role: 'tool', tool_call_id: tc.id, content: String(result) });
       if (shouldBreak) break;
     }
@@ -304,7 +300,6 @@ async function rewriteFileWithAi(file, ts2, sdkPath, ohTsPath, cfg, hvCtx) {
     const label = lastFailKind === 'compile'
       ? 'fix compile errors (targeted edit)'
       : `${usable.length} deprecated to fix`;
-    console.log(`  [ai] attempt ${attempt}/${MAX_AI_ATTEMPTS}: ${label} (running agent)`);
     // AI 对话内容（system/user prompt、流式 delta、step/assistant/tool transcript）写到
     // per-file 对话文件 log/<源文件名>.log，主日志只留状态行 + 一条 [conv] 指针。
     cfg.convFile = convFileFor(cfg, file);
@@ -317,7 +312,6 @@ async function rewriteFileWithAi(file, ts2, sdkPath, ohTsPath, cfg, hvCtx) {
       // 走到这里的异常是非瞬时致命错误（如编译门禁 spawn 失败、代码 bug）：
       // 记错，下一轮按 lastFailKind 处理（remain→回滚原文；compile→保留产出定点修）。
       lastError = e.message;
-      console.log(`  [ai] agent error: ${e.message}`);
       logAppend(cfg.logFile, `[${file}] attempt ${attempt} agent error: ${e.message}\n`);
       lastFailKind = 'remain';
       lastAgentContent = null;
@@ -332,7 +326,6 @@ async function rewriteFileWithAi(file, ts2, sdkPath, ohTsPath, cfg, hvCtx) {
     if (remain.length > 0) {
       lastError = remain.map((h) => `行${h.line} ${h.callee} -> ${h.useinstead} 仍未替换`).join('\n');
       logAppend(cfg.logFile, `[${file}] attempt ${attempt}: ${remain.length} still remain\n${lastError}\n`);
-      console.log(`  [ai] attempt ${attempt}: ${remain.length} still deprecated — ${attempt < MAX_AI_ATTEMPTS ? 'retry' : 'giving up'}`);
       lastFailKind = 'remain';   // 废弃未清零：下一轮回滚原文重做
       lastAgentContent = null;
       continue;
@@ -342,19 +335,16 @@ async function rewriteFileWithAi(file, ts2, sdkPath, ohTsPath, cfg, hvCtx) {
       const gate = r.gate || compileGate(file, cfg, hvCtx, attempt);
       if (gate && gate.ok) {
         logAppend(cfg.logFile, `[${tsStamp()}] [${file}] success: deprecated cleared + compiles clean\n`);
-        console.log(`  [ai] ✓ cleared + compiles clean`);
         return { ok: true, attempts: attempt, changed: true };
       }
       lastError = gate ? gate.error : 'compile-verify error';
       const n = gate ? gate.newErrCount : '?';
       logAppend(cfg.logFile, `[${file}] attempt ${attempt}: ${n} compile errors\n${lastError}\n`);
-      console.log(`  [ai] attempt ${attempt}: ${n} compile errors — ${attempt < MAX_AI_ATTEMPTS ? 'retry (targeted fix)' : 'giving up'}`);
       lastFailKind = 'compile'; // 下一轮保留 agent 产出做定点修
       continue;
     }
     // hvigor 不可用：废弃清零即判成功（不因校验器不可用而回退有效迁移）
     logAppend(cfg.logFile, `[${tsStamp()}] [${file}] success: deprecated cleared (compile-verify unavailable)\n`);
-    console.log(`  [ai] ✓ cleared (compile-verify unavailable)`);
     return { ok: true, attempts: attempt, changed: true };
   }
 
@@ -470,7 +460,6 @@ async function cmdRewriteAi(opts) {
         console.log(`[ai] compile-verify: skipped (非 HarmonyOS stage module)`);
         logAppend(cfg.logFile, `[${tsStamp()}] compile-verify skipped: not a HarmonyOS stage module\n`);
       } else {
-        console.log(`[ai] compile-verify: running baseline CompileArkTS on ${projectRoot} ...`);
         const t0 = Date.now();
         const base = hv.runHvigor({ projectRoot, devecoSdkHome: sdkHome });
         const el = Math.round((Date.now() - t0) / 1000);
