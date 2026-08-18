@@ -184,5 +184,5 @@ function parseErrorEntries(output) {
 module.exports = {
   IS_WIN, resolveDevEcoSdkHome, devEcoRoot, nodeExe, hvigorwJsPath, nodeHome,
   looksLikeHarmonyProject, findProjectRootFromFile, resolveHvigorTargets,
-  runHvigor, parseErrorEntries, relFile,
+  stripJson5, runHvigor, parseErrorEntries, relFile,
 };

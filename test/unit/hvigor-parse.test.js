@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { parseErrorEntries, relFile, resolveHvigorTargets } = require('../../src/verify/hvigor');
+const { parseErrorEntries, relFile, resolveHvigorTargets, stripJson5, devEcoRoot, hvigorwJsPath, nodeHome, nodeExe, looksLikeHarmonyProject, findProjectRootFromFile, IS_WIN } = require('../../src/verify/hvigor');
 
 const ESC = '\x1b';
 
@@ -99,4 +99,80 @@ test('resolveHvigorTargets: 畸形 json5 → 回退', () => {
   const t = resolveHvigorTargets(d);
   assert.equal(t.module, 'entry@default');
   assert.equal(t.product, 'default');
+});
+
+// ---- stripJson5：json5 宽容解析（正则易碎，重点测） ----
+
+test('stripJson5: 块注释移除', () => {
+  const s = stripJson5('{/* c1 */ "a": 1 /* c2 */}');
+  assert.equal(JSON.parse(s).a, 1);
+});
+
+test('stripJson5: 行注释移除（不误删 URL 的 //）', () => {
+  // `https://...` 的 // 前面是 `:`，正则 `(^|[^:])//` 不匹配 → URL 保留
+  const s = stripJson5('{ "url": "https://example.com", "x": 1 // 行注释\n}');
+  const j = JSON.parse(s);
+  assert.equal(j.url, 'https://example.com');
+  assert.equal(j.x, 1);
+});
+
+test('stripJson5: 尾逗号容忍（对象/数组）', () => {
+  const s = stripJson5('{ "a": 1, "b": [2, 3,], }');
+  const j = JSON.parse(s);
+  assert.equal(j.a, 1);
+  assert.deepEqual(j.b, [2, 3]);
+});
+
+test('stripJson5: 非冒号前缀的 // 行注释被删除', () => {
+  // 正则 `(^|[^:])//`：// 前一字符非冒号即视为行注释删除。
+  // 'foo//bar' 中 // 前为 'o'（非冒号）→ 删，保留 'foo'。
+  // 对照：'a://c' 的 // 前是 ':' → 当 URL 保护、不删（见 URL 用例）。
+  assert.equal(stripJson5('foo//bar').replace(/\s/g, ''), 'foo');
+  assert.equal(stripJson5('a://c'), 'a://c'); // 冒号守卫，原样保留
+});
+
+// ---- 路径数学纯函数 ----
+
+test('devEcoRoot / hvigorwJsPath / nodeHome: sdkHome 推导（跨平台用 path 取期望）', () => {
+  const sdkHome = IS_WIN ? 'C:/DevEco/sdk' : '/DevEco/sdk';
+  const root = path.dirname(sdkHome);
+  assert.equal(devEcoRoot(sdkHome), root);
+  assert.equal(hvigorwJsPath(sdkHome), path.join(root, 'tools', 'hvigor', 'bin', 'hvigorw.js'));
+  assert.equal(nodeHome(sdkHome), path.join(root, 'tools', 'node'));
+});
+
+test('nodeExe: 路径都不存在 → 回退首选候选（让 spawnSync 报 ENOENT）', () => {
+  const sdkHome = '/nonexistent/sdk';
+  const home = nodeHome(sdkHome);
+  const expectedFirst = IS_WIN ? path.join(home, 'node.exe') : path.join(home, 'bin', 'node');
+  assert.equal(nodeExe(sdkHome), expectedFirst);
+});
+
+// ---- looksLikeHarmonyProject / findProjectRootFromFile（fs，临时目录） ----
+
+test('looksLikeHarmonyProject: 有 build-profile + entry/build-profile → true', () => {
+  const d = tmpDir();
+  fs.writeFileSync(path.join(d, 'build-profile.json5'), '{}');
+  fs.mkdirSync(path.join(d, 'entry'));
+  fs.writeFileSync(path.join(d, 'entry', 'build-profile.json5'), '{}');
+  assert.equal(looksLikeHarmonyProject(d), true);
+  assert.equal(looksLikeHarmonyProject(tmpDir()), false);
+});
+
+test('findProjectRootFromFile: 向上找最近工程根', () => {
+  const root = tmpDir();
+  fs.writeFileSync(path.join(root, 'build-profile.json5'), '{}');
+  fs.mkdirSync(path.join(root, 'entry'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'entry', 'build-profile.json5'), '{}');
+  fs.mkdirSync(path.join(root, 'entry', 'src', 'main'), { recursive: true });
+  const f = path.join(root, 'entry', 'src', 'main', 'foo.ets');
+  fs.writeFileSync(f, '');
+  assert.equal(findProjectRootFromFile(f), root);
+});
+
+test('findProjectRootFromFile: 无工程根 → null', () => {
+  const d = tmpDir();
+  const f = path.join(d, 'foo.ets');
+  fs.writeFileSync(f, '');
+  assert.equal(findProjectRootFromFile(f), null);
 });
