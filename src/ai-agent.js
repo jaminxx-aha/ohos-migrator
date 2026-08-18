@@ -315,6 +315,44 @@ function compileGate(file, cfg, hvCtx, attempt) {
   return { ok: false, newErrCount: newEntries.length, error: '## 编译错误（hvigor CompileArkTS，请修复这些）:\n' + msgs.join('\n') };
 }
 
+/**
+ * 迁移全部完成后的整工程编译审计：跑一次 hvigor，把全工程错误对 baseline 做 delta，
+ * 汇总「新增」错误（不限文件）。用于弥补 compileGate 的跨文件盲区——agent 改 A 引入的
+ * 错误若落在非目标文件 B（B 未参与迁移），per-file gate 看不到，此处兜底检出。
+ *
+ * 仅报告、不回退：A 的迁移本身可能正确（B 的报错是 B 自身未迁移的废弃调用被 A 的新接口
+ * 触发），回退正确迁移反而错；交人工核查。成功文件已通过各自 gate（本文件编译干净），
+ * 故此处新增错误几乎都属跨文件影响。
+ */
+function compileAudit(cfg, hvCtx) {
+  const t0 = Date.now();
+  const res = hv.runHvigor({ projectRoot: hvCtx.projectRoot, devecoSdkHome: hvCtx.sdkHome });
+  const el = Math.round((Date.now() - t0) / 1000);
+  if (!res.ran) {
+    console.log(`[ai] compile-audit: unavailable (${res.reason}) — skipped`);
+    logAppend(cfg.logFile, `[${tsStamp()}] [audit] unavailable: ${res.reason}\n`);
+    return;
+  }
+  const newEntries = [];
+  for (const e of res.entries) {
+    const r = hv.relFile(e.file, hvCtx.projectRoot);
+    if (!r) continue;
+    const base = hvCtx.baselineByFile.get(r) || new Set();
+    if (!base.has(e.message)) newEntries.push({ file: r, line: e.line, message: e.message });
+  }
+  logAppend(cfg.logFile, `[${tsStamp()}] [audit] ran in ${el}s, ${newEntries.length} new error(s) post-migration\n`);
+  if (newEntries.length === 0) {
+    console.log(`[ai] compile-audit: ✓ no new compile errors across project (${el}s)`);
+    return;
+  }
+  console.log(`[ai] compile-audit: ⚠ ${newEntries.length} new compile error(s) — manual review needed:`);
+  for (const e of newEntries) {
+    console.log(`  ${e.file}:${e.line}  ${e.message}`);
+    logAppend(cfg.logFile, `  ${e.file}:${e.line}  ${e.message}\n`);
+  }
+  console.log(`[ai] ⚠ 以上为迁移后新增编译错误（多为跨文件影响），请人工核查。`);
+}
+
 async function cmdRewriteAi(opts) {
   const ts2 = loadTs(opts.ohTsPath);
   const { root, files } = resolveTargets(opts);
@@ -410,6 +448,7 @@ async function cmdRewriteAi(opts) {
     }
   }
   console.log(`\n==== rewrite(ai) done: ${targets.length} processed, ${ok} ok, ${fail} failed/reverted ====`);
+  if (hvCtx) compileAudit(cfg, hvCtx);
   console.log(`[ai] log -> ${cfg.logFile || '(disabled)'}`);
 }
 

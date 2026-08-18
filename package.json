@@ -7,7 +7,7 @@
     "ohos-migrator": "./ohos-migrator.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20.6"
   },
   "scripts": {
     "scan": "node ohos-migrator.js scan",
