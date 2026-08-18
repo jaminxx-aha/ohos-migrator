@@ -7,10 +7,12 @@ const fs = require('fs');
 
 function tsStamp() { return new Date().toISOString(); }
 
-/** 把 secret 从 text 中抹成 [REDACTED]（全量匹配 + 服务端回显的掩码形式）。短于 8 位跳过。 */
+/** 把 secret 从 text 中抹成 [REDACTED]（全量匹配 + 服务端回显的掩码形式）。短于 8 位跳过精确匹配。 */
 function redactSecret(text, secret) {
-  if (!secret || secret.length < 8) return text;
-  let out = text.split(secret).join('[REDACTED]');
+  // 精确匹配：仅当 secret 足够长（>=8）才替换，避免短串误 redact 正常文本。
+  let out = (secret && secret.length >= 8) ? text.split(secret).join('[REDACTED]') : text;
+  // 服务端掩码回显（sk-xxx...yyy）独立于 secret 是否提供——API 报错常含此形式，
+  // 不能因调用方未传 secret 或 secret 偏短就放过。
   out = out.replace(/sk-[A-Za-z0-9_-]{1,20}\.{2,4}[A-Za-z0-9_-]{1,20}/g, '[REDACTED]');
   return out;
 }
