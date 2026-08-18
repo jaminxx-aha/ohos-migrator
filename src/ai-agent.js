@@ -171,6 +171,11 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors,
   logHeader(cfg, system, user, attempt);
 
   let step = 0, doneCalled = false, finalGate = null;
+  // 失败不从头来：流式超时 / 无工具调用属可恢复，在同一会话里告诉 AI 并让其继续，
+  // 保留已做的 content 与对话历史。连续上限防死循环；达上限才真正放弃本轮。
+  const MAX_CONSECUTIVE_TIMEOUTS = 3;
+  const MAX_CONSECUTIVE_EMPTY = 2;
+  let consecutiveTimeouts = 0, consecutiveEmpty = 0;
   for (step = 1; step <= MAX_AGENT_STEPS; step++) {
     logConv(cfg, `\n--- step ${step} ---\n`);
     process.stdout.write(`  [agent] step ${step} ... `);
@@ -178,16 +183,38 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors,
     try {
       res = await streamChatWithTools(cfg, messages, AGENT_TOOLS, (p) => process.stdout.write(p));
     } catch (e) {
-      console.log(`\n  [agent] stream error: ${e.message}`);
-      logConv(cfg, `[stream error] ${e.message}\n`);
-      break;
+      // 流式超时 / 网络中断：不结束本轮、不丢已做的 content，告诉 AI 超时、让它接着改，
+      // 在同一会话里重试。连续达上限才放弃（防 API 挂死无限重试）。step-- 不消耗步数预算。
+      consecutiveTimeouts++;
+      if (consecutiveTimeouts > MAX_CONSECUTIVE_TIMEOUTS) {
+        console.log(`\n  [agent] stream error: ${e.message} — giving up (${consecutiveTimeouts} consecutive)`);
+        logConv(cfg, `[stream error] ${e.message} — giving up after ${consecutiveTimeouts} consecutive\n`);
+        break;
+      }
+      console.log(`\n  [agent] stream error: ${e.message} — resume in-conversation (${consecutiveTimeouts}/${MAX_CONSECUTIVE_TIMEOUTS})`);
+      logConv(cfg, `[stream error] ${e.message} — resume (${consecutiveTimeouts}/${MAX_CONSECUTIVE_TIMEOUTS})\n`);
+      messages.push({ role: 'user', content: '（上一轮流式调用超时/中断，你的回复未完整返回。请基于当前文件内容接着完成迁移，不要从头重写。）' });
+      step--; // 抵消 for 的 step++，纯基础设施超时不消耗 agent 步数预算
+      continue;
     }
+    consecutiveTimeouts = 0;
     console.log();
     const asst = { role: 'assistant', content: res.content || null };
     if (res.toolCalls.length) asst.tool_calls = res.toolCalls;
     messages.push(asst);
     logConv(cfg, `[assistant] content=${(res.content || '').length}chars tools=${res.toolCalls.map((t) => t.function.name).join(',') || 'none'} finish=${res.finishReason}\n`);
-    if (!res.toolCalls.length) { logConv(cfg, '[agent] no tool_calls, finishing\n'); break; }
+    if (!res.toolCalls.length) {
+      consecutiveEmpty++;
+      if (consecutiveEmpty > MAX_CONSECUTIVE_EMPTY) {
+        logConv(cfg, `[agent] no tool_calls ${consecutiveEmpty}x — giving up\n`);
+        break;
+      }
+      logConv(cfg, `[agent] no tool_calls — nudge to continue (${consecutiveEmpty}/${MAX_CONSECUTIVE_EMPTY})\n`);
+      messages.push({ role: 'user', content: '请继续用工具（edit_file/replace_file/list_deprecated/done）完成迁移，不要只输出文字说明。' });
+      step--;
+      continue;
+    }
+    consecutiveEmpty = 0;
 
     let shouldBreak = false;
     for (const tc of res.toolCalls) {
@@ -260,10 +287,6 @@ async function rewriteFileWithAi(file, ts2, sdkPath, ohTsPath, cfg, hvCtx) {
   // 不回滚原文是关键——否则「文件是 BY、编译错误说 On」自相矛盾，模型易卡死。
   let lastFailKind = null;       // 'compile' | 'remain' | null
   let lastAgentContent = null;   // 上一轮 agent 产出（仅 compile 重试时复用）
-  // 流式 idle/total-timeout 属瞬时失败（模型 prefill 长 / 网络抖动），不是迁移判断失败：
-  // 原地重试同一次 attempt，不消耗 MAX_AI_ATTEMPTS 预算，最多重试 MAX_TRANSIENT_RETRIES 次。
-  const MAX_TRANSIENT_RETRIES = 2;
-  let transient = 0;
 
   for (let attempt = 1; attempt <= MAX_AI_ATTEMPTS; attempt++) {
     const baseContent = (lastFailKind === 'compile' && lastAgentContent != null) ? lastAgentContent : orig;
@@ -287,25 +310,18 @@ async function rewriteFileWithAi(file, ts2, sdkPath, ohTsPath, cfg, hvCtx) {
     try {
       r = await runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, lastError, hvCtx);
     } catch (e) {
+      // runAgent 内部已对流式超时 / 无工具调用做「同一会话内恢复」（告诉 AI 并继续），
+      // 走到这里的异常是非瞬时致命错误（如编译门禁 spawn 失败、代码 bug）：
+      // 记错，下一轮按 lastFailKind 处理（remain→回滚原文；compile→保留产出定点修）。
       lastError = e.message;
-      const isTransient = /stream (idle|total)-timeout/.test(e.message);
-      if (isTransient && transient < MAX_TRANSIENT_RETRIES) {
-        transient++;
-        console.log(`  [ai] attempt ${attempt} transient (${e.message}) — redo same attempt (${transient}/${MAX_TRANSIENT_RETRIES})`);
-        logAppend(cfg.logFile, `[${tsStamp()}] [${file}] attempt ${attempt} transient: ${e.message} — redo (${transient}/${MAX_TRANSIENT_RETRIES})\n`);
-        attempt--; // for 循环 attempt++ 抵消，原地重试本次 attempt
-        continue;
-      }
       console.log(`  [ai] agent error: ${e.message}`);
       logAppend(cfg.logFile, `[${file}] attempt ${attempt} agent error: ${e.message}\n`);
-      lastFailKind = 'remain'; // 未知失败，下一轮回滚原文
+      lastFailKind = 'remain';
       lastAgentContent = null;
       continue;
     } finally {
       cfg.convFile = null;
     }
-    // 本轮非瞬时失败 → 重置瞬时计数（下一轮重新开始计）
-    transient = 0;
     lastAgentContent = r.content;
     // 校验：重新扫描废弃
     const scan2 = scanFile(file, ts2, sdkPath, ohTsPath);
