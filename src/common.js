@@ -111,5 +111,5 @@ function ensureSdkPaths(opts) {
 module.exports = {
   DEFAULT_OH_TS, DEFAULT_SDK, SKIP_DIRS, ARKTS_EXT,
   MAX_AI_ATTEMPTS, MAX_AGENT_STEPS,
-  findDevEcoSdkHome, loadTs, listArktsFiles, resolveTargets, ensureSdkPaths,
+  findDevEcoSdkHome, deriveDevEcoPaths, loadTs, listArktsFiles, resolveTargets, ensureSdkPaths,
 };

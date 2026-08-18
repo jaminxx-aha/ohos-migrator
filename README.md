@@ -112,7 +112,7 @@ package.json            engines >=20.6 / bin / scripts
 
 ## 单元测试
 
-纯函数单测（`node:test`，无需 SDK/网络）覆盖 `parseUseinstead`/`normMod`、`applyOneEdit`、`ai-config`（`parseDotenv`/`sanitizeLogFile`/`defaultLogFile`）、`hvigor`（`parseErrorEntries`/`relFile`/`resolveHvigorTargets`）：
+纯函数单测（`node:test`，无需 SDK/网络）覆盖 `src/` 全部 8 个模块的可测纯函数——`args.parseArgv`、`common.deriveDevEcoPaths/listArktsFiles`、`scan.parseUseinstead/normMod`、`rewrite-simple.applySimpleRewrites/escapeRe`、`ai-agent.applyOneEdit`、`ai-config.parseDotenv/sanitizeLogFile/defaultLogFile`、`ai-log.redactSecret`、`verify/hvigor.parseErrorEntries/relFile/resolveHvigorTargets`，共 69 例：
 
 ```bash
 npm test
