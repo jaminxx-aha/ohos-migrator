@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
-const { parseDotenv, sanitizeLogFile, defaultLogFile } = require('../../src/ai-config');
+const { parseDotenv, sanitizeLogFile, defaultLogFile, firstEnv, envNum } = require('../../src/ai-config');
 
 test('parseDotenv: 基本键值、引号、export 前缀、注释/空行', () => {
   const text = [
@@ -50,4 +50,28 @@ test('sanitizeLogFile: .log 结尾 → 原样放行', () => {
 
 test('defaultLogFile: 指向 cwd/log/ai-conversation.log', () => {
   assert.equal(defaultLogFile(), path.join(process.cwd(), 'log', 'ai-conversation.log'));
+});
+
+// ---- firstEnv / envNum（读 process.env，须 save/restore） ----
+function withEnv(setter, fn) {
+  const backup = {};
+  for (const k of Object.keys(setter)) { backup[k] = process.env[k]; process.env[k] = setter[k]; }
+  try { return fn(); }
+  finally { for (const k of Object.keys(setter)) { if (backup[k] === undefined) delete process.env[k]; else process.env[k] = backup[k]; } }
+}
+
+test('firstEnv: 返回首个非空（trim 后）值，否则 undefined', () => {
+  withEnv({ A: '', B: '  ', C: 'val' }, () => {
+    assert.equal(firstEnv('A', 'B', 'C'), 'val');   // A 空串、B 纯空白 都跳过
+  });
+  withEnv({}, () => assert.equal(firstEnv('NOPE_X', 'NOPE_Y'), undefined));
+});
+
+test('envNum: 正数 → 数值；0/负/NaN/空 → undefined', () => {
+  withEnv({ N: '120000' }, () => assert.equal(envNum('N'), 120000));
+  withEnv({ N: '0' }, () => assert.equal(envNum('N'), undefined));       // >0 守卫拒 0
+  withEnv({ N: '-5' }, () => assert.equal(envNum('N'), undefined));       // 拒负
+  withEnv({ N: 'abc' }, () => assert.equal(envNum('N'), undefined));      // 拒 NaN
+  withEnv({ N: '' }, () => assert.equal(envNum('N'), undefined));
+  withEnv({}, () => assert.equal(envNum('NOPE_Z'), undefined));
 });
