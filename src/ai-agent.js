@@ -12,7 +12,7 @@ const path = require('path');
 const { loadTs, resolveTargets, MAX_AI_ATTEMPTS, MAX_AGENT_STEPS } = require('./common');
 const { scanFile } = require('./scan');
 const { resolveAiConfig } = require('./ai-config');
-const { tsStamp, logAppend, logHeader, logDelta } = require('./ai-log');
+const { tsStamp, logAppend, logHeader, logDelta, logConv, convFileFor } = require('./ai-log');
 const hv = require('./verify/hvigor');
 
 // SIGINT/SIGTERM 恢复：runAgent 在 list_deprecated 时会把半改 content 落盘，中途被
@@ -170,22 +170,22 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors)
 
   let step = 0, doneCalled = false;
   for (step = 1; step <= MAX_AGENT_STEPS; step++) {
-    logAppend(cfg.logFile, `\n--- step ${step} ---\n`);
+    logConv(cfg, `\n--- step ${step} ---\n`);
     process.stdout.write(`  [agent] step ${step} ... `);
     let res;
     try {
       res = await streamChatWithTools(cfg, messages, AGENT_TOOLS, (p) => process.stdout.write(p));
     } catch (e) {
       console.log(`\n  [agent] stream error: ${e.message}`);
-      logAppend(cfg.logFile, `[stream error] ${e.message}\n`);
+      logConv(cfg, `[stream error] ${e.message}\n`);
       break;
     }
     console.log();
     const asst = { role: 'assistant', content: res.content || null };
     if (res.toolCalls.length) asst.tool_calls = res.toolCalls;
     messages.push(asst);
-    logAppend(cfg.logFile, `[assistant] content=${(res.content || '').length}chars tools=${res.toolCalls.map((t) => t.function.name).join(',') || 'none'} finish=${res.finishReason}\n`);
-    if (!res.toolCalls.length) { logAppend(cfg.logFile, '[agent] no tool_calls, finishing\n'); break; }
+    logConv(cfg, `[assistant] content=${(res.content || '').length}chars tools=${res.toolCalls.map((t) => t.function.name).join(',') || 'none'} finish=${res.finishReason}\n`);
+    if (!res.toolCalls.length) { logConv(cfg, '[agent] no tool_calls, finishing\n'); break; }
 
     let shouldBreak = false;
     for (const tc of res.toolCalls) {
@@ -213,7 +213,7 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors)
         result = `error: unknown tool ${name}`;
       }
       const logTail = String(result).slice(0, 400);
-      logAppend(cfg.logFile, `[tool] ${name} ${tc.function.arguments.slice(0, 200)} -> ${logTail}\n`);
+      logConv(cfg, `[tool] ${name} ${tc.function.arguments.slice(0, 200)} -> ${logTail}\n`);
       process.stdout.write(`  [tool] ${name} -> ${String(result).slice(0, 80)}\n`);
       messages.push({ role: 'tool', tool_call_id: tc.id, content: String(result) });
       if (shouldBreak) break;
@@ -221,7 +221,7 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors)
     if (shouldBreak) break;
   }
   const stepsRun = Math.min(step, MAX_AGENT_STEPS);
-  logAppend(cfg.logFile, `[agent] ended after ${stepsRun} steps, doneCalled=${doneCalled}\n`);
+  logConv(cfg, `[agent] ended after ${stepsRun} steps, doneCalled=${doneCalled}\n`);
   fs.writeFileSync(file, content, 'utf8'); // 落盘最终内容供校验
   return { content, steps: stepsRun, changed: content !== origContent, doneCalled };
 }
@@ -243,6 +243,10 @@ async function rewriteFileWithAi(file, ts2, sdkPath, ohTsPath, cfg, hvCtx) {
       return { ok: true, attempts: attempt, changed: false };
     }
     console.log(`  [ai] attempt ${attempt}/${MAX_AI_ATTEMPTS}: ${usable.length} deprecated to fix (running agent)`);
+    // AI 对话内容（system/user prompt、流式 delta、step/assistant/tool transcript）写到
+    // per-file 对话文件 log/<源文件名>.log，主日志只留状态行 + 一条 [conv] 指针。
+    cfg.convFile = convFileFor(cfg, file);
+    logAppend(cfg.logFile, `[${tsStamp()}] [conv] ${path.basename(file)} -> ${cfg.convFile}\n`);
     try {
       await runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, lastError);
     } catch (e) {
@@ -250,6 +254,8 @@ async function rewriteFileWithAi(file, ts2, sdkPath, ohTsPath, cfg, hvCtx) {
       console.log(`  [ai] agent error: ${e.message}`);
       logAppend(cfg.logFile, `[${file}] attempt ${attempt} agent error: ${e.message}\n`);
       continue;
+    } finally {
+      cfg.convFile = null;
     }
     // 校验：重新扫描
     const scan2 = scanFile(file, ts2, sdkPath, ohTsPath);

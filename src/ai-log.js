@@ -1,6 +1,8 @@
 /**
- * ai-log.js — AI 对话实时日志：header(流式前) + 逐 delta 追加 + footer；API key 脱敏。
- * 日志路径必须 .log 结尾（由 ai-config.sanitizeLogFile 保证，防写 rc/dotfile→RCE）。
+ * ai-log.js — AI 对话日志：主日志只留状态行（success/revert/hvigor/audit），
+ * 与 AI 的对话内容（system/user prompt、流式 delta、step/assistant/tool transcript）
+ * 单独写到 per-file 对话文件 log/<源文件名>.log，由 convFileFor 按目标废弃文件名推路径。
+ * API key 脱敏。所有日志路径必须 .log 结尾（防写 dotfile → RCE）。
  */
 const path = require('path');
 const fs = require('fs');
@@ -33,15 +35,33 @@ function logAppend(logFile, text) {
     fs.appendFileSync(logFile, text, 'utf8');
   } catch (_) { /* best-effort：日志失败不得中断迁移 */ }
 }
-function logHeader(cfg, system, user, attempt) {
-  if (!cfg.logFile) return;
-  const sep = '─'.repeat(72);
-  const header = `[${tsStamp()}] attempt=${attempt} model=${cfg.model} base=${cfg.baseURL} status=STREAMING`;
-  const block = [sep, header, '### system', system, '### user', user, '### response (streamed live)'].join('\n');
-  logAppend(cfg.logFile, redactSecret(block, cfg.apiKey) + '\n');
-}
-function logDelta(cfg, text) {
-  if (cfg.logFile) logAppend(cfg.logFile, redactSecret(text, cfg.apiKey));
+
+/**
+ * 由目标废弃文件名推 per-file 对话日志路径：与主日志同目录，文件名 = 源文件 basename + .log。
+ * 如 .../ohos-bluetooth.ets → <logDir>/ohos-bluetooth.ets.log。无主日志路径或目标文件返回 null。
+ */
+function convFileFor(cfg, targetFile) {
+  if (!cfg || !cfg.logFile || !targetFile) return null;
+  const base = path.basename(targetFile);
+  return path.join(path.dirname(cfg.logFile), base + '.log');
 }
 
-module.exports = { tsStamp, redactSecret, logAppend, logHeader, logDelta };
+/** per-attempt 对话 header（system/user prompt）→ 写 per-file 对话文件，不进主日志。 */
+function logHeader(cfg, system, user, attempt) {
+  const f = cfg.convFile;
+  if (!f) return;
+  const sep = '─'.repeat(72);
+  const header = `[${tsStamp()}] attempt=${attempt} model=${cfg.model} status=STREAMING`;
+  const block = [sep, header, '### system', system, '### user', user, '### response (streamed live)'].join('\n');
+  logAppend(f, redactSecret(block, cfg.apiKey) + '\n');
+}
+/** 流式 delta → 写 per-file 对话文件。 */
+function logDelta(cfg, text) {
+  if (cfg.convFile) logAppend(cfg.convFile, redactSecret(text, cfg.apiKey));
+}
+/** 对话循环 transcript（step / assistant / tool / ended）→ 写 per-file 对话文件。 */
+function logConv(cfg, text) {
+  if (cfg.convFile) logAppend(cfg.convFile, text);
+}
+
+module.exports = { tsStamp, redactSecret, logAppend, logHeader, logDelta, logConv, convFileFor };

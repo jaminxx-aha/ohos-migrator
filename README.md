@@ -109,7 +109,12 @@ node ohos-migrator.js rewrite --project path/to/project --use-ai
 
 ## 日志
 
-AI 模式实时记录对话到 `cwd/log/ai-conversation.log`（header + 逐 delta + 工具调用）。日志路径强制 `.log` 结尾（防写 dotfile → RCE），API key 脱敏。
+AI 模式日志分两层：
+
+- **主日志** `cwd/log/ai-conversation.log`：只留状态行（attempt/success/revert/hvigor/audit）+ 每文件的 `[conv] -> <对话文件>` 指针。API key 脱敏。
+- **per-file 对话文件** `cwd/log/<源文件名>.log`：与 AI 的对话内容（system/user prompt、流式 delta、step/assistant/tool transcript），按被迁移的废弃文件名分文件，互不串混。
+
+所有日志路径强制 `.log` 结尾（防写 dotfile → RCE）。
 
 ## 工程结构
 
