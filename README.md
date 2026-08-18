@@ -94,7 +94,7 @@ node ohos-migrator.js rewrite --project path/to/project --use-ai
 
 1. 扫描全工程，挑出有「带 useinstead 的废弃」的文件。
 2. 跑一次 baseline `hvigor CompileArkTS`，记录 pre-existing 编译错误（delta 基线）。
-3. 逐文件交 agent：把废弃清单 + 文件内容给模型，模型调 `edit_file` / `replace_file` 改、`list_deprecated` 自检、`done` 收尾（单轮 ≤ 15 步，整轮 ≤ 5 次重试）。流式 idle/total-timeout 属瞬时失败，原地重试同一次 attempt（最多 2 次），不消耗迁移重试预算。
+3. 逐文件交 agent：把废弃清单 + 文件内容给模型，模型调 `edit_file` / `replace_file` 改、`list_deprecated` 自检、`done` 收尾（单轮 ≤ 25 步）。**`done` 触发 hvigor 编译门禁**：编译干净才真正结束；若有编译错误，`done` 被拒、错误清单喂回 agent，在同一轮里继续 `edit_file` 定点修，修完再 `done`，直到编译通过——agent 在一次会话内自收敛，而非结束→外层重开。流式 idle/total-timeout 属瞬时失败，原地重试同一次 attempt（最多 2 次），不消耗迁移重试预算。整轮 ≤ 5 次重试；编译错误重试时保留上一轮 agent 产出做定点修（不回滚原文，避免「文件 BY、错误说 On」自相矛盾）。
 4. 改完重扫：废弃清零 + hvigor 无新增编译错误 → 成功；否则带错误反馈重试，失败回退原文。
 5. SIGINT / SIGTERM 被强杀时，恢复当前正在处理的文件到原文（已成功的文件保留）。
 6. 全部文件处理完后，跑一次整工程 hvigor 做**跨文件审计**：全工程错误对 baseline 做 delta，检出 per-file gate 看不到的跨文件新增错误（agent 改 A 破坏非目标文件 B 时漏检的兜底）。仅报告不回退——回退正确迁移去修别处报错反而错，交人工核查。

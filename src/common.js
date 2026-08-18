@@ -49,7 +49,7 @@ const SKIP_DIRS = new Set([
 const ARKTS_EXT = new Set(['.ets', '.ts']);
 
 const MAX_AI_ATTEMPTS = 5;   // agent 整轮重试上限（轮间带错误反馈）：50 项级文件需收敛空间
-const MAX_AGENT_STEPS = 15;  // 单轮 agent 内工具往返步数上限
+const MAX_AGENT_STEPS = 25;  // 单轮 agent 内工具往返步数上限：done 被编译门禁拒后需继续 edit→done 迭代
 
 function loadTs(ohTsPath) {
   try { return require(ohTsPath); }

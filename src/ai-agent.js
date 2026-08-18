@@ -40,7 +40,7 @@ const AGENT_TOOLS = [
   { type: 'function', function: { name: 'edit_file', description: '对目标文件做一处精确替换。oldText 必须是当前文件内容里唯一出现的连续子串；不唯一或不存在会失败。改多处就调用多次。', parameters: { type: 'object', properties: { oldText: { type: 'string', description: '要被替换的精确子串（须唯一出现）' }, newText: { type: 'string', description: '替换后的文本' }, reason: { type: 'string', description: '简短原因' } }, required: ['oldText', 'newText'] } } },
   { type: 'function', function: { name: 'replace_file', description: '整文件替换（仅当 edit_file 难以锚定时使用）。传入完整新文件内容。', parameters: { type: 'object', properties: { content: { type: 'string', description: '完整的新文件内容' } }, required: ['content'] } } },
   { type: 'function', function: { name: 'list_deprecated', description: '重新扫描当前文件内容，返回仍未处理的废弃接口（带 useinstead）。用于自检进度。', parameters: { type: 'object', properties: {}, required: [] } } },
-  { type: 'function', function: { name: 'done', description: '声明迁移完成。调用后流程做最终校验。', parameters: { type: 'object', properties: {}, required: [] } } },
+  { type: 'function', function: { name: 'done', description: '声明迁移完成。调用后流程会跑 hvigor 编译门禁：编译干净才真正结束；若有编译错误会把你拒绝并返回错误清单，需继续用 edit_file 修复后重新调 done。', parameters: { type: 'object', properties: {}, required: [] } } },
 ];
 
 /** 对 content 做一处精确替换：仅当 oldText 唯一出现时应用。 */
@@ -150,7 +150,7 @@ async function streamChatWithTools(cfg, messages, tools, onDelta) {
  * 跑一轮 agent：模型多轮调工具改文件，直到 done 或步数上限。返回 {content, steps, changed, doneCalled}。
  * 文件以内存 content 为准；list_deprecated 时临时写盘扫描，结束时把最终 content 落盘。
  */
-async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors) {
+async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors, hvCtx) {
   const origContent = fs.readFileSync(file, 'utf8');
   let content = origContent;
   const scan0 = scanFile(file, ts2, sdkPath, ohTsPath);
@@ -162,13 +162,15 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors)
     '你是鸿蒙 ArkTS 迁移 agent，拥有读写目标文件的工具。任务：根据每个废弃接口的 useinstead，' +
     '把废弃调用替换为推荐接口，必要时调整 import，其余代码与逻辑保持不变。' +
     '规则：edit_file 的 oldText 必须是当前文件内容里唯一出现的连续子串；多处改动请调用多次 edit_file；' +
-    '改完用 list_deprecated 自检；确认全部替换后调 done。useinstead 格式 ohos.<模块>[/<命名空间>]#<成员>。';
+    '改完用 list_deprecated 自检废弃是否清零；然后调 done 触发编译门禁——编译干净才结束，' +
+    '若有编译错误会被退回，继续用 edit_file 修（不要整文件重写）直到编译通过再 done。' +
+    'useinstead 格式 ohos.<模块>[/<命名空间>]#<成员>。';
   let user = `目标文件: ${file}\n\n废弃接口清单（仅含带 useinstead 的项，须全部处理）：\n${list}\n\n当前文件内容：\n${content}`;
   if (retryErrors) user += `\n\n## 上一轮仍有问题：\n${retryErrors}\n请修复上述问题。`;
   const messages = [{ role: 'system', content: system }, { role: 'user', content: user }];
   logHeader(cfg, system, user, attempt);
 
-  let step = 0, doneCalled = false;
+  let step = 0, doneCalled = false, finalGate = null;
   for (step = 1; step <= MAX_AGENT_STEPS; step++) {
     logConv(cfg, `\n--- step ${step} ---\n`);
     process.stdout.write(`  [agent] step ${step} ... `);
@@ -208,7 +210,22 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors)
         const u = s.hits.filter((h) => h.useinstead);
         result = u.length ? u.map((h) => `行${h.line} ${h.callee} -> ${h.useinstead}`).join('\n') : 'none';
       } else if (name === 'done') {
-        doneCalled = true; result = 'ok: completing'; shouldBreak = true;
+        fs.writeFileSync(file, content, 'utf8'); // 编译门禁读盘
+        if (hvCtx) {
+          // 把编译门禁挪进 agent 循环：done 时当场跑 hvigor。
+          // 干净 → 接受 done，这一轮真正结束；有错 → 不接受 done，把错误喂回 agent，
+          // 让它在同一轮里继续 edit_file 修，修完再 done，直到编译通过。
+          // 否则 agent 唯一的自检（list_deprecated）只看废弃是否清零，看不到编译错误，
+          // 会一次 replace_file + done 就停，编译问题要等外层重开 attempt 才暴露。
+          const gate = compileGate(file, cfg, hvCtx, attempt);
+          finalGate = gate;
+          if (gate.ok) { doneCalled = true; result = 'ok: 废弃清零 + 编译干净，完成'; shouldBreak = true; }
+          else {
+            result = `尚未通过编译门禁：${gate.newErrCount} 个新增编译错误。请用 edit_file 逐个修复（不要重写整个文件），修完再调 done：\n${gate.error}`;
+          }
+        } else {
+          doneCalled = true; result = 'ok: completing'; shouldBreak = true;
+        }
       } else {
         result = `error: unknown tool ${name}`;
       }
@@ -223,7 +240,12 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors)
   const stepsRun = Math.min(step, MAX_AGENT_STEPS);
   logConv(cfg, `[agent] ended after ${stepsRun} steps, doneCalled=${doneCalled}\n`);
   fs.writeFileSync(file, content, 'utf8'); // 落盘最终内容供校验
-  return { content, steps: stepsRun, changed: content !== origContent, doneCalled };
+  // 步数用尽 / 无 tool_calls / 流式中断而未 done：跑一次最终门禁取当前状态供外层判断。
+  // 若 done 曾被拒（finalGate 已是失败态），此处重跑取最新内容对应的状态。
+  if (!doneCalled && hvCtx) {
+    finalGate = compileGate(file, cfg, hvCtx, attempt);
+  }
+  return { content, steps: stepsRun, changed: content !== origContent, doneCalled, gate: finalGate };
 }
 
 /**
@@ -233,26 +255,37 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors)
 async function rewriteFileWithAi(file, ts2, sdkPath, ohTsPath, cfg, hvCtx) {
   const orig = fs.readFileSync(file, 'utf8');
   let lastError = null;
+  // 编译错误重试：保留上一轮 agent 产出（废弃已清零、只是签名/类型不对）做定点修；
+  // 废弃未清零重试：回滚原文重做（迁移没生效，得重来）。
+  // 不回滚原文是关键——否则「文件是 BY、编译错误说 On」自相矛盾，模型易卡死。
+  let lastFailKind = null;       // 'compile' | 'remain' | null
+  let lastAgentContent = null;   // 上一轮 agent 产出（仅 compile 重试时复用）
   // 流式 idle/total-timeout 属瞬时失败（模型 prefill 长 / 网络抖动），不是迁移判断失败：
   // 原地重试同一次 attempt，不消耗 MAX_AI_ATTEMPTS 预算，最多重试 MAX_TRANSIENT_RETRIES 次。
   const MAX_TRANSIENT_RETRIES = 2;
   let transient = 0;
 
   for (let attempt = 1; attempt <= MAX_AI_ATTEMPTS; attempt++) {
-    fs.writeFileSync(file, orig, 'utf8'); // 每轮从原文开始
+    const baseContent = (lastFailKind === 'compile' && lastAgentContent != null) ? lastAgentContent : orig;
+    fs.writeFileSync(file, baseContent, 'utf8');
     const scan = scanFile(file, ts2, sdkPath, ohTsPath);
     const usable = scan.hits.filter((h) => h.useinstead);
-    if (usable.length === 0) {
+    // 只有从原文起算、确实无废弃时才判「无事可做」；编译重试时文件已迁移、usable=0 是预期的。
+    if (baseContent === orig && usable.length === 0) {
       logAppend(cfg.logFile, `[${tsStamp()}] [${file}] no useinstead-bearing deprecated usage — success\n`);
       return { ok: true, attempts: attempt, changed: false };
     }
-    console.log(`  [ai] attempt ${attempt}/${MAX_AI_ATTEMPTS}: ${usable.length} deprecated to fix (running agent)`);
+    const label = lastFailKind === 'compile'
+      ? 'fix compile errors (targeted edit)'
+      : `${usable.length} deprecated to fix`;
+    console.log(`  [ai] attempt ${attempt}/${MAX_AI_ATTEMPTS}: ${label} (running agent)`);
     // AI 对话内容（system/user prompt、流式 delta、step/assistant/tool transcript）写到
     // per-file 对话文件 log/<源文件名>.log，主日志只留状态行 + 一条 [conv] 指针。
     cfg.convFile = convFileFor(cfg, file);
     logAppend(cfg.logFile, `[${tsStamp()}] [conv] ${path.basename(file)} -> ${cfg.convFile}\n`);
+    let r;
     try {
-      await runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, lastError);
+      r = await runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, lastError, hvCtx);
     } catch (e) {
       lastError = e.message;
       const isTransient = /stream (idle|total)-timeout/.test(e.message);
@@ -265,37 +298,45 @@ async function rewriteFileWithAi(file, ts2, sdkPath, ohTsPath, cfg, hvCtx) {
       }
       console.log(`  [ai] agent error: ${e.message}`);
       logAppend(cfg.logFile, `[${file}] attempt ${attempt} agent error: ${e.message}\n`);
+      lastFailKind = 'remain'; // 未知失败，下一轮回滚原文
+      lastAgentContent = null;
       continue;
     } finally {
       cfg.convFile = null;
     }
     // 本轮非瞬时失败 → 重置瞬时计数（下一轮重新开始计）
     transient = 0;
-    // 校验：重新扫描
+    lastAgentContent = r.content;
+    // 校验：重新扫描废弃
     const scan2 = scanFile(file, ts2, sdkPath, ohTsPath);
     const remain = scan2.hits.filter((h) => h.useinstead);
-    if (remain.length === 0) {
-      // 废弃已清零。接下来 hvigor 编译门禁（若可用）：只接受"编译也干净"的迁移。
-      if (hvCtx) {
-        const gate = compileGate(file, cfg, hvCtx, attempt);
-        if (gate.ok) {
-          logAppend(cfg.logFile, `[${tsStamp()}] [${file}] success: deprecated cleared + compiles clean\n`);
-          console.log(`  [ai] ✓ cleared + compiles clean`);
-          return { ok: true, attempts: attempt, changed: true };
-        }
-        lastError = gate.error;
-        logAppend(cfg.logFile, `[${file}] attempt ${attempt}: ${gate.newErrCount} compile errors\n${lastError}\n`);
-        console.log(`  [ai] attempt ${attempt}: ${gate.newErrCount} compile errors — ${attempt < MAX_AI_ATTEMPTS ? 'retry' : 'giving up'}`);
-        continue;
-      }
-      // hvigor 不可用：废弃清零即判成功（不因校验器不可用而回退有效迁移）
-      logAppend(cfg.logFile, `[${tsStamp()}] [${file}] success: deprecated cleared (compile-verify unavailable)\n`);
-      console.log(`  [ai] ✓ cleared (compile-verify unavailable)`);
-      return { ok: true, attempts: attempt, changed: true };
+    if (remain.length > 0) {
+      lastError = remain.map((h) => `行${h.line} ${h.callee} -> ${h.useinstead} 仍未替换`).join('\n');
+      logAppend(cfg.logFile, `[${file}] attempt ${attempt}: ${remain.length} still remain\n${lastError}\n`);
+      console.log(`  [ai] attempt ${attempt}: ${remain.length} still deprecated — ${attempt < MAX_AI_ATTEMPTS ? 'retry' : 'giving up'}`);
+      lastFailKind = 'remain';   // 废弃未清零：下一轮回滚原文重做
+      lastAgentContent = null;
+      continue;
     }
-    lastError = remain.map((h) => `行${h.line} ${h.callee} -> ${h.useinstead} 仍未替换`).join('\n');
-    logAppend(cfg.logFile, `[${file}] attempt ${attempt}: ${remain.length} still remain\n${lastError}\n`);
-    console.log(`  [ai] attempt ${attempt}: ${remain.length} still deprecated — ${attempt < MAX_AI_ATTEMPTS ? 'retry' : 'giving up'}`);
+    // 废弃已清零。编译门禁：优先复用 agent 内 done 时已跑过的 gate，避免重复编译。
+    if (hvCtx) {
+      const gate = r.gate || compileGate(file, cfg, hvCtx, attempt);
+      if (gate && gate.ok) {
+        logAppend(cfg.logFile, `[${tsStamp()}] [${file}] success: deprecated cleared + compiles clean\n`);
+        console.log(`  [ai] ✓ cleared + compiles clean`);
+        return { ok: true, attempts: attempt, changed: true };
+      }
+      lastError = gate ? gate.error : 'compile-verify error';
+      const n = gate ? gate.newErrCount : '?';
+      logAppend(cfg.logFile, `[${file}] attempt ${attempt}: ${n} compile errors\n${lastError}\n`);
+      console.log(`  [ai] attempt ${attempt}: ${n} compile errors — ${attempt < MAX_AI_ATTEMPTS ? 'retry (targeted fix)' : 'giving up'}`);
+      lastFailKind = 'compile'; // 下一轮保留 agent 产出做定点修
+      continue;
+    }
+    // hvigor 不可用：废弃清零即判成功（不因校验器不可用而回退有效迁移）
+    logAppend(cfg.logFile, `[${tsStamp()}] [${file}] success: deprecated cleared (compile-verify unavailable)\n`);
+    console.log(`  [ai] ✓ cleared (compile-verify unavailable)`);
+    return { ok: true, attempts: attempt, changed: true };
   }
 
   try {
