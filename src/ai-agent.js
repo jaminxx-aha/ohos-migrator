@@ -164,7 +164,10 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors,
     '规则：edit_file 的 oldText 必须是当前文件内容里唯一出现的连续子串；多处改动请调用多次 edit_file；' +
     '改完用 list_deprecated 自检废弃是否清零；然后调 done 触发编译门禁——编译干净才结束，' +
     '若有编译错误会被退回，继续用 edit_file 修（不要整文件重写）直到编译通过再 done。' +
-    'useinstead 格式 ohos.<模块>[/<命名空间>]#<成员>。';
+    'useinstead 格式 ohos.<模块>[/<命名空间>]#<成员>，其中 # 表示该成员是类/接口的**实例成员**（非静态）；' +
+    '调用实例成员需先有该类的实例——ohos kit 常导出全大写单例 const 承载 builder 链（如 UiTest 的 ON.text(...)，' +
+    '不是 On.text(...) 在类上静态调，否则编译报 typeof On 无该属性）。改 import 时把这个全大写单例一并导入。' +
+    '若不确定调用形态，按 useinstead 的类名找同 kit 导出的全大写同名 const。';
   let user = `目标文件: ${file}\n\n废弃接口清单（仅含带 useinstead 的项，须全部处理）：\n${list}\n\n当前文件内容：\n${content}`;
   if (retryErrors) user += `\n\n## 上一轮仍有问题：\n${retryErrors}\n请修复上述问题。`;
   const messages = [{ role: 'system', content: system }, { role: 'user', content: user }];
@@ -256,7 +259,7 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors,
       } else {
         result = `error: unknown tool ${name}`;
       }
-      const logTail = String(result).slice(0, 400);
+      const logTail = String(result).slice(0, 8000);
       logConv(cfg, `[tool] ${name} ${tc.function.arguments.slice(0, 200)} -> ${logTail}\n`);
       process.stdout.write(`  [tool] ${name} -> ${String(result).slice(0, 80)}\n`);
       messages.push({ role: 'tool', tool_call_id: tc.id, content: String(result) });
