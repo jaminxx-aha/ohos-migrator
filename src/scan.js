@@ -92,6 +92,103 @@ function declFileToModule(ts, decl) {
   return base.startsWith('@') ? base : '';
 }
 
+/**
+ * 从 JSDoc 节点 getText() 串里剥出主描述（不含 @tag 行）。
+ * 纯字符串处理，便于单测。OH 版 TS 删了 ts.getJSDocComment，主描述只能从
+ * getJSDocCommentsAndTags 返回的 JSDoc 节点（getText() 是整块 JSDoc 文本）里解析。
+ * 流程：去 JSDoc 头尾标记 → 按行去星号前缀 → 剔除以 @ 开头的 tag 行 → 剩余非空行 join。
+ */
+function jsDocMainComment(jsdocText) {
+  if (!jsdocText) return '';
+  let s = String(jsdocText).replace(/^\/\*\*/, '').replace(/\*\/\s*$/, '');
+  const out = [];
+  for (const raw of s.split(/\r?\n/)) {
+    const l = raw.replace(/^\s*\*\s?/, '');
+    if (/^@/.test(l.trim())) continue;   // @param/@syscap/... 整行跳过，由 getJSDocTags 结构化取
+    const t = l.trim();
+    if (t) out.push(t);
+  }
+  return out.join(' ').replace(/\s{2,}/g, ' ').trim();
+}
+
+/**
+ * 把一条废弃 hit 展开成发给 AI 的三段式描述：
+ *   1. 错误信息行（The signature '(...)' of 'X' is deprecated.）
+ *   2. 接口声明行（kit简写.容器链.成员(签名)）
+ *   3. 接口描述段（主描述 + Params + Syscap + Since + Deprecated + Useinstead）
+ * 任一步骤抛错 → 回退旧单行格式，绝不因描述失败丢掉这条废弃。
+ */
+function describeDeprecated(ts, decl, checker, hit) {
+  const fallback = `- 行 ${hit.line}  调用: \`${hit.callee}\`  废弃(${hit.deprecated})  推荐替换(useinstead): \`${hit.useinstead}\``;
+  try {
+    const qname = hit.qualifiedName || '';
+    const isCallable = ts.isMethodDeclaration(decl) || ts.isMethodSignature(decl) ||
+      ts.isFunctionDeclaration(decl) || ts.isCallSignatureDeclaration(decl);
+    // 签名：方法/函数用 signatureToString；属性/枚举成员/变量用类型串
+    let sig = '';
+    if (isCallable) {
+      try { const s = checker.getSignatureFromDeclaration(decl); sig = s ? checker.signatureToString(s) : ''; } catch (_) {}
+      if (!sig) { try { sig = decl.getText().replace(/;\s*$/, '').replace(/^\s+/, ''); } catch (_) {} }
+    } else {
+      try { const ty = checker.getTypeAtLocation(decl); sig = ty ? ': ' + checker.typeToString(ty) : ''; } catch (_) {}
+    }
+
+    let errLine;
+    if (isCallable && sig.startsWith('(')) errLine = `行 ${hit.line} — The signature '${sig}' of '${qname}' is deprecated.`;
+    else if (!isCallable) errLine = `行 ${hit.line} — Property '${qname}' is deprecated.`;
+    else errLine = `行 ${hit.line} — ${qname} is deprecated.`;
+
+    const kitShort = (hit.kit || '').replace(/^@ohos\./, '').replace(/^@/, '');
+    const chain = [hit.exportName, ...(hit.members || [])].filter(Boolean).join('.');
+    let declLine = [kitShort, chain].filter(Boolean).join('.');
+    if (sig) declLine += sig;
+
+    const parts = [];
+    // 主描述：从 JSDoc 节点 getText() 剥 tag 行（OH fork 无 getJSDocComment）
+    try {
+      const ct = ts.getJSDocCommentsAndTags(decl);
+      if (ct) for (const item of ct) {
+        if (item && item.getText) {
+          const txt = item.getText();
+          if (txt.startsWith('/**')) { parts.push(jsDocMainComment(txt)); break; }
+        }
+      }
+    } catch (_) {}
+    // 去掉空主描述占位，下面再按序追加
+    const desc = parts.filter(Boolean);
+    parts.length = 0;
+    parts.push(...desc);
+
+    // tags：param（描述丢了名，从 decl.parameters 补）/ syscap / since
+    // deprecated / useinstead 复用 record 已提取的 hit 字段，保持一致
+    let tags = [];
+    try { tags = ts.getJSDocTags(decl) || []; } catch (_) {}
+    const paramDescs = [];
+    let syscap = '', since = '';
+    for (const t of tags) {
+      const n = tagName(t);
+      if (n === 'param') paramDescs.push(tagText(t));
+      else if (n === 'syscap') syscap = tagText(t);
+      else if (n === 'since') since = tagText(t);
+    }
+    if (paramDescs.length) {
+      const names = [];
+      if (isCallable && decl.parameters) for (const p of decl.parameters)
+        names.push(p.name && typeof p.name.text === 'string' ? p.name.text : '');
+      const lines = paramDescs.map((d, i) => `  ${names[i] || ('arg' + i)} — ${d || ''}`);
+      parts.push('Params:\n' + lines.join('\n'));
+    }
+    if (syscap) parts.push('Syscap: ' + syscap);
+    if (since) parts.push('Since: ' + since);
+    if (hit.deprecated) parts.push('Deprecated: ' + hit.deprecated);
+    if (hit.useinstead) parts.push('Useinstead: ' + hit.useinstead);
+
+    return `${errLine}\n\n${declLine}\n\n${parts.join('\n')}`;
+  } catch (_) {
+    return fallback;
+  }
+}
+
 // 解析 useinstead。返回 { module, member, hasSlash }
 //   ohos.accessibility#isOpenAccessibilitySync  -> @ohos.accessibility / isOpenAccessibilitySync / false
 //   ohos.app.ability.dataUriUtils/dataUriUtils#getId -> @ohos.app.ability.dataUriUtils / getId / true
@@ -234,7 +331,7 @@ function scanInner(file, ts, sdkPath, ohTsPath, rootName, srcText) {
     const depModule = declFileToModule(ts, decl);
     const id = computeIdentity(ts, decl);
 
-    hits.push({
+    const hit = {
       file, line, col,
       callee: calleeText,
       qualifiedName: cls ? `${cls}.${symName}` : symName,
@@ -247,7 +344,9 @@ function scanInner(file, ts, sdkPath, ohTsPath, rootName, srcText) {
       start,
       member,
       memberOffset,
-    });
+    };
+    hit.desc = describeDeprecated(ts, decl, checker, hit);
+    hits.push(hit);
   }
 
   function visit(node) {
@@ -306,4 +405,4 @@ function cmdScan(opts) {
   console.log(`\n==== scan done: ${files.length} file(s), ${filesWithDeprecated} with deprecated, ${totalDeprecated} usage(s) ====`);
 }
 
-module.exports = { scanFile, parseUseinstead, normMod, declFileToModule, computeIdentity, cmdScan };
+module.exports = { scanFile, parseUseinstead, normMod, declFileToModule, computeIdentity, jsDocMainComment, describeDeprecated, cmdScan };
