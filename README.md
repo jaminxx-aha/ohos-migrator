@@ -92,13 +92,14 @@ node ohos-migrator.js rewrite --project path/to/project --use-ai
 
 ### AI 重写（rewrite --use-ai）
 
-1. **确定性先跑**：map + 安全门 + 编译回滚，吃下构造上即正确的编辑（同 kit 改名 / 整 kit 换）。残料留给 agent。
-2. 扫描全工程，挑出有「带 useinstead 的废弃」的文件。
-3. 跑一次 baseline `hvigor CompileArkTS`（此时工程已是确定性产出后的状态），记录 pre-existing 编译错误（delta 基线）。
-4. 逐文件交 agent：把废弃清单 + 文件内容给模型，模型调 `edit_file` / `replace_file` 改、`list_deprecated` 自检、`done` 收尾（单轮 ≤ 15 步，整轮 ≤ 3 次重试）。
-5. 改完重扫：废弃清零 + hvigor 无新增编译错误 → 成功；否则带错误反馈重试，失败回退原文。
-6. SIGINT / SIGTERM 被强杀时，恢复当前正在处理的文件到原文（已成功的文件保留）。
-7. 全部文件处理完后，跑一次整工程 hvigor 做**跨文件审计**：全工程错误对 baseline 做 delta，检出 per-file gate 看不到的跨文件新增错误（agent 改 A 破坏非目标文件 B 时漏检的兜底）。仅报告不回退——回退正确迁移去修别处报错反而错，交人工核查。
+1. 扫描全工程，挑出有「带 useinstead 的废弃」的文件。
+2. 跑一次 baseline `hvigor CompileArkTS`，记录 pre-existing 编译错误（delta 基线）。
+3. 逐文件交 agent：把废弃清单 + 文件内容给模型，模型调 `edit_file` / `replace_file` 改、`list_deprecated` 自检、`done` 收尾（单轮 ≤ 15 步，整轮 ≤ 3 次重试）。
+4. 改完重扫：废弃清零 + hvigor 无新增编译错误 → 成功；否则带错误反馈重试，失败回退原文。
+5. SIGINT / SIGTERM 被强杀时，恢复当前正在处理的文件到原文（已成功的文件保留）。
+6. 全部文件处理完后，跑一次整工程 hvigor 做**跨文件审计**：全工程错误对 baseline 做 delta，检出 per-file gate 看不到的跨文件新增错误（agent 改 A 破坏非目标文件 B 时漏检的兜底）。仅报告不回退——回退正确迁移去修别处报错反而错，交人工核查。
+
+> 想先吃掉确定性安全编辑再交 AI？先跑 `rewrite`（确定性，默认）再跑 `rewrite --use-ai`。`--use-ai` 本身不预跑确定性，纯逐文件 AI。
 
 ### 编译门禁
 
