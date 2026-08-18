@@ -371,8 +371,24 @@ async function cmdRewriteAi(opts) {
     `${'#'.repeat(72)}\nohos-migrator AI rewrite  ${tsStamp()}\n` +
     `root: ${root}\nbaseURL: ${cfg.baseURL}\nmodel: ${cfg.model}\nfiles: ${files.length}\n`);
 
+  // 确定性先跑：map + 安全门（filterObviousSubset）+ 写后编译回滚（verify-revert），
+  // 吃下「构造上即正确」的编辑（同 kit 改名 / 整 kit import 换）。残料（cross-kit dropin /
+  // manual / namespace-chain / 命名导入子句）留给下方 AI agent。--no-map 时跳过（纯 AI）。
+  if (!opts.noMap) {
+    console.log(`\n[ai] deterministic pre-pass (map + safety gate + verify-revert) ...`);
+    logAppend(cfg.logFile, `[${tsStamp()}] deterministic pre-pass start\n`);
+    try {
+      require('./rules').cmdRewriteDeterministic(opts);
+      logAppend(cfg.logFile, `[${tsStamp()}] deterministic pre-pass done\n`);
+    } catch (e) {
+      console.warn(`[ai] deterministic pre-pass failed: ${e.message} — 继续纯 AI`);
+      logAppend(cfg.logFile, `[${tsStamp()}] deterministic pre-pass error: ${e.message}\n`);
+    }
+  }
+
   // 编译校验上下文：解析 hvigor 工程根 + SDK home + baseline（pre-existing 错误行）。
   // baseline 用来做 delta：只把"新增"编译错误算到迁移头上，避免误伤本来就编译不过的工程。
+  // 注：确定性先跑后工程已是改后状态，此 baseline 反映「确定性产出」——AI 不得破坏它。
   let hvCtx = null; // null = 不可用（降级为 skip+warn）
   {
     const projectRoot = opts.project

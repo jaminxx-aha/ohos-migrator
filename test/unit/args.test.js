@@ -55,6 +55,26 @@ test('parseArgv: --file 与 --project 互斥 → ArgError', () => {
   assert.throws(() => parseArgv(['scan', '--file', 'a', '--project', 'p']), (e) => e instanceof ArgError && /mutually exclusive/.test(e.message));
 });
 
+test('parseArgv: --no-map → noMap=true', () => {
+  const o = parseArgv(['rewrite', '--project', 'p', '--no-map']);
+  assert.equal(o.noMap, true);
+  assert.equal(o.mapPath, null);
+});
+
+test('parseArgv: --map <path> → mapPath=path', () => {
+  const o = parseArgv(['rewrite', '--project', 'p', '--map', '/x/deprecation-map.24.json']);
+  assert.equal(o.mapPath, '/x/deprecation-map.24.json');
+  assert.equal(o.noMap, false);
+});
+
+test('parseArgv: --no-map 与 --map 互斥 → ArgError', () => {
+  assert.throws(() => parseArgv(['rewrite', '--project', 'p', '--no-map', '--map', 'x']), (e) => e instanceof ArgError && /mutually exclusive/.test(e.message));
+});
+
+test('parseArgv: --map 缺值 → ArgError', () => {
+  assert.throws(() => parseArgv(['rewrite', '--project', 'p', '--map']), (e) => e instanceof ArgError && /requires a value/.test(e.message));
+});
+
 test('usage: 是函数且打印含 scan/rewrite 文本', () => {
   // 不验证 stdout 细节，只确保可调用且不抛
   assert.doesNotThrow(() => usage());

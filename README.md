@@ -1,14 +1,15 @@
 # ohos-migrator
 
-鸿蒙 ArkTS 废弃接口扫描 / 重写工具。基于 OpenHarmony 版 TypeScript 编译器检测 `@deprecated` 调用，提供「同模块改名」与「AI agent 迁移」两种重写模式。
+鸿蒙 ArkTS 废弃接口扫描 / 重写工具。基于 OpenHarmony 版 TypeScript 编译器检测 `@deprecated` 调用，提供「确定性重写（map + 安全门 + 编译回滚）」「同模块改名」与「AI agent 迁移」三种重写模式。
 
 ## 它解决什么问题
 
 HarmonyOS SDK 持续废弃旧 API 并以 `@useinstead` 标注替换目标。手动排查跨多个 SDK 模块的废弃调用既繁琐又易漏。本工具：
 
 - **扫描**：用 SDK 自带的 OH 版 TS 编译器（`createProgram` + `getSymbolAtLocation` + `getJsDocTags`）精确解析每个调用的符号，命中真正的 `@deprecated` 标记，并提取 `@useinstead` 替换目标。
-- **简单重写**：对「同模块纯成员改名」的废弃（如 `accessibility.isOpenAccessibility` → `isOpenAccessibilitySync`）按偏移精确替换。
-- **AI 重写**：对跨模块 / 带命名空间链的复杂废弃，交给 OpenAI 兼容 agent 流式迭代，改完用 hvigor `CompileArkTS` 编译门禁校验，失败回退原文。
+- **确定性重写**（默认）：消费预建的 `deprecation-map.<apiVersion>.json`（4713 条 SDK 废弃映射），只落地「构造上即正确」的编辑——同 kit 同 binding 成员改名、整 kit import 换（且文件里每个被访问成员都在新 kit 导出里）。写后跑 hvigor，按行归因把肇事编辑回滚，保证相对基线**零新增编译错误**。在 `test/deprecated` 语料上确定性吃下 283 处（旧 simple 仅 11 处）。
+- **简单重写**（`--no-map`）：对「同模块纯成员改名」的废弃按偏移精确替换（保留作 A/B 对照基线）。
+- **AI 重写**（`--use-ai`）：对跨模块 / 带命名空间链的复杂废弃，确定性先跑、残料交 OpenAI 兼容 agent 流式迭代，改完用 hvigor `CompileArkTS` 编译门禁校验，失败回退原文。
 
 ## 环境要求
 
@@ -30,10 +31,13 @@ node ohos-migrator.js scan --file path/to/foo.ets
 # 扫描整个工程
 node ohos-migrator.js scan --project path/to/project
 
-# 简单重写（同模块改名）
-node ohos-migrator.js rewrite --file path/to/foo.ets
+# 确定性重写（默认：map + 安全门 + 写后编译回滚）
+node ohos-migrator.js rewrite --project path/to/project
 
-# AI 重写（跨模块 / 复杂废弃）
+# 简单重写（--no-map：同模块改名，A/B 对照基线）
+node ohos-migrator.js rewrite --project path/to/project --no-map
+
+# AI 重写（确定性先跑，残料交 agent）
 cp .env.example .env      # 填 baseURL / apiKey / model
 node ohos-migrator.js rewrite --project path/to/project --use-ai
 ```
@@ -45,7 +49,9 @@ node ohos-migrator.js rewrite --project path/to/project --use-ai
 | `scan` / `rewrite` | 子命令 |
 | `--file <path>` | 单文件目标（与 `--project` 互斥） |
 | `--project <dir>` | 工程目录目标（递归 `.ets`/`.ts`，跳过 `build`/`oh_modules`/`.hvigor`/`.idea` 等） |
-| `--use-ai` | `rewrite` 用 AI agent 模式 |
+| `--use-ai` | `rewrite` 确定性先跑、AI 接管残料（跨模块 / 命名空间链 / 命名导入子句级） |
+| `--no-map` | `rewrite` 跳过 deprecation map，走旧 simple 路径（同模块改名，A/B 对照） |
+| `--map <path>` | 显式指定 `deprecation-map.<v>.json`（覆盖按 SDK apiVersion 自动选） |
 | `--sdk <path>` | 覆盖 OpenHarmony ets/api 路径 |
 | `--oh-ts <path>` | 覆盖 OH 版 typescript 模块路径 |
 | `--help` / `-h` | 用法 |
@@ -69,18 +75,30 @@ node ohos-migrator.js rewrite --project path/to/project --use-ai
 
 `scanFile` 把 `.ets` 复制成临时 `.ts`（绕过 ets 解析限制），用 OH 版 TS `createProgram` 配 `paths` 把 `@ohos.*` / `@system.*` 映射到 SDK 声明文件，再遍历 AST：对每个 CallExpression / PropertyAccess / Identifier 调 `getSymbolAtLocation`，若符号带 `@deprecated` JSDoc 标签则记录，并提取 `@useinstead`。去重键 `symName|line` 折叠 AST 递归产生的同调用多点探测，同时保留「容器符号」废弃（deprecated enum/namespace 经成员访问引用，PA 节点解析不到 symbol 时仅靠 name identifier 命中）。
 
-### 简单重写（rewrite，无 --use-ai）
+### 简单重写（rewrite --no-map）
 
-只处理 `useinstead` 形如 `ohos.<mod>#<member>`（无 `/` 命名空间链）、模块与废弃声明同模块、成员名不同的情况。按 `memberOffset` 倒序替换避免位置漂移。跨模块 / 带命名空间链的跳过，提示改用 `--use-ai`。
+只处理 `useinstead` 形如 `ohos.<mod>#<member>`（无 `/` 命名空间链）、模块与废弃声明同模块、成员名不同的情况。按 `memberOffset` 倒序替换避免位置漂移。跨模块 / 带命名空间链的跳过。保留作 A/B 对照基线（语料 11 处）。
+
+### 确定性重写（rewrite，默认）
+
+消费预建的 `data/deprecation-map.<apiVersion>.json`（由参考工程 indexer 用 ts-morph 预生成，随仓库走，4713 条 SDK 废弃映射 + kitIndex/kitExports/kitDefaultExport）。map 按 SDK `oh-uni-package.json` 的 `apiVersion` 自动选，无对应版本则 warn 回退最高版本；`--map <path>` 显式覆盖。
+
+`scan.js` 在 `record()` 末尾用 `computeIdentity` 走声明节点 `getParent()` 收集 ModuleDeclaration/InterfaceDeclaration/ClassDeclaration/EnumDeclaration 容器名，给 hit 追加查表键 `{kit, exportName, members}`。`src/rules.js` 逐 hit `classifyHit` 产 Finding，叠加 kit 整体迁移的 `rewrite-import`，过 **`filterObviousSubset` 安全门**（移植自参考 subset.ts）只留「构造上即正确」的子集：
+
+- **A 同 kit 同 binding 改名**：`rename-member`、同 binding 前缀、binding 的 kit 未迁移、新链首段是该 kit 的真实顶层导出。
+- **B 整 kit import 换**：`rewrite-import`、`kitIndex` 真迁移、default/namespace 单 binding、文件里该 binding 的**每个**成员访问都在新 kit 导出里。
+
+其余（cross-kit dropin、inject、override、命名导入子句、aligned 改名、manual）一律丢，交 `--use-ai`。写后跑一次 hvigor，`verify-revert.js` 按行归因（rename-member 错误落在编辑行 → 该编辑 broken；rewrite-import 坏换表现为使用行报错 → 回滚该文件 swap；基线感知只认「新增」错误 + 二轮回滚残文件，保**零新增**铁律）。在 `test/deprecated` 上确定性吃下 283 处、相对基线零新增编译错误。
 
 ### AI 重写（rewrite --use-ai）
 
-1. 扫描全工程，挑出有「带 useinstead 的废弃」的文件。
-2. 跑一次 baseline `hvigor CompileArkTS`，记录 pre-existing 编译错误（delta 基线）。
-3. 逐文件交 agent：把废弃清单 + 文件内容给模型，模型调 `edit_file` / `replace_file` 改、`list_deprecated` 自检、`done` 收尾（单轮 ≤ 15 步，整轮 ≤ 3 次重试）。
-4. 改完重扫：废弃清零 + hvigor 无新增编译错误 → 成功；否则带错误反馈重试，失败回退原文。
-5. SIGINT / SIGTERM 被强杀时，恢复当前正在处理的文件到原文（已成功的文件保留）。
-6. 全部文件处理完后，跑一次整工程 hvigor 做**跨文件审计**：全工程错误对 baseline 做 delta，检出 per-file gate 看不到的跨文件新增错误（agent 改 A 破坏非目标文件 B 时漏检的兜底）。仅报告不回退——回退正确迁移去修别处报错反而错，交人工核查。
+1. **确定性先跑**：map + 安全门 + 编译回滚，吃下构造上即正确的编辑（同 kit 改名 / 整 kit 换）。残料留给 agent。
+2. 扫描全工程，挑出有「带 useinstead 的废弃」的文件。
+3. 跑一次 baseline `hvigor CompileArkTS`（此时工程已是确定性产出后的状态），记录 pre-existing 编译错误（delta 基线）。
+4. 逐文件交 agent：把废弃清单 + 文件内容给模型，模型调 `edit_file` / `replace_file` 改、`list_deprecated` 自检、`done` 收尾（单轮 ≤ 15 步，整轮 ≤ 3 次重试）。
+5. 改完重扫：废弃清零 + hvigor 无新增编译错误 → 成功；否则带错误反馈重试，失败回退原文。
+6. SIGINT / SIGTERM 被强杀时，恢复当前正在处理的文件到原文（已成功的文件保留）。
+7. 全部文件处理完后，跑一次整工程 hvigor 做**跨文件审计**：全工程错误对 baseline 做 delta，检出 per-file gate 看不到的跨文件新增错误（agent 改 A 破坏非目标文件 B 时漏检的兜底）。仅报告不回退——回退正确迁移去修别处报错反而错，交人工核查。
 
 ### 编译门禁
 
@@ -99,12 +117,19 @@ ohos-migrator.js        入口（仅 parseArgs + 派发）
 src/
   args.js               参数解析
   common.js             SDK 路径探测 / 文件遍历 / TS 加载
-  scan.js               扫描核心 + parseUseinstead
-  rewrite-simple.js     简单重写
-  ai-agent.js           AI agent（流式 + 工具调用 + 编译门禁 + SIGINT 恢复）
+  scan.js               扫描核心 + parseUseinstead + computeIdentity（map 查表键）
+  deprecation-map.js    装载预建 map + buildIndex/lookupEntry O(1) 查表
+  import-extractor.js   容错解析 .ets/.ts 的 import（regex，specStart/specEnd 含引号）
+  binding-allocator.js  跨 kit 成员 drop-in 的 per-file binding 分配 + injectImports
+  rules.js              确定性重写引擎：classifyHit + filterObviousSubset 安全门 + applyFindingsToContent
+  rewrite-simple.js     简单重写（--no-map）
+  ai-agent.js           AI agent（流式 + 工具调用 + 编译门禁 + SIGINT 恢复 + 确定性先跑）
   ai-config.js          .env 加载 + 配置解析
   ai-log.js             对话日志 + key 脱敏
   verify/hvigor.js      hvigor 编译校验
+  verify/verify-revert.js  写后编译 + 按行归因回滚肇事编辑
+data/
+  deprecation-map.24.json  预建 SDK 废弃映射（4713 条，apiVersion=24，随仓库走）
 test/deprecated/        可全量编译的废弃 API 语料（150 个 .ets，stage 模块）
 .env.example            AI 配置示例
 package.json            engines >=20.6 / bin / scripts
@@ -112,7 +137,7 @@ package.json            engines >=20.6 / bin / scripts
 
 ## 单元测试
 
-纯函数单测（`node:test`，无需 SDK/网络）覆盖 `src/` 全部 8 个模块的可测纯函数——`args.parseArgv`、`common.deriveDevEcoPaths/listArktsFiles`、`scan.parseUseinstead/normMod`、`rewrite-simple.applySimpleRewrites/escapeRe`、`ai-agent.applyOneEdit`、`ai-config.parseDotenv/sanitizeLogFile/defaultLogFile`、`ai-log.redactSecret`、`verify/hvigor`（`parseErrorEntries`/`relFile`/`resolveHvigorTargets`/`stripJson5`/路径推导/工程根探测），共 81 例：
+纯函数单测（`node:test`，无需 SDK/网络）覆盖 `src/` 全部模块的可测纯函数——`args.parseArgv`、`common.deriveDevEcoPaths/listArktsFiles`、`scan.parseUseinstead/normMod`、`deprecation-map.buildIndex/lookupEntry/loadMap`、`import-extractor.extractImports/extractBindingMap/parseBindings`、`rules.classifyHit/applyFindingsToContent/filterObviousSubset`、`rewrite-simple.applySimpleRewrites/escapeRe`、`ai-agent.applyOneEdit`、`ai-config.parseDotenv/sanitizeLogFile/defaultLogFile`、`ai-log.redactSecret`、`verify/hvigor`（`parseErrorEntries`/`relFile`/`resolveHvigorTargets`/`stripJson5`/路径推导/工程根探测），共 120 例：
 
 ```bash
 npm test
@@ -122,15 +147,18 @@ CI（GitHub Actions）在 push / PR 时自动跑该套件（见 `.github/workflo
 
 ## 测试语料
 
-`test/deprecated/` 是一个可全量编译的 HarmonyOS stage 模块，含 150 个 `.ets` 覆盖各 SDK 模块的废弃 API。本机 SDK 下 scanner 检出 **4969 处废弃调用、0 报错**。可直接用它验证工具：
+`test/deprecated/` 是一个可全量编译的 HarmonyOS stage 模块，含 150 个 `.ets` 覆盖各 SDK 模块的废弃 API。本机 SDK（apiVersion=24）下 scanner 检出 **4969 处废弃调用、0 报错**；确定性重写吃下 283 处、相对基线零新增编译错误；`--no-map` simple 模式 11 处。可直接用它验证工具：
 
 ```bash
-node ohos-migrator.js scan --project test/deprecated
+node ohos-migrator.js scan --project test/deprecated          # 4969 处
+node ohos-migrator.js rewrite --project test/deprecated       # 确定性 283 处（改前先备份语料）
+node ohos-migrator.js rewrite --project test/deprecated --no-map  # 11 处（A/B 对照）
 ```
 
 ## 已知限制
 
-- **去重键 `symName|line`**：同一行两处调用同一废弃符号会并成一条（真实代码罕见；语料每行一语句不触发）。改用 `start` 偏移会重复计数 AST 多层探测或漏报容器符号废弃，经验证当前粒度正确。
+- **确定性重写只覆盖构造上即正确的子集**：同 kit 同 binding 改名 + 整 kit import 换（且全部被访问成员在新 kit）。跨 kit 成员 dropin / inject / override / 命名导入子句级 / 带命名空间链的残料交 `--use-ai`。语料 4969 中确定性吃 283，余交 AI。
+- **map 随 SDK 版本走**：`data/deprecation-map.24.json` 是 apiVersion=24 的预建映射，其他 SDK 版本需用参考工程 indexer 重新生成（ts-morph，未移植）。SDK apiVersion 无对应 shipped map 时 warn 回退最高版本，可能不匹配。
 - **AI 编译门禁 baseline** 一次性按原文计算；逐文件迁移成功后该文件留改后状态，后续 delta 仍对照原文 baseline（成功文件已编译干净，跨文件新错误概率极低）。delta 按错误消息文本比对，agent 增删行致的行号偏移不会把 pre-existing 错误误判为新增。per-file gate 只看本文件有跨文件盲区（改 A 破坏非目标文件 B 漏检），由迁移结束后的整工程 `compileAudit` 兜底检出（仅报告）。
 - AI 模式 SIGINT 恢复逻辑未实跑验证（需真实 API key + 信号），靠代码审查 + 模块加载确认语法。
 - FA-only 符号（`featureAbility` / `particleAbility` 等）属隐式废弃（声明无 `@deprecated` 文本），scanner 不检测，需单独处理。

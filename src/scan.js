@@ -28,6 +28,61 @@ function getContainingClass(decl) {
   return '';
 }
 
+const ENCLOSING_KINDS = new Set([
+  189 /* ModuleDeclaration */, 226 /* InterfaceDeclaration */,
+  218 /* ClassDeclaration */, 220 /* EnumDeclaration */,
+]);
+/**
+ * 从废弃声明节点走 getParent() 收集容器名，产出与 deprecation-map 同形状的
+ * { exportName, members[] } 查表键。移植自参考工程 sdk-indexer.ts computeIdentity。
+ * namespace 级声明（declare namespace X）→ exportName=X；否则 enclosing[0] 为
+ * exportName、余段 + 自身名作 members。VariableStatement（const）名取首个 declaration。
+ *
+ * 注意：用 ts.isModuleDeclaration 等谓词而非硬编码 SyntaxKind 数字——OH 版 TS 编译器
+ * 是 fork，SyntaxKind 枚举值与标准 tsc 不同（如 ModuleDeclaration=264 vs 标准 189），
+ * 硬编码会全部漏匹配。谓词随加载的 ts 版本走，稳。
+ */
+function isEnclosing(ts, node) {
+  return ts.isModuleDeclaration(node) || ts.isInterfaceDeclaration(node) ||
+    ts.isClassDeclaration(node) || ts.isEnumDeclaration(node);
+}
+function nameOf(node) {
+  if (!node) return '';
+  if (node.name && typeof node.name.text === 'string') return node.name.text;
+  if (node.kind === 210 /* VariableStatement */) {
+    const dl = node.declarationList;
+    if (dl && dl.declarations && dl.declarations[0] && dl.declarations[0].name) {
+      const nm = dl.declarations[0].name;
+      return typeof nm.text === 'string' ? nm.text : '';
+    }
+  }
+  return '';
+}
+function computeIdentity(ts, decl) {
+  const enclosing = [];
+  let p = decl && decl.parent;
+  while (p) {
+    if (isEnclosing(ts, p)) {
+      const n = nameOf(p);
+      if (n) enclosing.unshift(n);
+    }
+    p = p.parent;
+  }
+  const ownName = nameOf(decl);
+  const isNamespaceLevel = decl && ts.isModuleDeclaration(decl);
+  const id = {};
+  if (isNamespaceLevel) {
+    if (ownName) id.exportName = ownName;
+  } else if (enclosing.length > 0) {
+    id.exportName = enclosing[0];
+    id.members = enclosing.slice(1);
+    if (ownName) id.members.push(ownName);
+  } else if (ownName) {
+    id.exportName = ownName;
+  }
+  return id;
+}
+
 // 把 SDK 声明文件名归一成 import 模块名，如 .../api/@ohos.accessibility.d.ts -> @ohos.accessibility
 function declFileToModule(ts, decl) {
   if (!decl) return '';
@@ -175,6 +230,9 @@ function scanInner(file, ts, sdkPath, ohTsPath, rootName, srcText) {
     const lastDotAt = calleeText.lastIndexOf('.');
     const member = lastDotAt >= 0 ? calleeText.slice(lastDotAt + 1) : calleeText;
     const memberOffset = lastDotAt >= 0 ? start + lastDotAt + 1 : start;
+    // map 查表键：kit=声明文件模块名、exportName/members=容器链（移植参考 computeIdentity）
+    const depModule = declFileToModule(ts, decl);
+    const id = computeIdentity(ts, decl);
 
     hits.push({
       file, line, col,
@@ -182,7 +240,10 @@ function scanInner(file, ts, sdkPath, ohTsPath, rootName, srcText) {
       qualifiedName: cls ? `${cls}.${symName}` : symName,
       deprecated,
       useinstead,
-      depModule: declFileToModule(ts, decl),
+      depModule,
+      kit: depModule,
+      exportName: id.exportName,
+      members: id.members,
       start,
       member,
       memberOffset,
@@ -245,4 +306,4 @@ function cmdScan(opts) {
   console.log(`\n==== scan done: ${files.length} file(s), ${filesWithDeprecated} with deprecated, ${totalDeprecated} usage(s) ====`);
 }
 
-module.exports = { scanFile, parseUseinstead, normMod, declFileToModule, cmdScan };
+module.exports = { scanFile, parseUseinstead, normMod, declFileToModule, computeIdentity, cmdScan };
