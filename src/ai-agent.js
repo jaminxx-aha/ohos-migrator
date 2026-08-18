@@ -278,7 +278,14 @@ async function rewriteFileWithAi(file, ts2, sdkPath, ohTsPath, cfg, hvCtx) {
     console.log(`  [ai] attempt ${attempt}: ${remain.length} still deprecated — ${attempt < MAX_AI_ATTEMPTS ? 'retry' : 'giving up'}`);
   }
 
-  fs.writeFileSync(file, orig, 'utf8');
+  try {
+    fs.writeFileSync(file, orig, 'utf8');
+  } catch (e) {
+    // 回退写失败不能让整个 run 崩（文件可能被占用/只读）：告警并按"未回退"记录，
+    // 落盘的是最后 attempt 的改后状态——比崩在异常里强，至少退出码受控。
+    console.warn(`  [ai] WARN: revert failed for ${file}: ${e.message} (left as last attempt)`);
+    logAppend(cfg.logFile, `[${tsStamp()}] [${file}] revert FAILED: ${e.message}; left as last attempt\n`);
+  }
   logAppend(cfg.logFile, `[${tsStamp()}] [${file}] giving up after ${MAX_AI_ATTEMPTS} attempts, reverted\n`);
   return { ok: false, attempts: MAX_AI_ATTEMPTS, changed: false, error: lastError || 'unresolved deprecated usage' };
 }

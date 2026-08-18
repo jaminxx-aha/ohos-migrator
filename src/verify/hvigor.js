@@ -115,13 +115,13 @@ function runHvigor(opts) {
   if (!looksLikeHarmonyProject(opts.projectRoot)) {
     return { ...empty, reason: `${opts.projectRoot} 不是 HarmonyOS stage module（缺 entry/build-profile.json5）` };
   }
-  // module/product 名从 build-profile.json5 解析，不再硬编码 entry@default——
-  // 非 entry 模块名（feature/library/hsp）工程才能编译到正确目标。
+  // 整工程编译（不带 --mode module）：编 product 下全部模块，确保被迁移文件所在模块
+  // （可能在 modules[1+]，如 feature/hsp/har）也被编译到，避免 per-file gate 假干净。
+  // 此前用 `--mode module -p module=modules[0]` 只编第一个模块，多模块工程会漏检。
+  // 单模块工程两种调用等价（已实测 83==83）；多模块工程整工程更全。
   const targets = resolveHvigorTargets(opts.projectRoot);
   const args = [
     hvigorwJs,
-    '--mode', 'module',
-    '-p', `module=${targets.module}`,
     '-p', `product=${targets.product}`,
     'default@CompileArkTS',
     '--no-daemon',
@@ -154,7 +154,11 @@ function relFile(absPath, projectRoot) {
 
 /**
  * 解析 hvigor 输出里每条 `At File: <path>:<line>:<col>` 错误 → { file, line, message }。
- * message 取同行 `Error Message:` 段；否则取该 At File 行之前累积的续行（缩进行）。去 ANSI 色码。
+ * message 取 At File 之前的同行文本（兼容两种形态：
+ *   `Error Message: <msg> At File:` —— 常规格式，去 Error Message: 前缀；
+ *   `<msg> At File:` —— 链式错误续行，如 `Type X is not comparable to Y. At File:`，
+ *                     无 Error Message: 前缀，此前被丢致 2/85 漏检）；
+ * 同行文本为空才回退 At File 之前累积的缩进续行 buf。去 ANSI 色码。
  * 全量收集、不做行号过滤——delta 由 ai-agent.compileGate 按「消息文本」比对：
  * baseline 是原文编译的错误消息集合，agent 增删行只挪行号、消息不变，故 pre-existing
  * 错误归 baseline 不算新增；agent 引入的新错误消息不在 baseline 即算新增。
@@ -169,10 +173,12 @@ function parseErrorEntries(output) {
     if (m) {
       const file = m[1];
       const ln = Number(m[2]);
-      const same = line.match(/Error Message:\s*(.*?)\s+At File:/);
-      const msg = (same ? same[1] : buf.join(' ')) || '';
-      const clean = msg.replace(/\x1b\[[0-9;]*m/g, '').trim();
-      if (file && ln && clean) entries.push({ file, line: ln, message: clean });
+      const inline = line.slice(0, m.index)
+        .replace(/Error Message:\s*/i, '')
+        .replace(/\x1b\[[0-9;]*m/g, '')
+        .trim();
+      const msg = (inline || buf.join(' ')).replace(/\x1b\[[0-9;]*m/g, '').trim();
+      if (file && ln && msg) entries.push({ file, line: ln, message: msg });
       buf = [];
     } else if (line.startsWith(' ') && !line.includes('WARN')) {
       buf.push(line.trim());

@@ -32,15 +32,32 @@ test('parseErrorEntries: 缺消息的 At File 行被丢弃（避免空消息条�
   assert.equal(e.length, 0);
 });
 
-test('parseErrorEntries: 续行消息（At File 前的缩进行）拼接', () => {
+test('parseErrorEntries: 链式错误续行（At File 前、无 Error Message 前缀）提取', () => {
+  // 形如 `  Type X is not comparable to Y. At File: /p/c.ets:10:5` 的链式错误续行，
+  // 消息在 At File 同行之前、无 `Error Message:` 前缀。此前仅取 Error Message: 前缀
+  // 或独立 buf 续行，这类行被丢致真实输出漏检 2/85。现按「At File 前同行文本」提取。
   const raw = [
     'Error: ArkTS Compiler Error',
     '  Classes cannot be used as objects (arkts-no-classes-as-obj) At File: /p/c.ets:10:5',
   ].join('\n');
-  // At File 行本身缩进、含消息但无 Error Message: 前缀 → 走 buf，而 buf 在遇到该行前为空
-  // → 该行消息丢失。这是当前实现的已知限制，此处锁定行为以防空静默回归。
   const e = parseErrorEntries(raw);
-  assert.equal(e.length, 0);
+  assert.equal(e.length, 1);
+  assert.equal(e[0].file, '/p/c.ets');
+  assert.equal(e[0].line, 10);
+  assert.equal(e[0].message, 'Classes cannot be used as objects (arkts-no-classes-as-obj)');
+});
+
+test('parseErrorEntries: 链式错误 + 常规 Error Message 混排均正确', () => {
+  const raw = [
+    'Error Message: Module "@ohos.curves" has no exported member \'Curve\' At File: /proj/a.ets:2:10',
+    '  Type Curve is not comparable to number. At File: /proj/b.ets:39:7',
+  ].join('\n');
+  const e = parseErrorEntries(raw);
+  assert.equal(e.length, 2);
+  assert.ok(e[0].message.includes('no exported member'));
+  assert.equal(e[1].message, 'Type Curve is not comparable to number.');
+  assert.equal(e[1].file, '/proj/b.ets');
+  assert.equal(e[1].line, 39);
 });
 
 test('relFile: 工程内 → 正斜杠相对路径', () => {

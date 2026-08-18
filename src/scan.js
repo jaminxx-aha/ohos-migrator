@@ -75,13 +75,24 @@ function normMod(left) {
  * hit 字段：file,line,col,callee,qualifiedName,useinstead,depModule,start,member,memberOffset
  */
 function scanFile(file, ts, sdkPath, ohTsPath) {
-  const norm = (p) => p.replace(/[\\]/g, '/');
+  // 临时 .ts 落盘 + try/finally 清理：原 .ets 被 OH 版 TS 拒收，复制成 .ts 作 rootName。
+  // 任何早退（!sf）/异常（visit 中 getSymbolAtLocation 等抛错）都走 finally 删临时文件，
+  // 避免源码残留在 os.tmpdir()（多用户机可读）。
   const isEts = file.toLowerCase().endsWith('.ets');
   const rootName = isEts
     ? path.join(os.tmpdir(), `_scan_${path.basename(file).replace(/\.ets$/, '')}.ts`)
     : file;
   const srcText = fs.readFileSync(file, 'utf8');
   if (isEts) fs.writeFileSync(rootName, srcText, 'utf8');
+  try {
+    return scanInner(file, ts, sdkPath, ohTsPath, rootName, srcText);
+  } finally {
+    if (isEts) { try { fs.unlinkSync(rootName); } catch (_) {} }
+  }
+}
+
+function scanInner(file, ts, sdkPath, ohTsPath, rootName, srcText) {
+  const norm = (p) => p.replace(/[\\]/g, '/');
 
   const host = ts.createCompilerHost({});
   const realGetSF = host.getSourceFile.bind(host);
@@ -204,7 +215,6 @@ function scanFile(file, ts, sdkPath, ohTsPath) {
   }
   visit(sf);
 
-  if (isEts) { try { fs.unlinkSync(rootName); } catch (_) {} }
   return { file, deprecatedCount: hits.length, hits };
 }
 

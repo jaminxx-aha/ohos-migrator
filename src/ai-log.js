@@ -35,6 +35,8 @@ function logHeader(cfg, system, user, attempt) {
   const block = [sep, header, '### system', system, '### user', user, '### response (streamed live)'].join('\n');
   logAppend(cfg.logFile, redactSecret(block, cfg.apiKey) + '\n');
 }
-function logDelta(cfg, text) { if (cfg.logFile) logAppend(cfg.logFile, text); }
+function logDelta(cfg, text) {
+  if (cfg.logFile) logAppend(cfg.logFile, redactSecret(text, cfg.apiKey));
+}
 
 module.exports = { tsStamp, redactSecret, logAppend, logHeader, logDelta };

@@ -84,7 +84,7 @@ node ohos-migrator.js rewrite --project path/to/project --use-ai
 
 ### 编译门禁
 
-`verify/hvigor.js` 用 DevEco bundled node 跑 `hvigorw.js default@CompileArkTS`（不经 shell，路径含空格安全），解析 `At File:` 错误条目，按「错误消息文本」做 baseline delta 只把「新增」错误算到迁移头上——用消息而非行号，agent 加 import 致行号整体偏移也不会把 pre-existing 错误误判为新增。module/product 名从 `build-profile.json5` 解析（非 entry 模块也能编译到正确目标）。hvigor 不可用时降级为「废弃清零即成功」。
+`verify/hvigor.js` 用 DevEco bundled node 跑 `hvigorw.js default@CompileArkTS`（不经 shell，路径含空格安全），解析 `At File:` 错误条目，按「错误消息文本」做 baseline delta 只把「新增」错误算到迁移头上——用消息而非行号，agent 加 import 致行号整体偏移也不会把 pre-existing 错误误判为新增。整工程编译（不带 `--mode module`）编 product 下全部模块，确保被迁移文件所在模块（多模块工程里可能在 `modules[1+]`）也被编译到，避免 per-file gate 假干净。product 名从 `build-profile.json5` 解析。hvigor 不可用时降级为「废弃清零即成功」。
 
 编译校验分两层：每文件 `compileGate`（只看本文件，用于喂回 agent 重试，因 agent 只能改自己文件）+ 整工程 `compileAudit`（迁移结束后跑一次，看全文件 delta，兜底跨文件盲区，仅报告）。
 
@@ -112,7 +112,7 @@ package.json            engines >=20.6 / bin / scripts
 
 ## 单元测试
 
-纯函数单测（`node:test`，无需 SDK/网络）覆盖 `src/` 全部 8 个模块的可测纯函数——`args.parseArgv`、`common.deriveDevEcoPaths/listArktsFiles`、`scan.parseUseinstead/normMod`、`rewrite-simple.applySimpleRewrites/escapeRe`、`ai-agent.applyOneEdit`、`ai-config.parseDotenv/sanitizeLogFile/defaultLogFile`、`ai-log.redactSecret`、`verify/hvigor`（`parseErrorEntries`/`relFile`/`resolveHvigorTargets`/`stripJson5`/路径推导/工程根探测），共 78 例：
+纯函数单测（`node:test`，无需 SDK/网络）覆盖 `src/` 全部 8 个模块的可测纯函数——`args.parseArgv`、`common.deriveDevEcoPaths/listArktsFiles`、`scan.parseUseinstead/normMod`、`rewrite-simple.applySimpleRewrites/escapeRe`、`ai-agent.applyOneEdit`、`ai-config.parseDotenv/sanitizeLogFile/defaultLogFile`、`ai-log.redactSecret`、`verify/hvigor`（`parseErrorEntries`/`relFile`/`resolveHvigorTargets`/`stripJson5`/路径推导/工程根探测），共 81 例：
 
 ```bash
 npm test
