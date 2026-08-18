@@ -10,14 +10,17 @@ const { scanFile, parseUseinstead } = require('./scan');
 
 function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
-function simpleRewriteFile(file, ts, sdkPath, ohTsPath) {
-  const res = scanFile(file, ts, sdkPath, ohTsPath);
-  if (res.deprecatedCount === 0) return { changed: false, reason: 'no deprecated usage', applied: 0, skipped: 0 };
-
-  // 选出"可简单替换"的 hit：useinstead 存在、无 `/`、模块与废弃声明同模块、成员名不同
+/**
+ * 纯函数：给定原文与 scanFile 产出的 hits，按"同模块纯成员改名"规则选出 eligible 并
+ * 按偏移倒序替换，返回新文本与统计。不碰 fs，便于单测。
+ * - eligible 条件：useinstead 存在、无 `/` 命名空间链、模块===废弃声明所在 SDK 模块、成员名不同。
+ * - 倒序替换避免位置漂移（前一处替换后其后偏移不变）。
+ */
+function applySimpleRewrites(text, hits) {
+  if (hits.length === 0) return { changed: false, reason: 'no deprecated usage', applied: 0, skipped: 0, text };
   const eligible = [];
   let skipped = 0;
-  for (const h of res.hits) {
+  for (const h of hits) {
     if (!h.useinstead) { skipped++; continue; }
     const u = parseUseinstead(h.useinstead);
     if (!u || !u.member) { skipped++; continue; }
@@ -27,24 +30,30 @@ function simpleRewriteFile(file, ts, sdkPath, ohTsPath) {
     eligible.push({ h, u });
   }
   if (eligible.length === 0) {
-    return { changed: false, reason: 'no eligible same-module rename (rest skipped, try --use-ai)', applied: 0, skipped };
+    return { changed: false, reason: 'no eligible same-module rename (rest skipped, try --use-ai)', applied: 0, skipped, text };
   }
-
   // 按偏移倒序替换，避免位置漂移
   eligible.sort((a, b) => b.h.memberOffset - a.h.memberOffset);
-  let text = fs.readFileSync(file, 'utf8');
+  let out = text;
   for (const { h, u } of eligible) {
-    const before = text.slice(0, h.memberOffset);
-    const after = text.slice(h.memberOffset + h.member.length);
-    text = before + u.member + after;
+    const before = out.slice(0, h.memberOffset);
+    const after = out.slice(h.memberOffset + h.member.length);
+    out = before + u.member + after;
   }
-  fs.writeFileSync(file, text, 'utf8');
   return {
-    changed: true, reason: `applied ${eligible.length} same-module rename(s)`, applied: eligible.length, skipped,
+    changed: true, reason: `applied ${eligible.length} same-module rename(s)`, applied: eligible.length, skipped, text: out,
     details: eligible.map(({ h, u }) => ({
       line: h.line, from: `${h.callee}`, to: h.callee.replace(new RegExp(`${escapeRe(h.member)}$`), u.member),
     })),
   };
+}
+
+function simpleRewriteFile(file, ts, sdkPath, ohTsPath) {
+  const res = scanFile(file, ts, sdkPath, ohTsPath);
+  const text = fs.readFileSync(file, 'utf8');
+  const r = applySimpleRewrites(text, res.hits);
+  if (r.changed) fs.writeFileSync(file, r.text, 'utf8');
+  return { changed: r.changed, reason: r.reason, applied: r.applied, skipped: r.skipped, details: r.details };
 }
 
 function cmdRewriteSimple(opts) {
@@ -69,4 +78,4 @@ function cmdRewriteSimple(opts) {
   console.log(totalSkipped > 0 ? 'note: skipped cases are cross-module/namespace-chain — retry with --use-ai.' : '');
 }
 
-module.exports = { simpleRewriteFile, escapeRe, cmdRewriteSimple };
+module.exports = { simpleRewriteFile, applySimpleRewrites, escapeRe, cmdRewriteSimple };
