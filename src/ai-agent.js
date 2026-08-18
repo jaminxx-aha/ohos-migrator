@@ -155,9 +155,9 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors,
   let content = origContent;
   const scan0 = scanFile(file, ts2, sdkPath, ohTsPath);
   const usable0 = scan0.hits.filter((h) => h.useinstead);
-  const list = usable0.map((h) =>
-    `- 行 ${h.line}  调用: \`${h.callee}\`  废弃(${h.deprecated})  推荐替换(useinstead): \`${h.useinstead}\``
-  ).join('\n');
+  // 三段式描述（错误信息/接口声明/接口描述）直接取 scan 产出的 hit.desc，
+  // 条目间用分隔线隔开，让 AI 拿到 SDK 声明的完整上下文而非仅 useinstead 串。
+  const list = usable0.map((h) => h.desc).join('\n\n---\n\n');
   const system =
     '你是鸿蒙 ArkTS 迁移 agent，拥有读写目标文件的工具。任务：根据每个废弃接口的 useinstead，' +
     '把废弃调用替换为推荐接口，必要时调整 import，其余代码与逻辑保持不变。' +
@@ -168,7 +168,7 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors,
     '调用实例成员需先有该类的实例——ohos kit 常导出全大写单例 const 承载 builder 链（如 UiTest 的 ON.text(...)，' +
     '不是 On.text(...) 在类上静态调，否则编译报 typeof On 无该属性）。改 import 时把这个全大写单例一并导入。' +
     '若不确定调用形态，按 useinstead 的类名找同 kit 导出的全大写同名 const。';
-  let user = `目标文件: ${file}\n\n废弃接口清单（仅含带 useinstead 的项，须全部处理）：\n${list}\n\n当前文件内容：\n${content}`;
+  let user = `目标文件: ${file}\n\n废弃接口清单（每条含 SDK 声明的错误信息/接口声明/接口描述三段式上下文，须全部处理）：\n${list}\n\n当前文件内容：\n${content}`;
   if (retryErrors) user += `\n\n## 上一轮仍有问题：\n${retryErrors}\n请修复上述问题。`;
   const messages = [{ role: 'system', content: system }, { role: 'user', content: user }];
   logHeader(cfg, system, user, attempt);
