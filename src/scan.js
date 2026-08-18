@@ -48,15 +48,19 @@ function parseUseinstead(str) {
   if (hashIdx < 0) return { module: normMod(s), member: '', hasSlash: s.includes('/') };
   const left = s.slice(0, hashIdx);
   const right = s.slice(hashIdx + 1).trim();
+  // module 取 left 中 `/` 之前的部分（useinstead 形如 `ohos.app.ability.dataUriUtils/dataUriUtils#getId`
+  // 的 `/ns` 段是命名空间、非模块名）。hasSlash 仍按 left 是否含 `/` 判定，供 simple 模式跳过。
+  const slash = left.indexOf('/');
+  const mod = slash < 0 ? normMod(left) : normMod(left.slice(0, slash));
   // 事件限定格式 `module.path.member#event:<name>`：`#` 右是事件名而非成员名，真正的
   // member 是 left 末段（如 ...A2dpSourceProfile.off#event:connectionStateChange → off）。
   // 常规格式 `module#member`：member 即 `#` 右。按 right 是否 event: 前缀区分。
   // 事件格式当前因 hasSlash 在 simple 模式被跳过、AI 模式传原始串，member 修正仅为语义正确。
   if (right.startsWith('event:')) {
     const lastDot = left.lastIndexOf('.');
-    return { module: normMod(left), member: lastDot >= 0 ? left.slice(lastDot + 1) : left, hasSlash: left.includes('/'), event: right.slice(6) };
+    return { module: mod, member: lastDot >= 0 ? left.slice(lastDot + 1) : left, hasSlash: left.includes('/'), event: right.slice(6) };
   }
-  return { module: normMod(left), member: right, hasSlash: left.includes('/') };
+  return { module: mod, member: right, hasSlash: left.includes('/') };
 }
 function normMod(left) {
   let m = left.trim();
