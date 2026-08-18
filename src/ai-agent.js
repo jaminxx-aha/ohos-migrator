@@ -369,7 +369,7 @@ async function cmdRewriteAi(opts) {
   console.log(`[ai] baseURL=${cfg.baseURL}  model=${cfg.model}  idle=${cfg.idleMs}ms total=${cfg.totalMs}ms`);
   logAppend(cfg.logFile,
     `${'#'.repeat(72)}\nohos-migrator AI rewrite  ${tsStamp()}\n` +
-    `root: ${root}\nbaseURL: ${cfg.baseURL}\nmodel: ${cfg.model}\nfiles: ${files.length}\n`);
+    `root: ${root}\nfiles: ${files.length}\n`);
 
   // 确定性先跑：map + 安全门（filterObviousSubset）+ 写后编译回滚（verify-revert），
   // 吃下「构造上即正确」的编辑（同 kit 改名 / 整 kit import 换）。残料（cross-kit dropin /

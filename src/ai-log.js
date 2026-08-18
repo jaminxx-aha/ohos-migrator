@@ -5,7 +5,12 @@
 const path = require('path');
 const fs = require('fs');
 
-function tsStamp() { return new Date().toISOString(); }
+/** 本地时间戳，格式 年-月-日 时:分:秒（原 toISOString 是 UTC，与本地差 8h 易误读）。 */
+function tsStamp() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
 
 /** 把 secret 从 text 中抹成 [REDACTED]（全量匹配 + 服务端回显的掩码形式）。短于 8 位跳过精确匹配。 */
 function redactSecret(text, secret) {
