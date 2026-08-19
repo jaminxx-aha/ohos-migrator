@@ -2,7 +2,8 @@
  * ai-agent.js — AI 模式（OpenAI 兼容，流式 + 多轮工具调用 agent）。
  * 把任务和文件丢给模型，模型自己 read/edit/replace/list_deprecated/done 迭代，
  * 我们只执行工具调用、把结果喂回、流式 + 实时日志。改完重扫校验废弃(带 useinstead)
- * 清零；MAX_AI_ATTEMPTS 轮次间带错误反馈重试；失败回退 pre-AI 原文告警。
+ * 清零；MAX_AI_ATTEMPTS 轮次间带错误反馈重试；但单轮跑满 MAX_AGENT_STEPS 仍未 done
+ * 视为「卡住」——不再重试、直接回退 pre-AI 原文告警（25 步没解完，再来一轮大概率原地打转）。
  *
  * 安全/超时对齐参考工程：idle-gap 看门狗（chunk 间隔超时）+ 总量上限（backstop），
  * 日志路径必须 .log 结尾、API key 脱敏（见 ai-config / ai-log）。
@@ -286,6 +287,7 @@ async function rewriteFileWithAi(file, ts2, sdkPath, ohTsPath, cfg, hvCtx) {
   // 不回滚原文是关键——否则「文件是 BY、编译错误说 On」自相矛盾，模型易卡死。
   let lastFailKind = null;       // 'compile' | 'remain' | null
   let lastAgentContent = null;   // 上一轮 agent 产出（仅 compile 重试时复用）
+  let gaveUpStepCap = false;     // 单轮跑满步数仍未 done → 放弃重试
 
   for (let attempt = 1; attempt <= MAX_AI_ATTEMPTS; attempt++) {
     const baseContent = (lastFailKind === 'compile' && lastAgentContent != null) ? lastAgentContent : orig;
@@ -320,6 +322,13 @@ async function rewriteFileWithAi(file, ts2, sdkPath, ohTsPath, cfg, hvCtx) {
       cfg.convFile = null;
     }
     lastAgentContent = r.content;
+    // 单轮跑满步数仍未 done：不再重试——25 步没解完，再来一轮大概率原地打转。
+    if (!r.doneCalled && r.steps >= MAX_AGENT_STEPS) {
+      lastError = `step cap (${MAX_AGENT_STEPS}) reached without done`;
+      gaveUpStepCap = true;
+      logAppend(cfg.logFile, `[${file}] attempt ${attempt}: hit step cap (${MAX_AGENT_STEPS}) unsolved — abort retries (no further attempts)\n`);
+      break;
+    }
     // 校验：重新扫描废弃
     const scan2 = scanFile(file, ts2, sdkPath, ohTsPath);
     const remain = scan2.hits.filter((h) => h.useinstead);
@@ -355,6 +364,10 @@ async function rewriteFileWithAi(file, ts2, sdkPath, ohTsPath, cfg, hvCtx) {
     // 落盘的是最后 attempt 的改后状态——比崩在异常里强，至少退出码受控。
     console.warn(`  [ai] WARN: revert failed for ${file}: ${e.message} (left as last attempt)`);
     logAppend(cfg.logFile, `[${tsStamp()}] [${file}] revert FAILED: ${e.message}; left as last attempt\n`);
+  }
+  if (gaveUpStepCap) {
+    logAppend(cfg.logFile, `[${tsStamp()}] [${file}] giving up: step cap (${MAX_AGENT_STEPS}) reached without solving, reverted\n`);
+    return { ok: false, attempts: MAX_AI_ATTEMPTS, changed: false, error: lastError };
   }
   logAppend(cfg.logFile, `[${tsStamp()}] [${file}] giving up after ${MAX_AI_ATTEMPTS} attempts, reverted\n`);
   return { ok: false, attempts: MAX_AI_ATTEMPTS, changed: false, error: lastError || 'unresolved deprecated usage' };
