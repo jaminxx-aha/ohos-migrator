@@ -1,46 +1,157 @@
 import camera from '@ohos.multimedia.camera';
+import BusinessError from '@ohos.base';
 
-declare let _v0: camera.CameraManager; _v0.createCaptureSession();
-declare let _v1: camera.CameraManager; _v1.createPhotoOutput;
-declare let _v2: camera.CameraManager; _v2.getSupportedOutputCapability({ cameraId: '', cameraPosition: camera.CameraPosition.CAMERA_POSITION_UNSPECIFIED, cameraType: camera.CameraType.CAMERA_TYPE_DEFAULT, connectionType: camera.ConnectionType.CAMERA_CONNECTION_BUILT_IN, hostDeviceName: '', hostDeviceType: camera.HostDeviceType.UNKNOWN_TYPE, cameraOrientation: 0 });
-camera.CameraPosition.CAMERA_POSITION_FOLD_INNER;
-let _v3: camera.CaptureSession;
-declare let _v4: camera.CaptureSession; _v4.addInput;
-declare let _v5: camera.CaptureSession; _v5.addOutput;
-declare let _v6: camera.CaptureSession; _v6.beginConfig();
-declare let _v7: camera.CaptureSession; _v7.commitConfig();
-declare let _v8: camera.CaptureSession; _v8.getActiveVideoStabilizationMode();
-declare let _v9: camera.CaptureSession; _v9.getExposureBiasRange();
-declare let _v10: camera.CaptureSession; _v10.getExposureMode();
-declare let _v11: camera.CaptureSession; _v11.getExposureValue();
-declare let _v12: camera.CaptureSession; _v12.getFlashMode();
-declare let _v13: camera.CaptureSession; _v13.getFocalLength();
-declare let _v14: camera.CaptureSession; _v14.getFocusMode();
-declare let _v15: camera.CaptureSession; _v15.getFocusPoint();
-declare let _v16: camera.CaptureSession; _v16.getMeteringPoint();
-declare let _v17: camera.CaptureSession; _v17.getZoomRatio();
-declare let _v18: camera.CaptureSession; _v18.getZoomRatioRange();
-declare let _v19: camera.CaptureSession; _v19.hasFlash();
-declare let _v20: camera.CaptureSession; _v20.isExposureModeSupported(camera.ExposureMode.EXPOSURE_MODE_UNSPECIFIED);
-declare let _v21: camera.CaptureSession; _v21.isFlashModeSupported(camera.FlashMode.FLASH_MODE_CLOSE);
-declare let _v22: camera.CaptureSession; _v22.isFocusModeSupported(camera.FocusMode.FOCUS_MODE_MANUAL);
-declare let _v23: camera.CaptureSession; _v23.isVideoStabilizationModeSupported(camera.VideoStabilizationMode.OFF);
-declare let _v24: camera.CaptureSession; _v24.off('focusStateChange');
-declare let _v25: camera.CaptureSession; _v25.on('focusStateChange', () => {});
-declare let _v26: camera.CaptureSession; _v26.release();
-declare let _v27: camera.CaptureSession; _v27.removeInput;
-declare let _v28: camera.CaptureSession; _v28.removeOutput;
-declare let _v29: camera.CaptureSession; _v29.setExposureBias(0);
-declare let _v30: camera.CaptureSession; _v30.setExposureMode(camera.ExposureMode.EXPOSURE_MODE_UNSPECIFIED);
-declare let _v31: camera.CaptureSession; _v31.setFlashMode(camera.FlashMode.FLASH_MODE_CLOSE);
-declare let _v32: camera.CaptureSession; _v32.setFocusMode(camera.FocusMode.FOCUS_MODE_MANUAL);
-declare let _v33: camera.CaptureSession; _v33.setFocusPoint({ x: 0, y: 0 });
-declare let _v34: camera.CaptureSession; _v34.setMeteringPoint({ x: 0, y: 0 });
-declare let _v35: camera.CaptureSession; _v35.setVideoStabilizationMode(camera.VideoStabilizationMode.OFF);
-declare let _v36: camera.CaptureSession; _v36.setZoomRatio(0);
-declare let _v37: camera.CaptureSession; _v37.start();
-declare let _v38: camera.CaptureSession; _v38.stop();
-declare let _v39: camera.PhotoOutput; _v39.off('captureStart');
-declare let _v40: camera.PhotoOutput; _v40.on('captureStart', () => {});
-declare let _v41: camera.PreviewOutput; _v41.start();
-declare let _v42: camera.PreviewOutput; _v42.stop();
+// Scenario: a custom photo capture flow built on the legacy CaptureSession
+// pipeline (deprecated since 11 in favour of the Session family). The flow
+// enumerates the device cameras, wires a preview + photo capture session,
+// queries and adjusts flash/exposure/focus/zoom/stabilization settings,
+// subscribes to capture events, then drives the preview and photo outputs and
+// tears everything down.
+
+interface CaptureHandles {
+  session: camera.CaptureSession;
+  photoOutput: camera.PhotoOutput;
+  previewOutput: camera.PreviewOutput;
+  input: camera.CameraInput;
+}
+
+async function setupCaptureSession(
+  mgr: camera.CameraManager,
+  surfaceId: string
+): Promise<CaptureHandles> {
+  const cams: Array<camera.CameraDevice> = mgr.getSupportedCameras();
+  const cam: camera.CameraDevice = cams[0];
+
+  // Deprecated since 11; prefer getSupportedOutputCapability(cam, mode).
+  const cap: camera.CameraOutputCapability = mgr.getSupportedOutputCapability(cam);
+
+  const photoProfiles: Array<camera.Profile> = cap.photoProfiles;
+  const previewProfiles: Array<camera.Profile> = cap.previewProfiles;
+  const photoProfile: camera.Profile = photoProfiles[0];
+  const previewProfile: camera.Profile = previewProfiles[0];
+
+  // Deprecated since 11; prefer CameraManager#createSession.
+  const session: camera.CaptureSession = mgr.createCaptureSession();
+
+  // Deprecated since 11; prefer createPhotoOutput(profile?).
+  const photoOutput: camera.PhotoOutput =
+    mgr.createPhotoOutput(photoProfile, surfaceId);
+  const previewOutput: camera.PreviewOutput =
+    mgr.createPreviewOutput(previewProfile, surfaceId);
+
+  // CAMERA_POSITION_FOLD_INNER is deprecated since 12.
+  const foldInner = camera.CameraPosition.CAMERA_POSITION_FOLD_INNER;
+  console.info(`fold-inner camera position enum = ${foldInner}`);
+
+  const input: camera.CameraInput = mgr.createCameraInput(cam);
+  session.beginConfig();
+  session.addInput(input);
+  session.addOutput(photoOutput);
+  session.addOutput(previewOutput);
+  await session.commitConfig();
+  return { session, photoOutput, previewOutput, input };
+}
+
+async function queryAndAdjustSession(session: camera.CaptureSession): Promise<void> {
+  const hasFlash: boolean = session.hasFlash();
+  const flashSupported: boolean =
+    session.isFlashModeSupported(camera.FlashMode.FLASH_MODE_CLOSE);
+  console.info(`hasFlash=${hasFlash} flashCloseSupported=${flashSupported}`);
+  const currentFlash: camera.FlashMode = session.getFlashMode();
+  session.setFlashMode(camera.FlashMode.FLASH_MODE_CLOSE);
+
+  const expSupported: boolean =
+    session.isExposureModeSupported(camera.ExposureMode.EXPOSURE_MODE_UNSPECIFIED);
+  console.info(`exposureUnspecifiedSupported=${expSupported}`);
+  const currentExp: camera.ExposureMode = session.getExposureMode();
+  session.setExposureMode(camera.ExposureMode.EXPOSURE_MODE_UNSPECIFIED);
+  const biasRange: Array<number> = session.getExposureBiasRange();
+  if (biasRange.length > 0) {
+    session.setExposureBias(biasRange[0]);
+  }
+  const expValue: number = session.getExposureValue();
+
+  const focusSupported: boolean =
+    session.isFocusModeSupported(camera.FocusMode.FOCUS_MODE_MANUAL);
+  console.info(`focusManualSupported=${focusSupported} expValue=${expValue}`);
+  const currentFocus: camera.FocusMode = session.getFocusMode();
+  session.setFocusMode(camera.FocusMode.FOCUS_MODE_MANUAL);
+  const focusPoint: camera.Point = session.getFocusPoint();
+  session.setFocusPoint({ x: 480, y: 640 });
+  const meteringPoint: camera.Point = session.getMeteringPoint();
+  session.setMeteringPoint({ x: 480, y: 640 });
+  const focalLength: number = session.getFocalLength();
+  console.info(`focusMode=${currentFocus} focusPoint=${JSON.stringify(focusPoint)} ` +
+    `meteringPoint=${JSON.stringify(meteringPoint)} focalLength=${focalLength}`);
+
+  const zoomRange: Array<number> = session.getZoomRatioRange();
+  const currentZoom: number = session.getZoomRatio();
+  if (zoomRange.length > 0) {
+    session.setZoomRatio(zoomRange[0]);
+  }
+
+  const vsSupported: boolean =
+    session.isVideoStabilizationModeSupported(camera.VideoStabilizationMode.OFF);
+  const currentVs: camera.VideoStabilizationMode =
+    session.getActiveVideoStabilizationMode();
+  session.setVideoStabilizationMode(camera.VideoStabilizationMode.OFF);
+  console.info(`vsSupported=${vsSupported} currentVs=${currentVs} currentZoom=${currentZoom}`);
+
+  const focusCb = (err: BusinessError, state: camera.FocusState): void => {
+    if (err) { console.error('focus state error', err); return; }
+    console.info(`focus state changed -> ${state}`);
+  };
+  session.on('focusStateChange', focusCb);
+  session.off('focusStateChange', focusCb);
+}
+
+function wirePhotoEvents(photoOutput: camera.PhotoOutput): void {
+  const onCaptureStart = (err: BusinessError, data: number): void => {
+    if (err) { console.error('captureStart error', err); return; }
+    console.info(`photo capture started, id=${data}`);
+  };
+  photoOutput.on('captureStart', onCaptureStart);
+  photoOutput.off('captureStart', onCaptureStart);
+}
+
+function reconfigureSession(
+  session: camera.CaptureSession,
+  input: camera.CameraInput,
+  photoOutput: camera.PhotoOutput
+): void {
+  // Swap the active photo pipeline: these removeInput/removeOutput overloads
+  // are deprecated since 11 in favour of Session#removeInput/removeOutput.
+  session.beginConfig();
+  session.removeInput(input);
+  session.removeOutput(photoOutput);
+  session.addInput(input);
+  session.addOutput(photoOutput);
+}
+
+async function runCapture(
+  session: camera.CaptureSession,
+  previewOutput: camera.PreviewOutput
+): Promise<void> {
+  try {
+    await session.start();
+    await previewOutput.start();
+    await previewOutput.stop();
+    await session.stop();
+  } catch (e) {
+    console.error('capture session run failed', e);
+  } finally {
+    await session.release();
+  }
+}
+
+async function run(): Promise<void> {
+  const mgr: camera.CameraManager = camera.getCameraManager(context);
+  const handles = await setupCaptureSession(mgr, 'surface-0');
+  await queryAndAdjustSession(handles.session);
+  wirePhotoEvents(handles.photoOutput);
+  reconfigureSession(handles.session, handles.input, handles.photoOutput);
+  await runCapture(handles.session, handles.previewOutput);
+}
+
+declare const context: Context;
+run();

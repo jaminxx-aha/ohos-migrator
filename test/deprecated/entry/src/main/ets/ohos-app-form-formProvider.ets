@@ -6,7 +6,7 @@ async function listAllPublishedForms(): Promise<void> {
   try {
     const infos = await formProvider.getPublishedFormInfos();
     for (const info of infos) {
-      console.info('published form: id=' + info.id + ' name=' + info.name);
+      console.info('published form: bundle=' + info.bundleName + ' name=' + info.name);
     }
   } catch (e) {
     console.error('getPublishedFormInfos failed', e);

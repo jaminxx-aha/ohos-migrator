@@ -1,56 +1,128 @@
 import reminderAgent from '@ohos.reminderAgent';
 
-// @ohos.reminderAgent.reminderAgent: module-move (kit-level); covered by the import line
-let _v0: reminderAgent.ActionButton;
-declare let _v1: reminderAgent.ActionButton; _v1.title;
-declare let _v2: reminderAgent.ActionButton; _v2.type;
-reminderAgent.ActionButtonType;
-reminderAgent.ActionButtonType.ACTION_BUTTON_TYPE_CLOSE;
-reminderAgent.ActionButtonType.ACTION_BUTTON_TYPE_SNOOZE;
-let _v3: reminderAgent.LocalDateTime;
-declare let _v4: reminderAgent.LocalDateTime; _v4.day;
-declare let _v5: reminderAgent.LocalDateTime; _v5.hour;
-declare let _v6: reminderAgent.LocalDateTime; _v6.minute;
-declare let _v7: reminderAgent.LocalDateTime; _v7.month;
-declare let _v8: reminderAgent.LocalDateTime; _v8.second;
-declare let _v9: reminderAgent.LocalDateTime; _v9.year;
-let _v10: reminderAgent.MaxScreenWantAgent;
-declare let _v11: reminderAgent.MaxScreenWantAgent; _v11.abilityName;
-declare let _v12: reminderAgent.MaxScreenWantAgent; _v12.pkgName;
-let _v13: reminderAgent.ReminderRequest;
-declare let _v14: reminderAgent.ReminderRequest; _v14.actionButton;
-declare let _v15: reminderAgent.ReminderRequest; _v15.content;
-declare let _v16: reminderAgent.ReminderRequest; _v16.expiredContent;
-declare let _v17: reminderAgent.ReminderRequest; _v17.maxScreenWantAgent;
-declare let _v18: reminderAgent.ReminderRequest; _v18.notificationId;
-declare let _v19: reminderAgent.ReminderRequest; _v19.reminderType;
-declare let _v20: reminderAgent.ReminderRequest; _v20.ringDuration;
-declare let _v21: reminderAgent.ReminderRequest; _v21.slotType;
-declare let _v22: reminderAgent.ReminderRequest; _v22.snoozeContent;
-declare let _v23: reminderAgent.ReminderRequest; _v23.snoozeTimes;
-declare let _v24: reminderAgent.ReminderRequest; _v24.timeInterval;
-declare let _v25: reminderAgent.ReminderRequest; _v25.title;
-declare let _v26: reminderAgent.ReminderRequest; _v26.wantAgent;
-let _v27: reminderAgent.ReminderRequestAlarm;
-declare let _v28: reminderAgent.ReminderRequestAlarm; _v28.daysOfWeek;
-declare let _v29: reminderAgent.ReminderRequestAlarm; _v29.hour;
-declare let _v30: reminderAgent.ReminderRequestAlarm; _v30.minute;
-let _v31: reminderAgent.ReminderRequestCalendar;
-declare let _v32: reminderAgent.ReminderRequestCalendar; _v32.dateTime;
-declare let _v33: reminderAgent.ReminderRequestCalendar; _v33.repeatDays;
-declare let _v34: reminderAgent.ReminderRequestCalendar; _v34.repeatMonths;
-let _v35: reminderAgent.ReminderRequestTimer;
-declare let _v36: reminderAgent.ReminderRequestTimer; _v36.triggerTimeInSeconds;
-reminderAgent.ReminderType;
-reminderAgent.ReminderType.REMINDER_TYPE_ALARM;
-reminderAgent.ReminderType.REMINDER_TYPE_CALENDAR;
-reminderAgent.ReminderType.REMINDER_TYPE_TIMER;
-let _v37: reminderAgent.WantAgent;
-declare let _v38: reminderAgent.WantAgent; _v38.abilityName;
-declare let _v39: reminderAgent.WantAgent; _v39.pkgName;
-reminderAgent.addNotificationSlot;
-reminderAgent.cancelAllReminders();
-reminderAgent.cancelReminder(0);
-reminderAgent.getValidReminders();
-reminderAgent.publishReminder({ reminderType: reminderAgent.ReminderType.REMINDER_TYPE_TIMER });
-reminderAgent.removeNotificationSlot;
+// Capture the deprecated enum namespaces via their member accesses below
+// (ActionButtonType / ReminderType) so each enum symbol is touched exactly once.
+
+// Scenario 1 — publish a calendar-based meeting reminder with action buttons and want-agent redirects.
+async function publishCalendarMeetingReminder(): Promise<number> {
+  const meetingTime: reminderAgent.LocalDateTime = {
+    year: 2026, month: 8, day: 17, hour: 14, minute: 30, second: 0,
+  };
+  console.log('meeting at',
+    meetingTime.year, meetingTime.month, meetingTime.day,
+    meetingTime.hour, meetingTime.minute, meetingTime.second);
+
+  const tapTarget: reminderAgent.WantAgent = {
+    pkgName: 'com.example.reminders', abilityName: 'MeetingAbility',
+  };
+  console.log('tap target', tapTarget.pkgName, tapTarget.abilityName);
+
+  const fullScreenTarget: reminderAgent.MaxScreenWantAgent = {
+    pkgName: 'com.example.reminders', abilityName: 'MeetingMaxScreenAbility',
+  };
+  console.log('max-screen target', fullScreenTarget.pkgName, fullScreenTarget.abilityName);
+
+  const dismissButton: reminderAgent.ActionButton = {
+    title: 'Dismiss', type: reminderAgent.ActionButtonType.ACTION_BUTTON_TYPE_CLOSE,
+  };
+  console.log('button', dismissButton.title, dismissButton.type);
+
+  const calendarReminder: reminderAgent.ReminderRequestCalendar = {
+    reminderType: reminderAgent.ReminderType.REMINDER_TYPE_CALENDAR,
+    dateTime: meetingTime,
+    repeatMonths: [0],
+    repeatDays: [1, 3, 5],
+    title: 'Team Sync',
+    content: 'Weekly team sync meeting',
+    expiredContent: 'Team sync has started',
+    snoozeContent: 'Snoozing team sync',
+    snoozeTimes: 2,
+    timeInterval: 300,
+    ringDuration: 5,
+    notificationId: 1001,
+    actionButton: [dismissButton, { title: 'Snooze', type: reminderAgent.ActionButtonType.ACTION_BUTTON_TYPE_SNOOZE }],
+    wantAgent: tapTarget,
+    maxScreenWantAgent: fullScreenTarget,
+  };
+  console.log('calendar fields',
+    calendarReminder.dateTime, calendarReminder.repeatMonths, calendarReminder.repeatDays);
+
+  // Read the shared ReminderRequest fields via a ReminderRequest-typed view.
+  const reminder: reminderAgent.ReminderRequest = calendarReminder;
+  console.log('reminder base',
+    reminder.reminderType, reminder.title, reminder.content, reminder.expiredContent,
+    reminder.snoozeContent, reminder.snoozeTimes, reminder.timeInterval, reminder.ringDuration,
+    reminder.notificationId, reminder.slotType, reminder.actionButton,
+    reminder.wantAgent, reminder.maxScreenWantAgent);
+
+  try {
+    const reminderId = await reminderAgent.publishReminder(reminder);
+    console.log('published calendar reminder id=', reminderId);
+    return reminderId;
+  } catch (e) {
+    console.error('publishCalendarMeetingReminder failed', e);
+    return -1;
+  }
+}
+
+// Scenario 2 — prepare (but do not publish) a daily weekday alarm draft.
+function prepareAlarmDraft(): void {
+  const alarm: reminderAgent.ReminderRequestAlarm = {
+    reminderType: reminderAgent.ReminderType.REMINDER_TYPE_ALARM,
+    hour: 9,
+    minute: 30,
+    daysOfWeek: [2, 3, 4, 5, 6],
+    title: 'Stand-up',
+    content: 'Daily stand-up meeting',
+  };
+  console.log('alarm draft', alarm.hour, alarm.minute, alarm.daysOfWeek);
+}
+
+// Scenario 3 — prepare (but do not publish) a countdown timer draft.
+function prepareTimerDraft(): void {
+  const timer: reminderAgent.ReminderRequestTimer = {
+    reminderType: reminderAgent.ReminderType.REMINDER_TYPE_TIMER,
+    triggerTimeInSeconds: 1500,
+    title: 'Pizza timer',
+    content: 'Your pizza is ready',
+  };
+  console.log('timer draft', timer.triggerTimeInSeconds);
+}
+
+// Scenario 4 — lifecycle: list valid reminders, cancel one, cancel all, and note slot management APIs.
+async function manageReminders(reminderId: number): Promise<void> {
+  try {
+    const valid = await reminderAgent.getValidReminders();
+    console.log('valid reminders count=', valid.length);
+  } catch (e) {
+    console.error('getValidReminders failed', e);
+  }
+
+  if (reminderId >= 0) {
+    try {
+      await reminderAgent.cancelReminder(reminderId);
+      console.log('cancelled reminder id=', reminderId);
+    } catch (e) {
+      console.error('cancelReminder failed', e);
+    }
+  }
+
+  try {
+    await reminderAgent.cancelAllReminders();
+    console.log('cancelled all reminders');
+  } catch (e) {
+    console.error('cancelAllReminders failed', e);
+  }
+
+  // Slot management is available on this deprecated module; reference the operations for logging.
+  console.log('slot ops', reminderAgent.addNotificationSlot, reminderAgent.removeNotificationSlot);
+}
+
+async function run(): Promise<void> {
+  const reminderId = await publishCalendarMeetingReminder();
+  prepareAlarmDraft();
+  prepareTimerDraft();
+  await manageReminders(reminderId);
+}
+
+run();

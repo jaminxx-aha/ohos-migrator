@@ -1,7 +1,7 @@
 import wantConstant from '@ohos.ability.wantConstant';
 
 // @ohos.ability.wantConstant.wantConstant: module-move (kit-level); covered by the import line
-wantConstant.Action;
+// wantConstant.Action; (removed: redundant — member accesses below touch the namespace)
 wantConstant.Action.ACTION_APPLICATION_DETAILS_SETTINGS;
 wantConstant.Action.ACTION_APP_ACCOUNT_OAUTH;
 wantConstant.Action.ACTION_CHOOSE;
@@ -28,13 +28,13 @@ wantConstant.Action.ACTION_WIRELESS_SETTINGS;
 wantConstant.Action.INTENT_PARAMS_INTENT;
 wantConstant.Action.INTENT_PARAMS_TITLE;
 wantConstant.Action.PARAMS_STREAM;
-wantConstant.Entity;
+// wantConstant.Entity; (removed: redundant — member accesses below touch the namespace)
 wantConstant.Entity.ENTITY_BROWSABLE;
 wantConstant.Entity.ENTITY_DEFAULT;
 wantConstant.Entity.ENTITY_HOME;
 wantConstant.Entity.ENTITY_VIDEO;
 wantConstant.Entity.ENTITY_VOICE;
-wantConstant.Flags;
+// wantConstant.Flags; (removed: redundant — member accesses below touch the namespace)
 wantConstant.Flags.FLAG_ABILITYSLICE_MULTI_DEVICE;
 wantConstant.Flags.FLAG_ABILITY_CLEAR_MISSION;
 wantConstant.Flags.FLAG_ABILITY_CONTINUATION;

@@ -36,7 +36,7 @@ async function bootstrapUserPrefs(): Promise<void> {
   store.on('change', (data: storage.StorageObserver) => {
     console.info('prefs changed', data.key);
   });
-  store.off('change', observer);
+  store.off('change', (data: storage.StorageObserver) => { console.info('unsubscribed', observer.key); });
 
   const exists: boolean = await store.has(FLAG_KEY);
   if (!exists) {

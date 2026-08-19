@@ -1,70 +1,145 @@
 import intl from '@ohos.intl';
 
-intl.DateTimeFormat;
-declare let _v0: intl.DateTimeFormat; _v0.format;
-declare let _v1: intl.DateTimeFormat; _v1.formatRange;
-declare let _v2: intl.DateTimeFormat; _v2.resolvedOptions();
-let _v3: intl.DateTimeOptions;
-declare let _v4: intl.DateTimeOptions; _v4.dateStyle;
-declare let _v5: intl.DateTimeOptions; _v5.day;
-declare let _v6: intl.DateTimeOptions; _v6.dayPeriod;
-declare let _v7: intl.DateTimeOptions; _v7.era;
-declare let _v8: intl.DateTimeOptions; _v8.formatMatcher;
-declare let _v9: intl.DateTimeOptions; _v9.hour;
-declare let _v10: intl.DateTimeOptions; _v10.hour12;
-declare let _v11: intl.DateTimeOptions; _v11.hourCycle;
-declare let _v12: intl.DateTimeOptions; _v12.locale;
-declare let _v13: intl.DateTimeOptions; _v13.localeMatcher;
-declare let _v14: intl.DateTimeOptions; _v14.minute;
-declare let _v15: intl.DateTimeOptions; _v15.month;
-declare let _v16: intl.DateTimeOptions; _v16.numberingSystem;
-declare let _v17: intl.DateTimeOptions; _v17.second;
-declare let _v18: intl.DateTimeOptions; _v18.timeStyle;
-declare let _v19: intl.DateTimeOptions; _v19.timeZone;
-declare let _v20: intl.DateTimeOptions; _v20.timeZoneName;
-declare let _v21: intl.DateTimeOptions; _v21.weekday;
-declare let _v22: intl.DateTimeOptions; _v22.year;
-intl.Locale;
-declare let _v23: intl.Locale; _v23.baseName;
-declare let _v24: intl.Locale; _v24.calendar;
-declare let _v25: intl.Locale; _v25.caseFirst;
-declare let _v26: intl.Locale; _v26.collation;
-declare let _v27: intl.Locale; _v27.hourCycle;
-declare let _v28: intl.Locale; _v28.language;
-declare let _v29: intl.Locale; _v29.maximize();
-declare let _v30: intl.Locale; _v30.minimize();
-declare let _v31: intl.Locale; _v31.numberingSystem;
-declare let _v32: intl.Locale; _v32.numeric;
-declare let _v33: intl.Locale; _v33.region;
-declare let _v34: intl.Locale; _v34.script;
-declare let _v35: intl.Locale; _v35.toString();
-let _v36: intl.LocaleOptions;
-declare let _v37: intl.LocaleOptions; _v37.calendar;
-declare let _v38: intl.LocaleOptions; _v38.caseFirst;
-declare let _v39: intl.LocaleOptions; _v39.collation;
-declare let _v40: intl.LocaleOptions; _v40.hourCycle;
-declare let _v41: intl.LocaleOptions; _v41.numberingSystem;
-declare let _v42: intl.LocaleOptions; _v42.numeric;
-intl.PluralRules;
-declare let _v43: intl.PluralRules; _v43.select(0);
-let _v44: intl.PluralRulesOptions;
-declare let _v45: intl.PluralRulesOptions; _v45.localeMatcher;
-declare let _v46: intl.PluralRulesOptions; _v46.maximumFractionDigits;
-declare let _v47: intl.PluralRulesOptions; _v47.maximumSignificantDigits;
-declare let _v48: intl.PluralRulesOptions; _v48.minimumFractionDigits;
-declare let _v49: intl.PluralRulesOptions; _v49.minimumIntegerDigits;
-declare let _v50: intl.PluralRulesOptions; _v50.minimumSignificantDigits;
-declare let _v51: intl.PluralRulesOptions; _v51.type;
-intl.RelativeTimeFormat;
-declare let _v52: intl.RelativeTimeFormat; _v52.format(0, '');
-declare let _v53: intl.RelativeTimeFormat; _v53.formatToParts(0, '');
-declare let _v54: intl.RelativeTimeFormat; _v54.resolvedOptions();
-let _v55: intl.RelativeTimeFormatInputOptions;
-declare let _v56: intl.RelativeTimeFormatInputOptions; _v56.localeMatcher;
-declare let _v57: intl.RelativeTimeFormatInputOptions; _v57.numeric;
-declare let _v58: intl.RelativeTimeFormatInputOptions; _v58.style;
-let _v59: intl.RelativeTimeFormatResolvedOptions;
-declare let _v60: intl.RelativeTimeFormatResolvedOptions; _v60.locale;
-declare let _v61: intl.RelativeTimeFormatResolvedOptions; _v61.numberingSystem;
-declare let _v62: intl.RelativeTimeFormatResolvedOptions; _v62.numeric;
-declare let _v63: intl.RelativeTimeFormatResolvedOptions; _v63.style;
+// Scenario: build a localized activity-log timestamp for the device locale, exercising
+// every deprecated DateTimeOptions field plus DateTimeFormat.format / formatRange / resolvedOptions.
+async function formatActivityLogTimestamp(): Promise<void> {
+  const options: intl.DateTimeOptions = {
+    locale: 'zh-Hans-CN',
+    dateStyle: 'long',
+    timeStyle: 'medium',
+    hourCycle: 'h23',
+    timeZone: 'Asia/Shanghai',
+    numberingSystem: 'latn',
+    hour12: false,
+    weekday: 'long',
+    era: 'short',
+    year: 'numeric',
+    month: 'long',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZoneName: 'long',
+    dayPeriod: 'short',
+    localeMatcher: 'best fit',
+    formatMatcher: 'basic',
+  };
+  // Read each deprecated DateTimeOptions field so the compiler resolves every property symbol.
+  const summary: string = [
+    options.locale, options.dateStyle, options.timeStyle, options.hourCycle,
+    options.timeZone, options.numberingSystem, String(options.hour12), options.weekday,
+    options.era, options.year, options.month, options.day, options.hour,
+    options.minute, options.second, options.timeZoneName, options.dayPeriod,
+    options.localeMatcher, options.formatMatcher,
+  ].join('|');
+  console.info('activity options:', summary);
+
+  const formatter = new intl.DateTimeFormat('zh-Hans-CN', options);
+  const startedAt = new Date(2026, 4, 17, 9, 30, 0);
+  const endedAt = new Date(2026, 4, 17, 11, 0, 0);
+  try {
+    const stamp = formatter.format(startedAt);
+    console.info('activity timestamp:', stamp);
+    const window = formatter.formatRange(startedAt, endedAt);
+    console.info('activity window:', window);
+    const resolved = formatter.resolvedOptions();
+    console.info('resolved:', resolved.locale, resolved.dateStyle, resolved.timeZone);
+  } catch (e) {
+    console.error('formatActivityLogTimestamp failed', e);
+  }
+}
+
+// Scenario: resolve the device locale, exercising every deprecated LocaleOptions field and
+// every deprecated Locale property / method.
+async function resolveDeviceLocale(): Promise<void> {
+  const localeOptions: intl.LocaleOptions = {
+    calendar: 'gregory',
+    collation: 'pinyin',
+    hourCycle: 'h24',
+    numberingSystem: 'latn',
+    numeric: true,
+    caseFirst: 'upper',
+  };
+  const optsDigest: string = [
+    localeOptions.calendar, localeOptions.collation, localeOptions.hourCycle,
+    localeOptions.numberingSystem, String(localeOptions.numeric), localeOptions.caseFirst,
+  ].join('|');
+  console.info('locale options:', optsDigest);
+
+  const locale = new intl.Locale('zh-Hans-CN', localeOptions);
+  try {
+    const portrait: string = [
+      locale.baseName, locale.language, locale.script, locale.region,
+      locale.calendar, locale.collation, locale.caseFirst, locale.hourCycle,
+      locale.numberingSystem, String(locale.numeric),
+    ].join('|');
+    console.info('locale portrait:', portrait);
+    console.info('locale toString:', locale.toString());
+    const maximized = locale.maximize();
+    const minimized = locale.minimize();
+    console.info('maximized:', maximized.toString(), 'minimized:', minimized.toString());
+  } catch (e) {
+    console.error('resolveDeviceLocale failed', e);
+  }
+}
+
+// Scenario: render a localized countdown for a notification, exercising every deprecated
+// RelativeTimeFormatInputOptions and RelativeTimeFormatResolvedOptions field.
+async function formatNotificationCountdown(): Promise<void> {
+  const inputOptions: intl.RelativeTimeFormatInputOptions = {
+    localeMatcher: 'best fit',
+    numeric: 'auto',
+    style: 'long',
+  };
+  console.info('countdown input options:',
+    inputOptions.localeMatcher, inputOptions.numeric, inputOptions.style);
+
+  const relTime = new intl.RelativeTimeFormat('zh-Hans-CN', inputOptions);
+  try {
+    const phrase = relTime.format(-3, 'day');
+    console.info('countdown phrase:', phrase);
+    const parts = relTime.formatToParts(2, 'hour');
+    console.info('countdown parts:', JSON.stringify(parts));
+    const resolved: intl.RelativeTimeFormatResolvedOptions = relTime.resolvedOptions();
+    console.info('countdown resolved:',
+      resolved.locale, resolved.style, resolved.numeric, resolved.numberingSystem);
+  } catch (e) {
+    console.error('formatNotificationCountdown failed', e);
+  }
+}
+
+// Scenario: pick a pluralized label for a badge count, exercising every deprecated
+// PluralRulesOptions field plus PluralRules.select.
+async function pickPluralLabel(): Promise<void> {
+  const pluralOptions: intl.PluralRulesOptions = {
+    localeMatcher: 'best fit',
+    type: 'cardinal',
+    minimumIntegerDigits: 1,
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 3,
+    minimumSignificantDigits: 1,
+    maximumSignificantDigits: 21,
+  };
+  console.info('plural options:',
+    pluralOptions.localeMatcher, pluralOptions.type, pluralOptions.minimumIntegerDigits,
+    pluralOptions.minimumFractionDigits, pluralOptions.maximumFractionDigits,
+    pluralOptions.minimumSignificantDigits, pluralOptions.maximumSignificantDigits);
+
+  const rules = new intl.PluralRules('en-US', pluralOptions);
+  try {
+    const category = rules.select(1);
+    console.info('badge plural category:', category);
+    console.info('badge plural for 0:', rules.select(0));
+  } catch (e) {
+    console.error('pickPluralLabel failed', e);
+  }
+}
+
+async function run(): Promise<void> {
+  await formatActivityLogTimestamp();
+  await resolveDeviceLocale();
+  await formatNotificationCountdown();
+  await pickPluralLabel();
+}
+
+run();

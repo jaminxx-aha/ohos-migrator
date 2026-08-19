@@ -13,13 +13,22 @@ async function inspectRouterStack(router: Router): Promise<number> {
   return stackSize;
 }
 
+interface ActionMenuButton {
+  text: string;
+  color: string;
+}
+
+interface ActionMenuOptions {
+  title: string;
+  buttons: [ActionMenuButton, ActionMenuButton?];
+}
+
 async function presentConfirmMenu(prompt: PromptAction): Promise<number> {
-  const options = {
+  const btn1: ActionMenuButton = { text: '删除', color: '#E84026' };
+  const btn2: ActionMenuButton = { text: '取消', color: '#007DFF' };
+  const options: ActionMenuOptions = {
     title: '确认删除该条目吗?',
-    buttons: [
-      { text: '删除', color: '#E84026' },
-      { text: '取消', color: '#007DFF' }
-    ]
+    buttons: [btn1, btn2]
   };
   // The showActionMenu symbol carries a @deprecated overload (since 11);
   // call the Promise-returning form and await the user's selection.

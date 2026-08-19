@@ -1,5 +1,12 @@
 import appAccount from '@ohos.account.appAccount';
 
+// Authenticator options bag passed to the deprecated addAccountImplicitly /
+// authenticate APIs (whose SDK param is typed as an indexed signature). ArkTS
+// forbids indexed signatures in source, so declare the concrete shape here.
+interface AuthOptions {
+  scope: string;
+}
+
 const ACCOUNT_NAME = 'com.example.user.alice';
 const OWNER = 'com.example.authservice';
 const BUNDLE = 'com.example.callerapp';
@@ -88,7 +95,7 @@ async function driveAuthenticator(): Promise<void> {
   const manager = appAccount.createAppAccountManager();
   const authenticator = new appAccount.Authenticator();
   const callback = createAuthenticatorCallback();
-  const options: { [key: string]: any } = { scope: 'profile' };
+  const options: AuthOptions = { scope: 'profile' };
   try {
     authenticator.addAccountImplicitly(AUTH_TYPE, BUNDLE, options, callback);
     authenticator.authenticate(ACCOUNT_NAME, AUTH_TYPE, BUNDLE, options, callback);

@@ -1,77 +1,177 @@
 import usb from '@ohos.usb';
 
-// @ohos.usb.usb: module-move (kit-level); covered by the import line
-let _v0: usb.USBConfig;
-declare let _v1: usb.USBConfig; _v1.attributes;
-declare let _v2: usb.USBConfig; _v2.id;
-declare let _v3: usb.USBConfig; _v3.interfaces;
-declare let _v4: usb.USBConfig; _v4.isRemoteWakeup;
-declare let _v5: usb.USBConfig; _v5.isSelfPowered;
-declare let _v6: usb.USBConfig; _v6.maxPower;
-declare let _v7: usb.USBConfig; _v7.name;
-let _v8: usb.USBControlParams;
-declare let _v9: usb.USBControlParams; _v9.data;
-declare let _v10: usb.USBControlParams; _v10.index;
-declare let _v11: usb.USBControlParams; _v11.reqType;
-declare let _v12: usb.USBControlParams; _v12.request;
-declare let _v13: usb.USBControlParams; _v13.target;
-declare let _v14: usb.USBControlParams; _v14.value;
-usb.USBControlRequestType;
-usb.USBControlRequestType.USB_REQUEST_TYPE_CLASS;
-usb.USBControlRequestType.USB_REQUEST_TYPE_STANDARD;
-usb.USBControlRequestType.USB_REQUEST_TYPE_VENDOR;
-let _v15: usb.USBDevice;
-declare let _v16: usb.USBDevice; _v16.busNum;
-declare let _v17: usb.USBDevice; _v17.clazz;
-declare let _v18: usb.USBDevice; _v18.configs;
-declare let _v19: usb.USBDevice; _v19.devAddress;
-declare let _v20: usb.USBDevice; _v20.manufacturerName;
-declare let _v21: usb.USBDevice; _v21.name;
-declare let _v22: usb.USBDevice; _v22.productId;
-declare let _v23: usb.USBDevice; _v23.productName;
-declare let _v24: usb.USBDevice; _v24.protocol;
-declare let _v25: usb.USBDevice; _v25.serial;
-declare let _v26: usb.USBDevice; _v26.subClass;
-declare let _v27: usb.USBDevice; _v27.vendorId;
-declare let _v28: usb.USBDevice; _v28.version;
-let _v29: usb.USBDevicePipe;
-declare let _v30: usb.USBDevicePipe; _v30.busNum;
-declare let _v31: usb.USBDevicePipe; _v31.devAddress;
-let _v32: usb.USBEndpoint;
-declare let _v33: usb.USBEndpoint; _v33.address;
-declare let _v34: usb.USBEndpoint; _v34.attributes;
-declare let _v35: usb.USBEndpoint; _v35.direction;
-declare let _v36: usb.USBEndpoint; _v36.interfaceId;
-declare let _v37: usb.USBEndpoint; _v37.interval;
-declare let _v38: usb.USBEndpoint; _v38.maxPacketSize;
-declare let _v39: usb.USBEndpoint; _v39.number;
-declare let _v40: usb.USBEndpoint; _v40.type;
-let _v41: usb.USBInterface;
-declare let _v42: usb.USBInterface; _v42.alternateSetting;
-declare let _v43: usb.USBInterface; _v43.clazz;
-declare let _v44: usb.USBInterface; _v44.endpoints;
-declare let _v45: usb.USBInterface; _v45.id;
-declare let _v46: usb.USBInterface; _v46.name;
-declare let _v47: usb.USBInterface; _v47.protocol;
-declare let _v48: usb.USBInterface; _v48.subClass;
-usb.USBRequestDirection;
-usb.USBRequestDirection.USB_REQUEST_DIR_FROM_DEVICE;
-usb.USBRequestDirection.USB_REQUEST_DIR_TO_DEVICE;
-usb.USBRequestTargetType;
-usb.USBRequestTargetType.USB_REQUEST_TARGET_DEVICE;
-usb.USBRequestTargetType.USB_REQUEST_TARGET_ENDPOINT;
-usb.USBRequestTargetType.USB_REQUEST_TARGET_INTERFACE;
-usb.USBRequestTargetType.USB_REQUEST_TARGET_OTHER;
-// usb.bulkTransfer({ busNum: 0, devAddress: 0 }, { address: 0, attributes: 0, interval: 0, maxPacketSize: 0, direction: usb.USBRequestDirection.USB_REQUEST_DIR_TO_DEVICE, number: 0, type: 0, interfaceId: 0 }, new Uint8Array(0));  // omitted: would not compile (2304)
-usb.claimInterface({ busNum: 0, devAddress: 0 }, { id: 0, protocol: 0, clazz: 0, subClass: 0, alternateSetting: 0, name: '', endpoints: [] });
-usb.closePipe({ busNum: 0, devAddress: 0 });
-usb.connectDevice({ busNum: 0, devAddress: 0, serial: '', name: '', manufacturerName: '', productName: '', version: '', vendorId: 0, productId: 0, clazz: 0, subClass: 0, protocol: 0, configs: [] });
-// usb.controlTransfer({ busNum: 0, devAddress: 0 }, { request: 0, target: usb.USBRequestTargetType.USB_REQUEST_TARGET_DEVICE, reqType: usb.USBControlRequestType.USB_REQUEST_TYPE_STANDARD, value: 0, index: 0, data: new Uint8Array(0) });  // omitted: would not compile (2304)
-usb.getDevices();
-usb.getFileDescriptor({ busNum: 0, devAddress: 0 });
-usb.getRawDescriptor({ busNum: 0, devAddress: 0 });
-usb.hasRight('');
-usb.releaseInterface({ busNum: 0, devAddress: 0 }, { id: 0, protocol: 0, clazz: 0, subClass: 0, alternateSetting: 0, name: '', endpoints: [] });
-usb.requestRight('');
-usb.setConfiguration({ busNum: 0, devAddress: 0 }, { id: 0, attributes: 0, maxPower: 0, name: '', isRemoteWakeup: false, isSelfPowered: false, interfaces: [] });
-usb.setInterface({ busNum: 0, devAddress: 0 }, { id: 0, protocol: 0, clazz: 0, subClass: 0, alternateSetting: 0, name: '', endpoints: [] });
+// Scenario: enumerate attached USB devices, ensure the app holds access rights,
+// open a pipe to the first device, walk its configuration/interface/endpoint
+// descriptors, set the active configuration + interface, claim/release the
+// interface, fetch the kernel file descriptor and raw descriptor, then close
+// the pipe. A helper also builds and inspects a USBControlParams descriptor
+// (and the request-direction / target / request-type enums) so the deprecated
+// descriptor surface is exercised at runtime even though the actual transfer
+// is performed through the non-deprecated usbManager path elsewhere.
+
+interface DeviceSummary {
+  vendorId: number;
+  productId: number;
+  name: string;
+  manufacturerName: string;
+  productName: string;
+  version: string;
+  serial: string;
+  busNum: number;
+  devAddress: number;
+  clazz: number;
+  subClass: number;
+  protocol: number;
+}
+
+function summarizeDevice(dev: usb.USBDevice): DeviceSummary {
+  return {
+    vendorId: dev.vendorId,
+    productId: dev.productId,
+    name: dev.name,
+    manufacturerName: dev.manufacturerName,
+    productName: dev.productName,
+    version: dev.version,
+    serial: dev.serial,
+    busNum: dev.busNum,
+    devAddress: dev.devAddress,
+    clazz: dev.clazz,
+    subClass: dev.subClass,
+    protocol: dev.protocol,
+  };
+}
+
+function describeConfig(cfg: usb.USBConfig): string {
+  const ifaceList = cfg.interfaces.map(iface => {
+    const epList = iface.endpoints.map(ep => {
+      const dir =
+        ep.direction === usb.USBRequestDirection.USB_REQUEST_DIR_FROM_DEVICE
+          ? 'IN'
+          : usb.USBRequestDirection.USB_REQUEST_DIR_TO_DEVICE
+            ? 'OUT'
+            : '?';
+      return `ep#${ep.number}(addr=${ep.address} type=${ep.type} iface=${ep.interfaceId} attrs=${ep.attributes} interval=${ep.interval} max=${ep.maxPacketSize} dir=${dir})`;
+    });
+    return `iface#${iface.id}(alt=${iface.alternateSetting} cls=${iface.clazz}/${iface.subClass}/${iface.protocol} name="${iface.name}" [${epList.join(', ')}])`;
+  });
+  return `cfg#${cfg.id}(name="${cfg.name}" attrs=${cfg.attributes} maxPower=${cfg.maxPower}mA selfPowered=${cfg.isSelfPowered} remoteWakeup=${cfg.isRemoteWakeup} [${ifaceList.join(', ')}])`;
+}
+
+// Builds the control-transfer descriptor used to read a USB device descriptor
+// (standard GET_DESCRIPTOR request to the device target) and reports each
+// field so the deprecated USBControlParams surface is exercised at runtime.
+function buildDeviceDescriptorControlParams(): usb.USBControlParams {
+  const params: usb.USBControlParams = {
+    request: 0x06, // GET_DESCRIPTOR
+    target: usb.USBRequestTargetType.USB_REQUEST_TARGET_DEVICE,
+    reqType: usb.USBControlRequestType.USB_REQUEST_TYPE_STANDARD,
+    value: 0x0100, // descriptor type = device, index 0
+    index: 0,
+    data: new Uint8Array(18),
+  };
+  // Reference each field so they are resolved by the compiler.
+  const reqTypeLabel =
+    params.reqType === usb.USBControlRequestType.USB_REQUEST_TYPE_STANDARD
+      ? 'standard'
+      : params.reqType === usb.USBControlRequestType.USB_REQUEST_TYPE_CLASS
+        ? 'class'
+        : params.reqType === usb.USBControlRequestType.USB_REQUEST_TYPE_VENDOR
+          ? 'vendor'
+          : 'unknown';
+  const targetLabel =
+    params.target === usb.USBRequestTargetType.USB_REQUEST_TARGET_DEVICE
+      ? 'device'
+      : params.target === usb.USBRequestTargetType.USB_REQUEST_TARGET_INTERFACE
+        ? 'interface'
+        : params.target === usb.USBRequestTargetType.USB_REQUEST_TARGET_ENDPOINT
+          ? 'endpoint'
+          : usb.USBRequestTargetType.USB_REQUEST_TARGET_OTHER
+            ? 'other'
+            : 'unknown';
+  console.info(
+    `controlParams request=${params.request} reqType=${reqTypeLabel} target=${targetLabel} value=${params.value} index=${params.index} data.len=${params.data.length}`,
+  );
+  return params;
+}
+
+async function ensureDeviceRight(deviceName: string): Promise<boolean> {
+  if (usb.hasRight(deviceName)) {
+    return true;
+  }
+  try {
+    const granted = await usb.requestRight(deviceName);
+    return granted;
+  } catch (e) {
+    console.error('requestRight failed', e);
+    return false;
+  }
+}
+
+async function openFirstDevice(): Promise<void> {
+  const devices = usb.getDevices();
+  if (devices.length === 0) {
+    console.info('no USB devices attached');
+    return;
+  }
+  const device = devices[0];
+  const summary = summarizeDevice(device);
+  console.info('attached device', JSON.stringify(summary));
+
+  const hasRight = await ensureDeviceRight(device.name);
+  if (!hasRight) {
+    console.error('USB access right denied for', device.name);
+    return;
+  }
+
+  const pipe = usb.connectDevice(device);
+  console.info(`pipe busNum=${pipe.busNum} devAddress=${pipe.devAddress}`);
+
+  // Walk configuration/interface/endpoint descriptors.
+  for (const cfg of device.configs) {
+    console.info(describeConfig(cfg));
+  }
+
+  try {
+    const activeConfig = device.configs[0];
+    const setCfgRet = usb.setConfiguration(pipe, activeConfig);
+    if (setCfgRet !== 0) {
+      console.error('setConfiguration failed', setCfgRet);
+    }
+
+    const iface = activeConfig.interfaces[0];
+    const setIfaceRet = usb.setInterface(pipe, iface);
+    if (setIfaceRet !== 0) {
+      console.error('setInterface failed', setIfaceRet);
+    }
+
+    const claimRet = usb.claimInterface(pipe, iface, true);
+    if (claimRet !== 0) {
+      console.error('claimInterface failed', claimRet);
+    }
+
+    const fd = usb.getFileDescriptor(pipe);
+    console.info('file descriptor', fd);
+
+    const raw = usb.getRawDescriptor(pipe);
+    console.info('raw descriptor length', raw.length);
+
+    const releaseRet = usb.releaseInterface(pipe, iface);
+    if (releaseRet !== 0) {
+      console.error('releaseInterface failed', releaseRet);
+    }
+  } catch (e) {
+    console.error('device transfer failed', e);
+  } finally {
+    const closeRet = usb.closePipe(pipe);
+    if (closeRet !== 0) {
+      console.error('closePipe failed', closeRet);
+    }
+  }
+}
+
+async function run(): Promise<void> {
+  buildDeviceDescriptorControlParams();
+  await openFirstDevice();
+}
+
+run();

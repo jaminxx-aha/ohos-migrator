@@ -4,7 +4,7 @@ import componentUtils from '@ohos.arkui.componentUtils';
 async function measureComponentRect(id: string): Promise<void> {
   try {
     const info = componentUtils.getRectangleById(id);
-    console.info(`component ${id} rect: x=${info.x}, y=${info.y}, width=${info.width}, height=${info.height}`);
+    console.info(`component ${id} rect: x=${info.screenOffset.x}, y=${info.screenOffset.y}, width=${info.size.width}, height=${info.size.height}`);
   } catch (e) {
     console.error('getRectangleById failed', e);
   }

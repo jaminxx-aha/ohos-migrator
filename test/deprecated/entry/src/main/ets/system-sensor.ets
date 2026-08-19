@@ -1,88 +1,184 @@
 import Sensor from '@system.sensor';
 import { AccelerometerResponse, BarometerResponse, CompassResponse, DeviceOrientationResponse, GetOnBodyStateOptions, GyroscopeResponse, HeartRateResponse, LightResponse, OnBodyStateResponse, ProximityResponse, StepCounterResponse, SubscribeBarometerOptions, SubscribeCompassOptions, SubscribeDeviceOrientationOptions, SubscribeGyroscopeOptions, SubscribeHeartRateOptions, SubscribeLightOptions, SubscribeOnBodyStateOptions, SubscribeProximityOptions, SubscribeStepCounterOptions, subscribeAccelerometerOptions } from '@system.sensor';
 
-let _v0: AccelerometerResponse;
-let _v1: subscribeAccelerometerOptions;
-let _v2: CompassResponse;
-let _v3: SubscribeCompassOptions;
-let _v4: ProximityResponse;
-let _v5: SubscribeProximityOptions;
-let _v6: LightResponse;
-let _v7: SubscribeLightOptions;
-let _v8: StepCounterResponse;
-let _v9: SubscribeStepCounterOptions;
-let _v10: BarometerResponse;
-let _v11: SubscribeBarometerOptions;
-let _v12: HeartRateResponse;
-let _v13: SubscribeHeartRateOptions;
-let _v14: OnBodyStateResponse;
-let _v15: SubscribeOnBodyStateOptions;
-let _v16: GetOnBodyStateOptions;
-let _v17: DeviceOrientationResponse;
-let _v18: SubscribeDeviceOrientationOptions;
-let _v19: GyroscopeResponse;
-let _v20: SubscribeGyroscopeOptions;
-let _v21: Sensor;
-declare let _v22: DeviceOrientationResponse; _v22.alpha;
-declare let _v23: DeviceOrientationResponse; _v23.beta;
-declare let _v24: GetOnBodyStateOptions; _v24.complete;
-declare let _v25: CompassResponse; _v25.direction;
-declare let _v26: ProximityResponse; _v26.distance;
-declare let _v27: subscribeAccelerometerOptions; _v27.fail;
-declare let _v28: SubscribeCompassOptions; _v28.fail;
-declare let _v29: SubscribeProximityOptions; _v29.fail;
-declare let _v30: SubscribeLightOptions; _v30.fail;
-declare let _v31: SubscribeStepCounterOptions; _v31.fail;
-declare let _v32: SubscribeBarometerOptions; _v32.fail;
-declare let _v33: SubscribeHeartRateOptions; _v33.fail;
-declare let _v34: SubscribeOnBodyStateOptions; _v34.fail;
-declare let _v35: GetOnBodyStateOptions; _v35.fail;
-declare let _v36: SubscribeDeviceOrientationOptions; _v36.fail;
-declare let _v37: SubscribeGyroscopeOptions; _v37.fail;
-declare let _v38: DeviceOrientationResponse; _v38.gamma;
-Sensor.getOnBodyState({ success: () => {} });
-declare let _v39: HeartRateResponse; _v39.heartRate;
-declare let _v40: LightResponse; _v40.intensity;
-declare let _v41: subscribeAccelerometerOptions; _v41.interval;
-declare let _v42: SubscribeDeviceOrientationOptions; _v42.interval;
-declare let _v43: SubscribeGyroscopeOptions; _v43.interval;
-declare let _v44: BarometerResponse; _v44.pressure;
-declare let _v45: StepCounterResponse; _v45.steps;
-Sensor.subscribeAccelerometer({ interval: '', success: () => {} });
-Sensor.subscribeBarometer({ success: () => {} });
-Sensor.subscribeCompass({ success: () => {} });
-Sensor.subscribeDeviceOrientation({ interval: '', success: () => {} });
-Sensor.subscribeGyroscope({ interval: '', success: () => {} });
-Sensor.subscribeHeartRate({ success: () => {} });
-Sensor.subscribeLight({ success: () => {} });
-Sensor.subscribeOnBodyState({ success: () => {} });
-Sensor.subscribeProximity({ success: () => {} });
-Sensor.subscribeStepCounter({ success: () => {} });
-declare let _v46: subscribeAccelerometerOptions; _v46.success;
-declare let _v47: SubscribeCompassOptions; _v47.success;
-declare let _v48: SubscribeProximityOptions; _v48.success;
-declare let _v49: SubscribeLightOptions; _v49.success;
-declare let _v50: SubscribeStepCounterOptions; _v50.success;
-declare let _v51: SubscribeBarometerOptions; _v51.success;
-declare let _v52: SubscribeHeartRateOptions; _v52.success;
-declare let _v53: SubscribeOnBodyStateOptions; _v53.success;
-declare let _v54: GetOnBodyStateOptions; _v54.success;
-declare let _v55: SubscribeDeviceOrientationOptions; _v55.success;
-declare let _v56: SubscribeGyroscopeOptions; _v56.success;
-Sensor.unsubscribeAccelerometer();
-Sensor.unsubscribeBarometer();
-Sensor.unsubscribeCompass();
-Sensor.unsubscribeDeviceOrientation();
-Sensor.unsubscribeGyroscope();
-Sensor.unsubscribeHeartRate();
-Sensor.unsubscribeLight();
-Sensor.unsubscribeOnBodyState();
-Sensor.unsubscribeProximity();
-Sensor.unsubscribeStepCounter();
-declare let _v57: OnBodyStateResponse; _v57.value;
-declare let _v58: AccelerometerResponse; _v58.x;
-declare let _v59: GyroscopeResponse; _v59.x;
-declare let _v60: AccelerometerResponse; _v60.y;
-declare let _v61: GyroscopeResponse; _v61.y;
-declare let _v62: AccelerometerResponse; _v62.z;
-declare let _v63: GyroscopeResponse; _v63.z;
+function logConfig(name: string, interval: string | undefined, hasSuccess: boolean, hasFail: boolean): void {
+  console.info(name, 'interval=', interval, 'success=', hasSuccess, 'fail=', hasFail);
+}
+
+// Motion tracking: accelerometer, gyroscope, device orientation.
+async function monitorMotion(): Promise<void> {
+  const accelOpts: subscribeAccelerometerOptions = {
+    interval: 'game',
+    success: (data: AccelerometerResponse) => {
+      const ax: number = data.x;
+      const ay: number = data.y;
+      const az: number = data.z;
+      console.info('accel', ax, ay, az);
+    },
+    fail: (data: string, code: number) => {
+      console.error('accel fail', data, code);
+    },
+  };
+  logConfig('accel', accelOpts.interval, accelOpts.success != null, accelOpts.fail != null);
+  Sensor.subscribeAccelerometer(accelOpts);
+
+  const gyroOpts: SubscribeGyroscopeOptions = {
+    interval: 'normal',
+    success: (data: GyroscopeResponse) => {
+      const gx: number = data.x;
+      const gy: number = data.y;
+      const gz: number = data.z;
+      console.info('gyro', gx, gy, gz);
+    },
+    fail: (data: string, code: number) => {
+      console.error('gyro fail', data, code);
+    },
+  };
+  logConfig('gyro', gyroOpts.interval, gyroOpts.success != null, gyroOpts.fail != null);
+  Sensor.subscribeGyroscope(gyroOpts);
+
+  const orientOpts: SubscribeDeviceOrientationOptions = {
+    interval: 'normal',
+    success: (data: DeviceOrientationResponse) => {
+      const alpha: number = data.alpha;
+      const beta: number = data.beta;
+      const gamma: number = data.gamma;
+      console.info('orientation', alpha, beta, gamma);
+    },
+    fail: (data: string, code: number) => {
+      console.error('orientation fail', data, code);
+    },
+  };
+  logConfig('orient', orientOpts.interval, orientOpts.success != null, orientOpts.fail != null);
+  Sensor.subscribeDeviceOrientation(orientOpts);
+}
+
+// Environmental sensors: barometer, compass, light, proximity.
+async function monitorEnvironment(): Promise<void> {
+  const barOpts: SubscribeBarometerOptions = {
+    success: (data: BarometerResponse) => {
+      const pressure: number = data.pressure;
+      console.info('pressure', pressure);
+    },
+    fail: (data: string, code: number) => {
+      console.error('barometer fail', data, code);
+    },
+  };
+  logConfig('bar', undefined, barOpts.success != null, barOpts.fail != null);
+  Sensor.subscribeBarometer(barOpts);
+
+  const compassOpts: SubscribeCompassOptions = {
+    success: (data: CompassResponse) => {
+      const direction: number = data.direction;
+      console.info('direction', direction);
+    },
+    fail: (data: string, code: number) => {
+      console.error('compass fail', data, code);
+    },
+  };
+  logConfig('compass', undefined, compassOpts.success != null, compassOpts.fail != null);
+  Sensor.subscribeCompass(compassOpts);
+
+  const lightOpts: SubscribeLightOptions = {
+    success: (data: LightResponse) => {
+      const intensity: number = data.intensity;
+      console.info('intensity', intensity);
+    },
+    fail: (data: string, code: number) => {
+      console.error('light fail', data, code);
+    },
+  };
+  logConfig('light', undefined, lightOpts.success != null, lightOpts.fail != null);
+  Sensor.subscribeLight(lightOpts);
+
+  const proxOpts: SubscribeProximityOptions = {
+    success: (data: ProximityResponse) => {
+      const distance: number = data.distance;
+      console.info('distance', distance);
+    },
+    fail: (data: string, code: number) => {
+      console.error('proximity fail', data, code);
+    },
+  };
+  logConfig('prox', undefined, proxOpts.success != null, proxOpts.fail != null);
+  Sensor.subscribeProximity(proxOpts);
+}
+
+// Health sensors: heart rate, step counter, on-body state.
+async function monitorHealth(): Promise<void> {
+  const hrOpts: SubscribeHeartRateOptions = {
+    success: (data: HeartRateResponse) => {
+      const heartRate: number = data.heartRate;
+      console.info('heartRate', heartRate);
+    },
+    fail: (data: string, code: number) => {
+      console.error('heartRate fail', data, code);
+    },
+  };
+  logConfig('hr', undefined, hrOpts.success != null, hrOpts.fail != null);
+  Sensor.subscribeHeartRate(hrOpts);
+
+  const stepOpts: SubscribeStepCounterOptions = {
+    success: (data: StepCounterResponse) => {
+      const steps: number = data.steps;
+      console.info('steps', steps);
+    },
+    fail: (data: string, code: number) => {
+      console.error('step fail', data, code);
+    },
+  };
+  logConfig('step', undefined, stepOpts.success != null, stepOpts.fail != null);
+  Sensor.subscribeStepCounter(stepOpts);
+
+  const bodyOpts: SubscribeOnBodyStateOptions = {
+    success: (data: OnBodyStateResponse) => {
+      console.info('onBody change received', JSON.stringify(data));
+    },
+    fail: (data: string, code: number) => {
+      console.error('onBody fail', data, code);
+    },
+  };
+  logConfig('onBody', undefined, bodyOpts.success != null, bodyOpts.fail != null);
+  Sensor.subscribeOnBodyState(bodyOpts);
+
+  // One-shot query for current on-body state.
+  const getOpts: GetOnBodyStateOptions = {
+    success: (data: OnBodyStateResponse) => {
+      console.info('onBodyState query', data.value);
+    },
+    fail: (data: string, code: number) => {
+      console.error('onBodyState query fail', data, code);
+    },
+    complete: () => {
+      console.info('onBodyState query complete');
+    },
+  };
+  logConfig('getOnBody', undefined, getOpts.success != null, getOpts.fail != null);
+  const completeCb = getOpts.complete;
+  if (completeCb) { completeCb(); }
+  Sensor.getOnBodyState(getOpts);
+}
+
+async function run(): Promise<void> {
+  try {
+    await monitorMotion();
+    await monitorEnvironment();
+    await monitorHealth();
+
+    // Tear down all subscriptions after a sample window.
+    Sensor.unsubscribeAccelerometer();
+    Sensor.unsubscribeGyroscope();
+    Sensor.unsubscribeDeviceOrientation();
+    Sensor.unsubscribeBarometer();
+    Sensor.unsubscribeCompass();
+    Sensor.unsubscribeLight();
+    Sensor.unsubscribeProximity();
+    Sensor.unsubscribeHeartRate();
+    Sensor.unsubscribeStepCounter();
+    Sensor.unsubscribeOnBodyState();
+  } catch (e) {
+    console.error('sensor monitoring error', e);
+  }
+}
+
+run();

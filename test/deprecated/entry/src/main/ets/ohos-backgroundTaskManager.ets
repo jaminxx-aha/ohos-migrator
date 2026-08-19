@@ -1,5 +1,6 @@
 import backgroundTaskManager from '@ohos.backgroundTaskManager';
 import wantAgent from '@ohos.app.ability.wantAgent';
+import { WantAgent } from '@ohos.app.ability.wantAgent';
 import type common from '@ohos.app.ability.common';
 
 // Scenario 1: transient (short-lived) background work. Request a short suspension delay
@@ -37,9 +38,9 @@ async function runTransientTask(): Promise<void> {
 async function runContinuousTask(): Promise<void> {
   // In a real app this Context comes from the Ability instance; the probe only needs the
   // symbol to be resolved, so an unresolved placeholder is fine here.
-  const ctx: common.Context = undefined as unknown as common.Context;
+  const ctx: common.Context = new Object() as common.Context;
 
-  let agent: wantAgent.WantAgent | undefined;
+  let agent: WantAgent | undefined;
   try {
     agent = await wantAgent.getWantAgent({
       wants: [{ bundleName: 'com.example.musicapp', abilityName: 'EntryAbility' }],
@@ -77,8 +78,7 @@ const supportedModes: backgroundTaskManager.BackgroundMode[] = [
   backgroundTaskManager.BackgroundMode.TASK_KEEPING,
 ];
 // Reference the enum namespace itself so the deprecated BackgroundMode symbol is exercised.
-const Mode = backgroundTaskManager.BackgroundMode;
-console.info(`app may use ${supportedModes.length} background modes (first=${Mode.AUDIO_PLAYBACK})`);
+console.info(`app may use ${supportedModes.length} background modes (first=${backgroundTaskManager.BackgroundMode.AUDIO_PLAYBACK})`);
 
 async function run(): Promise<void> {
   await runTransientTask();

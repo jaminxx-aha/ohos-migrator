@@ -9,11 +9,23 @@ import type { GesturePath } from '@ohos.accessibility.GesturePath';
 // constructors are themselves deprecated since 12 and are intentionally not
 // exercised here; the gesture path is built structurally instead.
 
+interface TapGesturePoint {
+  positionX: number;
+  positionY: number;
+}
+
+interface TapGesturePath {
+  durationTime: number;
+  points: Array<TapGesturePoint>;
+}
+
 function buildTapPath(x: number, y: number, duration: number): GesturePath {
-  return {
+  const point: TapGesturePoint = { positionX: x, positionY: y };
+  const path: TapGesturePath = {
     durationTime: duration,
-    points: [{ positionX: x, positionY: y }],
-  } as unknown as GesturePath;
+    points: [point],
+  };
+  return path as Object as GesturePath;
 }
 
 // Restrict the events we receive to a known set of target bundles.
@@ -121,7 +133,7 @@ class ScreenReaderExtension extends AccessibilityExtensionAbility {
 
   onAccessibilityEvent(event: AccessibilityEvent): void {
     super.onAccessibilityEvent(event);
-    handleAccessibilityEvent(this.context).catch((e) => console.error('event handling failed', e));
+    handleAccessibilityEvent(this.context).catch((e: Error) => console.error('event handling failed', e));
   }
 
   onKeyEvent(keyEvent: KeyEvent): boolean {

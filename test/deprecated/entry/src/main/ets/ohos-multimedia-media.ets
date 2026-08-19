@@ -1,91 +1,167 @@
 import media from '@ohos.multimedia.media';
 
-declare let _v0: media.AVRecorderConfig; _v0.location;
-declare let _v1: media.AVRecorderConfig; _v1.rotation;
-media.AudioEncoder;
-media.AudioEncoder.AAC_LC;
-media.AudioEncoder.AMR_NB;
-media.AudioEncoder.AMR_WB;
-media.AudioEncoder.DEFAULT;
-media.AudioEncoder.HE_AAC;
-media.AudioOutputFormat;
-media.AudioOutputFormat.AAC_ADTS;
-media.AudioOutputFormat.AMR_NB;
-media.AudioOutputFormat.AMR_WB;
-media.AudioOutputFormat.DEFAULT;
-media.AudioOutputFormat.MPEG_4;
-let _v2: media.AudioPlayer;
-declare let _v3: media.AudioPlayer; _v3.audioInterruptMode;
-declare let _v4: media.AudioPlayer; _v4.currentTime;
-declare let _v5: media.AudioPlayer; _v5.duration;
-declare let _v6: media.AudioPlayer; _v6.fdSrc;
-declare let _v7: media.AudioPlayer; _v7.getTrackDescription();
-declare let _v8: media.AudioPlayer; _v8.loop;
-declare let _v9: media.AudioPlayer; _v9.on('bufferingUpdate', () => {});
-declare let _v10: media.AudioPlayer; _v10.pause();
-declare let _v11: media.AudioPlayer; _v11.play();
-declare let _v12: media.AudioPlayer; _v12.release();
-declare let _v13: media.AudioPlayer; _v13.reset();
-declare let _v14: media.AudioPlayer; _v14.seek(0);
-declare let _v15: media.AudioPlayer; _v15.setVolume(0);
-declare let _v16: media.AudioPlayer; _v16.src;
-declare let _v17: media.AudioPlayer; _v17.state;
-declare let _v18: media.AudioPlayer; _v18.stop();
-let _v19: media.AudioRecorder;
-declare let _v20: media.AudioRecorder; _v20.on('prepare', () => {});
-declare let _v21: media.AudioRecorder; _v21.pause();
-declare let _v22: media.AudioRecorder; _v22.prepare({ uri: '' });
-declare let _v23: media.AudioRecorder; _v23.release();
-declare let _v24: media.AudioRecorder; _v24.reset();
-declare let _v25: media.AudioRecorder; _v25.resume();
-declare let _v26: media.AudioRecorder; _v26.start();
-declare let _v27: media.AudioRecorder; _v27.stop();
-let _v28: media.AudioRecorderConfig;
-declare let _v29: media.AudioRecorderConfig; _v29.audioEncodeBitRate;
-declare let _v30: media.AudioRecorderConfig; _v30.audioEncoder;
-declare let _v31: media.AudioRecorderConfig; _v31.audioEncoderMime;
-declare let _v32: media.AudioRecorderConfig; _v32.audioSampleRate;
-declare let _v33: media.AudioRecorderConfig; _v33.fileFormat;
-declare let _v34: media.AudioRecorderConfig; _v34.format;
-declare let _v35: media.AudioRecorderConfig; _v35.location;
-declare let _v36: media.AudioRecorderConfig; _v36.numberOfChannels;
-declare let _v37: media.AudioRecorderConfig; _v37.uri;
-let _v38: media.AudioState;
-media.MediaErrorCode;
-media.MediaErrorCode.MSERR_INVALID_STATE;
-media.MediaErrorCode.MSERR_INVALID_VAL;
-media.MediaErrorCode.MSERR_IO;
-media.MediaErrorCode.MSERR_NO_MEMORY;
-media.MediaErrorCode.MSERR_OK;
-media.MediaErrorCode.MSERR_OPERATION_NOT_PERMIT;
-media.MediaErrorCode.MSERR_SERVICE_DIED;
-media.MediaErrorCode.MSERR_TIMEOUT;
-media.MediaErrorCode.MSERR_UNKNOWN;
-media.MediaErrorCode.MSERR_UNSUPPORTED;
-let _v39: media.VideoPlayState;
-let _v40: media.VideoPlayer;
-declare let _v41: media.VideoPlayer; _v41.audioInterruptMode;
-declare let _v42: media.VideoPlayer; _v42.currentTime;
-declare let _v43: media.VideoPlayer; _v43.duration;
-declare let _v44: media.VideoPlayer; _v44.fdSrc;
-declare let _v45: media.VideoPlayer; _v45.getTrackDescription();
-declare let _v46: media.VideoPlayer; _v46.height;
-declare let _v47: media.VideoPlayer; _v47.loop;
-declare let _v48: media.VideoPlayer; _v48.on('playbackCompleted', () => {});
-declare let _v49: media.VideoPlayer; _v49.pause();
-declare let _v50: media.VideoPlayer; _v50.play();
-declare let _v51: media.VideoPlayer; _v51.prepare();
-declare let _v52: media.VideoPlayer; _v52.release();
-declare let _v53: media.VideoPlayer; _v53.reset();
-declare let _v54: media.VideoPlayer; _v54.seek(0);
-declare let _v55: media.VideoPlayer; _v55.setDisplaySurface('');
-declare let _v56: media.VideoPlayer; _v56.setSpeed(0);
-declare let _v57: media.VideoPlayer; _v57.setVolume(0);
-declare let _v58: media.VideoPlayer; _v58.state;
-declare let _v59: media.VideoPlayer; _v59.stop();
-declare let _v60: media.VideoPlayer; _v60.url;
-declare let _v61: media.VideoPlayer; _v61.videoScaleType;
-declare let _v62: media.VideoPlayer; _v62.width;
-media.createAudioPlayer();
-media.createAudioRecorder();
-media.createVideoPlayer();
+// Scenario 1: Build deprecated recorder config objects (exercises config field reads + enum members).
+function buildAudioRecorderConfig(): media.AudioRecorderConfig {
+  const cfg: media.AudioRecorderConfig = {
+    audioEncoder: media.AudioEncoder.AAC_LC,
+    audioEncodeBitRate: 128000,
+    audioSampleRate: 44100,
+    numberOfChannels: 2,
+    format: media.AudioOutputFormat.MPEG_4,
+    fileFormat: media.ContainerFormatType.CFT_MPEG_4,
+    audioEncoderMime: media.CodecMimeType.AUDIO_AAC,
+    uri: 'fd://8',
+    location: { latitude: 31.23, longitude: 121.47 },
+  };
+  // Touch the remaining deprecated enum members for coverage.
+  const nb = media.AudioEncoder.AMR_NB;
+  const wb = media.AudioEncoder.AMR_WB;
+  const def = media.AudioEncoder.DEFAULT;
+  const he = media.AudioEncoder.HE_AAC;
+  const adts = media.AudioOutputFormat.AAC_ADTS;
+  const amrNb = media.AudioOutputFormat.AMR_NB;
+  const amrWb = media.AudioOutputFormat.AMR_WB;
+  const outFmtDef = media.AudioOutputFormat.DEFAULT;
+  void nb; void wb; void def; void he; void adts; void amrNb; void amrWb; void outFmtDef;
+  void cfg.audioEncoder;
+  void cfg.audioEncodeBitRate;
+  void cfg.audioSampleRate;
+  void cfg.numberOfChannels;
+  void cfg.format;
+  void cfg.fileFormat;
+  void cfg.audioEncoderMime;
+  void cfg.uri;
+  void cfg.location;
+  return cfg;
+}
+
+function buildAVRecorderConfig(): media.AVRecorderConfig {
+  const profile: media.AVRecorderProfile = {
+    audioBitrate: 128000,
+    audioChannels: 2,
+    audioCodec: media.CodecMimeType.AUDIO_AAC,
+    audioSampleRate: 44100,
+    fileFormat: media.ContainerFormatType.CFT_MPEG_4,
+    videoBitrate: 2000000,
+    videoFrameHeight: 1080,
+    videoFrameWidth: 1920,
+  };
+  const cfg: media.AVRecorderConfig = {
+    profile: profile,
+    url: 'fd://9',
+    rotation: 90,
+    location: { latitude: 31.23, longitude: 121.47 },
+  };
+  void cfg.rotation;
+  void cfg.location;
+  return cfg;
+}
+
+// Scenario 2: Play a short audio clip end-to-end using the deprecated AudioPlayer.
+async function playAudioClip(): Promise<void> {
+  const player = media.createAudioPlayer();
+  try {
+    player.on('bufferingUpdate', (_info: number, _value: number) => { /* buffering progress */ });
+    player.src = 'fd://5';
+    player.fdSrc = { fd: 5, offset: 0, length: 0 };
+    player.loop = true;
+    player.setVolume(0.8);
+    player.seek(1000);
+    player.play();
+    const tracks = await player.getTrackDescription();
+    void tracks;
+    const pos = player.currentTime;
+    const dur = player.duration;
+    const st = player.state;
+    const mode = player.audioInterruptMode;
+    void pos; void dur; void st; void mode;
+    player.pause();
+    player.reset();
+    player.stop();
+  } catch (e) {
+    console.error('playAudioClip failed', e);
+  } finally {
+    player.release();
+  }
+}
+
+// Scenario 3: Record an audio note using the deprecated AudioRecorder.
+async function recordAudioNote(): Promise<void> {
+  const recorder = media.createAudioRecorder();
+  try {
+    recorder.on('prepare', () => { /* prepared */ });
+    const cfg = buildAudioRecorderConfig();
+    recorder.prepare(cfg);
+    recorder.start();
+    recorder.pause();
+    recorder.resume();
+    recorder.stop();
+    recorder.reset();
+  } catch (e) {
+    console.error('recordAudioNote failed', e);
+  } finally {
+    recorder.release();
+  }
+}
+
+// Scenario 4: Play back a video using the deprecated VideoPlayer.
+async function playbackVideo(): Promise<void> {
+  const player = await media.createVideoPlayer();
+  try {
+    player.on('playbackCompleted', () => { /* finished */ });
+    player.url = 'fd://7';
+    player.fdSrc = { fd: 7, offset: 0, length: 0 };
+    player.loop = false;
+    await player.setDisplaySurface('surface-001');
+    await player.setSpeed(0);
+    player.setVolume(0.5);
+    await player.prepare();
+    player.play();
+    player.seek(2000);
+    const tracks = await player.getTrackDescription();
+    void tracks;
+    const pos = player.currentTime;
+    const dur = player.duration;
+    const w = player.width;
+    const h = player.height;
+    const st = player.state;
+    const scale = player.videoScaleType;
+    const mode = player.audioInterruptMode;
+    void pos; void dur; void w; void h; void st; void scale; void mode;
+    player.pause();
+    player.reset();
+    player.stop();
+  } catch (e) {
+    console.error('playbackVideo failed', e);
+  } finally {
+    player.release();
+  }
+}
+
+// Scenario 5: Inspect deprecated media error codes (read-only enum coverage).
+function inspectMediaErrors(): void {
+  const codes = [
+    media.MediaErrorCode.MSERR_INVALID_STATE,
+    media.MediaErrorCode.MSERR_INVALID_VAL,
+    media.MediaErrorCode.MSERR_IO,
+    media.MediaErrorCode.MSERR_NO_MEMORY,
+    media.MediaErrorCode.MSERR_OK,
+    media.MediaErrorCode.MSERR_OPERATION_NOT_PERMIT,
+    media.MediaErrorCode.MSERR_SERVICE_DIED,
+    media.MediaErrorCode.MSERR_TIMEOUT,
+    media.MediaErrorCode.MSERR_UNKNOWN,
+    media.MediaErrorCode.MSERR_UNSUPPORTED,
+  ];
+  void codes;
+  // media.MediaErrorCode (enum ref) is covered by the member accesses above.
+}
+
+async function run(): Promise<void> {
+  buildAVRecorderConfig();
+  inspectMediaErrors();
+  await playAudioClip();
+  await recordAudioNote();
+  await playbackVideo();
+}
+
+run();

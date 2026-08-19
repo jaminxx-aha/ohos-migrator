@@ -1,12 +1,40 @@
 import Package from '@system.package';
 import { CheckPackageHasInstalledOptions, CheckPackageHasInstalledResponse } from '@system.package';
 
-let _v0: CheckPackageHasInstalledResponse;
-let _v1: CheckPackageHasInstalledOptions;
-let _v2: Package;
-declare let _v3: CheckPackageHasInstalledOptions; _v3.bundleName;
-declare let _v4: CheckPackageHasInstalledOptions; _v4.complete;
-declare let _v5: CheckPackageHasInstalledOptions; _v5.fail;
-Package.hasInstalled({ bundleName: '' });
-declare let _v6: CheckPackageHasInstalledResponse; _v6.result;
-declare let _v7: CheckPackageHasInstalledOptions; _v7.success;
+// Scenario: check whether a companion native app is installed before deeplinking into it.
+async function checkCompanionAppInstalled(bundleName: string): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const options: CheckPackageHasInstalledOptions = {
+      bundleName: bundleName,
+      success: (data: CheckPackageHasInstalledResponse) => {
+        const installed: boolean = data.result;
+        console.info(`companion app ${bundleName} installed=${installed}`);
+        resolve(installed);
+      },
+      fail: (data: Object, code: number) => {
+        console.error(`hasInstalled failed bundle=${bundleName} code=${code}`, data);
+        resolve(false);
+      },
+      complete: () => {
+        console.info(`hasInstalled check finished for ${bundleName}`);
+      },
+    };
+    // Exercise deprecated option/response fields directly so the compiler records each usage.
+    const bn: string = options.bundleName;
+    const successCb = options.success;
+    const failCb = options.fail;
+    const completeCb = options.complete;
+    console.info(`probe options bundle=${bn} hasSuccess=${successCb != null} hasFail=${failCb != null} hasComplete=${completeCb != null}`);
+    Package.hasInstalled(options);
+  });
+}
+
+async function run(): Promise<void> {
+  const bundle = 'com.example.companionapp';
+  const installed = await checkCompanionAppInstalled(bundle);
+  if (!installed) {
+    console.warn(`companion app ${bundle} not present, falling back to in-app flow`);
+  }
+}
+
+run();

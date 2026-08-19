@@ -5,29 +5,29 @@ import abilityDelegatorRegistry from '@ohos.application.abilityDelegatorRegistry
 
 type LifecycleState = abilityDelegatorRegistry.AbilityLifecycleState;
 
-const STATE_LABELS: Record<LifecycleState, string> = {
-  [abilityDelegatorRegistry.AbilityLifecycleState.UNINITIALIZED]: 'ability has not been initialized yet',
-  [abilityDelegatorRegistry.AbilityLifecycleState.CREATE]: 'ability has just been created',
-  [abilityDelegatorRegistry.AbilityLifecycleState.FOREGROUND]: 'ability is about to enter the foreground',
-  [abilityDelegatorRegistry.AbilityLifecycleState.BACKGROUND]: 'ability is moving to the background',
-  [abilityDelegatorRegistry.AbilityLifecycleState.DESTROY]: 'ability is being destroyed',
-};
+const STATE_LABELS: Map<LifecycleState, string> = new Map<LifecycleState, string>([
+  [abilityDelegatorRegistry.AbilityLifecycleState.UNINITIALIZED, 'ability has not been initialized yet'],
+  [abilityDelegatorRegistry.AbilityLifecycleState.CREATE, 'ability has just been created'],
+  [abilityDelegatorRegistry.AbilityLifecycleState.FOREGROUND, 'ability is about to enter the foreground'],
+  [abilityDelegatorRegistry.AbilityLifecycleState.BACKGROUND, 'ability is moving to the background'],
+  [abilityDelegatorRegistry.AbilityLifecycleState.DESTROY, 'ability is being destroyed'],
+]);
 
 async function runDelegatorScenario(): Promise<void> {
   const delegator = abilityDelegatorRegistry.getAbilityDelegator();
   const args = abilityDelegatorRegistry.getArguments();
 
-  const testCase: string = args.testCase ?? '<unknown>';
+  const testCase: string = args.testCaseNames ?? '<unknown>';
   console.info(`Running delegator scenario for test case: ${testCase}`);
 
-  for (const key of Object.keys(STATE_LABELS) as LifecycleState[]) {
+  STATE_LABELS.forEach((label: string, key: LifecycleState) => {
     try {
       const numericKey: number = key as number;
-      console.info(`Lifecycle ${numericKey} -> ${STATE_LABELS[key]}`);
+      console.info(`Lifecycle ${numericKey} -> ${label}`);
     } catch (e) {
       console.error('Failed to describe lifecycle state', e);
     }
-  }
+  });
 
   try {
     console.info('Delegator and args retrieved; lifecycle states enumerated.');

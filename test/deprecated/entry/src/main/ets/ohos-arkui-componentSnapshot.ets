@@ -18,7 +18,7 @@ async function captureComponentById(componentId: string): Promise<image.PixelMap
     return pixelMap;
   } catch (e) {
     console.error('componentSnapshot.get failed for ' + componentId, e);
-    throw e;
+    throw new Error(String(e));
   }
 }
 
@@ -41,7 +41,7 @@ async function captureBuilderSnapshot(): Promise<image.PixelMap> {
     return pixelMap;
   } catch (e) {
     console.error('componentSnapshot.createFromBuilder failed', e);
-    throw e;
+    throw new Error(String(e));
   }
 }
 

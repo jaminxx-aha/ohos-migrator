@@ -1,10 +1,11 @@
 import wantAgent from '@ohos.app.ability.wantAgent';
+import { WantAgent } from '@ohos.app.ability.wantAgent';
 import Want from '@ohos.app.ability.Want';
 
 // Scenario: build a WantAgent that launches a specific ability when a notification is tapped,
 // using the legacy (since-11) WantAgentInfo fields operationType and wantAgentFlags.
 
-async function buildLaunchAbilityAgent(): Promise<wantAgent.WantAgent> {
+async function buildLaunchAbilityAgent(): Promise<WantAgent> {
   const targetWant: Want = {
     bundleName: 'com.example.notifications',
     abilityName: 'DetailAbility',
@@ -34,7 +35,7 @@ async function buildLaunchAbilityAgent(): Promise<wantAgent.WantAgent> {
     return agent;
   } catch (e) {
     console.error('failed to build launch-ability WantAgent', e);
-    throw e;
+    throw new Error(String(e));
   }
 }
 

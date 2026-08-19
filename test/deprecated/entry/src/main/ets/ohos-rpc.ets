@@ -1,110 +1,231 @@
 import rpc from '@ohos.rpc';
 
-rpc.Ashmem.createAshmem('', 0);
-rpc.Ashmem.createAshmemFromExisting;
-declare let _v0: rpc.Ashmem; _v0.mapAshmem(0);
-declare let _v1: rpc.Ashmem; _v1.mapReadAndWriteAshmem();
-declare let _v2: rpc.Ashmem; _v2.mapReadOnlyAshmem();
-declare let _v3: rpc.Ashmem; _v3.readAshmem(0, 0);
-declare let _v4: rpc.Ashmem; _v4.readFromAshmem(0, 0);
-declare let _v5: rpc.Ashmem; _v5.setProtection(0);
-declare let _v6: rpc.Ashmem; _v6.writeAshmem([], 0, 0);
-declare let _v7: rpc.Ashmem; _v7.writeToAshmem([], 0, 0);
-rpc.IPCSkeleton.flushCommands;
-rpc.IPCSkeleton.setCallingIdentity('');
-declare let _v8: rpc.IRemoteObject; _v8.addDeathRecipient;
-declare let _v9: rpc.IRemoteObject; _v9.getInterfaceDescriptor();
-declare let _v10: rpc.IRemoteObject; _v10.queryLocalInterface('');
-declare let _v11: rpc.IRemoteObject; _v11.removeDeathRecipient;
-declare let _v12: rpc.IRemoteObject; _v12.sendRequest;
-rpc.MessageParcel;
-rpc.MessageParcel.closeFileDescriptor(0);
-declare let _v13: rpc.MessageParcel; _v13.containFileDescriptors();
-rpc.MessageParcel.create();
-rpc.MessageParcel.dupFileDescriptor(0);
-declare let _v14: rpc.MessageParcel; _v14.getCapacity();
-declare let _v15: rpc.MessageParcel; _v15.getRawDataCapacity();
-declare let _v16: rpc.MessageParcel; _v16.getReadPosition();
-declare let _v17: rpc.MessageParcel; _v17.getReadableBytes();
-declare let _v18: rpc.MessageParcel; _v18.getSize();
-declare let _v19: rpc.MessageParcel; _v19.getWritableBytes();
-declare let _v20: rpc.MessageParcel; _v20.getWritePosition();
-declare let _v21: rpc.MessageParcel; _v21.readAshmem();
-declare let _v22: rpc.MessageParcel; _v22.readBoolean();
-declare let _v23: rpc.MessageParcel; _v23.readBooleanArray();
-declare let _v24: rpc.MessageParcel; _v24.readByte();
-declare let _v25: rpc.MessageParcel; _v25.readByteArray();
-declare let _v26: rpc.MessageParcel; _v26.readChar();
-declare let _v27: rpc.MessageParcel; _v27.readCharArray();
-declare let _v28: rpc.MessageParcel; _v28.readDouble();
-declare let _v29: rpc.MessageParcel; _v29.readDoubleArray();
-declare let _v30: rpc.MessageParcel; _v30.readException();
-declare let _v31: rpc.MessageParcel; _v31.readFileDescriptor();
-declare let _v32: rpc.MessageParcel; _v32.readFloat();
-declare let _v33: rpc.MessageParcel; _v33.readFloatArray();
-declare let _v34: rpc.MessageParcel; _v34.readInt();
-declare let _v35: rpc.MessageParcel; _v35.readIntArray();
-declare let _v36: rpc.MessageParcel; _v36.readInterfaceToken();
-declare let _v37: rpc.MessageParcel; _v37.readLong();
-declare let _v38: rpc.MessageParcel; _v38.readLongArray();
-declare let _v39: rpc.MessageParcel; _v39.readRawData(0);
-declare let _v40: rpc.MessageParcel; _v40.readRemoteObject();
-declare let _v41: rpc.MessageParcel; _v41.readRemoteObjectArray();
-declare let _v42: rpc.MessageParcel; _v42.readSequenceable;
-declare let _v43: rpc.MessageParcel; _v43.readSequenceableArray([]);
-declare let _v44: rpc.MessageParcel; _v44.readShort();
-declare let _v45: rpc.MessageParcel; _v45.readShortArray();
-declare let _v46: rpc.MessageParcel; _v46.readString();
-declare let _v47: rpc.MessageParcel; _v47.readStringArray();
-declare let _v48: rpc.MessageParcel; _v48.reclaim();
-declare let _v49: rpc.MessageParcel; _v49.rewindRead(0);
-declare let _v50: rpc.MessageParcel; _v50.rewindWrite(0);
-declare let _v51: rpc.MessageParcel; _v51.setCapacity(0);
-declare let _v52: rpc.MessageParcel; _v52.setSize(0);
-declare let _v53: rpc.MessageParcel; _v53.writeAshmem;
-declare let _v54: rpc.MessageParcel; _v54.writeBoolean(false);
-declare let _v55: rpc.MessageParcel; _v55.writeBooleanArray([]);
-declare let _v56: rpc.MessageParcel; _v56.writeByte(0);
-declare let _v57: rpc.MessageParcel; _v57.writeByteArray([]);
-declare let _v58: rpc.MessageParcel; _v58.writeChar(0);
-declare let _v59: rpc.MessageParcel; _v59.writeCharArray([]);
-declare let _v60: rpc.MessageParcel; _v60.writeDouble(0);
-declare let _v61: rpc.MessageParcel; _v61.writeDoubleArray([]);
-declare let _v62: rpc.MessageParcel; _v62.writeFileDescriptor(0);
-declare let _v63: rpc.MessageParcel; _v63.writeFloat(0);
-declare let _v64: rpc.MessageParcel; _v64.writeFloatArray([]);
-declare let _v65: rpc.MessageParcel; _v65.writeInt(0);
-declare let _v66: rpc.MessageParcel; _v66.writeIntArray([]);
-declare let _v67: rpc.MessageParcel; _v67.writeInterfaceToken('');
-declare let _v68: rpc.MessageParcel; _v68.writeLong(0);
-declare let _v69: rpc.MessageParcel; _v69.writeLongArray([]);
-declare let _v70: rpc.MessageParcel; _v70.writeNoException();
-declare let _v71: rpc.MessageParcel; _v71.writeRawData([], 0);
-declare let _v72: rpc.MessageParcel; _v72.writeRemoteObject;
-declare let _v73: rpc.MessageParcel; _v73.writeRemoteObjectArray([]);
-declare let _v74: rpc.MessageParcel; _v74.writeSequenceable;
-declare let _v75: rpc.MessageParcel; _v75.writeSequenceableArray([]);
-declare let _v76: rpc.MessageParcel; _v76.writeShort(0);
-declare let _v77: rpc.MessageParcel; _v77.writeShortArray([]);
-declare let _v78: rpc.MessageParcel; _v78.writeString('');
-declare let _v79: rpc.MessageParcel; _v79.writeStringArray([]);
-declare let _v80: rpc.MessageSequence; _v80.readRawData(0);
-declare let _v81: rpc.MessageSequence; _v81.writeRawData([], 0);
-declare let _v82: rpc.RemoteObject; _v82.attachLocalInterface;
-declare let _v83: rpc.RemoteObject; _v83.getInterfaceDescriptor();
-declare let _v84: rpc.RemoteObject; _v84.onRemoteRequest;
-declare let _v85: rpc.RemoteObject; _v85.queryLocalInterface('');
-declare let _v86: rpc.RemoteObject; _v86.sendRequest;
-declare let _v87: rpc.RemoteProxy; _v87.addDeathRecipient;
-declare let _v88: rpc.RemoteProxy; _v88.getInterfaceDescriptor();
-declare let _v89: rpc.RemoteProxy; _v89.queryLocalInterface('');
-declare let _v90: rpc.RemoteProxy; _v90.removeDeathRecipient;
-declare let _v91: rpc.RemoteProxy; _v91.sendRequest;
-let _v92: rpc.SendRequestResult;
-declare let _v93: rpc.SendRequestResult; _v93.code;
-declare let _v94: rpc.SendRequestResult; _v94.data;
-declare let _v95: rpc.SendRequestResult; _v95.errCode;
-declare let _v96: rpc.SendRequestResult; _v96.reply;
-let _v97: rpc.Sequenceable;
-declare let _v98: rpc.Sequenceable; _v98.marshalling;
-declare let _v99: rpc.Sequenceable; _v99.unmarshalling;
+// A small Sequenceable payload exchanged over IPC.
+class DemoPayload implements rpc.Sequenceable {
+  id: number = 0;
+  name: string = '';
+
+  marshalling(dataOut: rpc.MessageParcel): boolean {
+    dataOut.writeInt(this.id);
+    dataOut.writeString(this.name);
+    return true;
+  }
+
+  unmarshalling(dataIn: rpc.MessageParcel): boolean {
+    this.id = dataIn.readInt();
+    this.name = dataIn.readString();
+    return true;
+  }
+}
+
+// A server-side stub: subclasses RemoteObject and handles requests.
+class DemoService extends rpc.RemoteObject {
+  constructor() {
+    super('ohos.rpc.IDemoService');
+  }
+}
+
+// A client-side proxy: subclasses RemoteProxy to talk to the stub.
+class DemoProxy extends rpc.RemoteProxy {
+  constructor(remote: rpc.IRemoteObject) {
+    super();
+  }
+}
+
+const deathRecipient: rpc.DeathRecipient = {
+  onRemoteDied(): void {
+    console.error('remote object died');
+  }
+};
+
+// Exercises the Ashmem shared-memory APIs as an IPC buffer would.
+async function exerciseAshmem(): Promise<void> {
+  try {
+    const ash = rpc.Ashmem.createAshmem('ipc-shared-buf', 256);
+    ash.mapAshmem(rpc.Ashmem.PROT_READ | rpc.Ashmem.PROT_WRITE);
+    ash.setProtection(rpc.Ashmem.PROT_READ | rpc.Ashmem.PROT_WRITE);
+    ash.writeAshmem([72, 101, 108, 108, 111], 5, 0);
+    const written = ash.readAshmem(5, 0);
+
+    const ash2 = rpc.Ashmem.createAshmemFromExisting(ash);
+    ash2.mapReadAndWriteAshmem();
+    ash2.writeToAshmem([33, 34, 35, 36], 4, 0);
+    const read = ash2.readFromAshmem(4, 0);
+    ash2.mapReadOnlyAshmem();
+  } catch (e) {
+    console.error('ashmem round trip failed', e);
+  }
+}
+
+// Drives every deprecated MessageParcel read/write plus static fd helpers.
+async function exerciseMessageParcel(ro: rpc.IRemoteObject, ash: rpc.Ashmem): Promise<void> {
+  const data = rpc.MessageParcel.create();
+  try {
+    data.writeInterfaceToken('ohos.rpc.IDemoService');
+    data.writeInt(1001);
+    data.writeLong(9_000_000_000);
+    data.writeShort(32000);
+    data.writeByte(0xAB);
+    data.writeChar(0x41);
+    data.writeBoolean(true);
+    data.writeFloat(1.25);
+    data.writeDouble(3.14159265);
+    data.writeString('ping');
+    data.writeIntArray([1, 2, 3]);
+    data.writeLongArray([10, 20, 30]);
+    data.writeShortArray([100, 200]);
+    data.writeByteArray([0xDE, 0xAD]);
+    data.writeCharArray([0x41, 0x42]);
+    data.writeBooleanArray([true, false, true]);
+    data.writeFloatArray([0.5, 1.5]);
+    data.writeDoubleArray([1.25, 2.5]);
+    data.writeStringArray(['alpha', 'beta']);
+    data.writeRemoteObject(ro);
+    data.writeRemoteObjectArray([ro]);
+    data.writeAshmem(ash);
+    const payload = new DemoPayload();
+    data.writeSequenceable(payload);
+    data.writeSequenceableArray([payload]);
+    data.writeFileDescriptor(1);
+    data.writeRawData([0x01, 0x02, 0x03, 0x04], 4);
+    data.writeNoException();
+
+    const writePos = data.getWritePosition();
+    const writable = data.getWritableBytes();
+    const cap = data.getCapacity();
+    const rawCap = data.getRawDataCapacity();
+    const sz = data.getSize();
+
+    data.rewindRead(0);
+    const token = data.readInterfaceToken();
+    const code = data.readInt();
+    const longVal = data.readLong();
+    const shortVal = data.readShort();
+    const byteVal = data.readByte();
+    const charVal = data.readChar();
+    const boolVal = data.readBoolean();
+    const floatVal = data.readFloat();
+    const doubleVal = data.readDouble();
+    const strVal = data.readString();
+    const ints: number[] = []; data.readIntArray(ints);
+    const longs: number[] = []; data.readLongArray(longs);
+    const shorts: number[] = []; data.readShortArray(shorts);
+    const bytes: number[] = []; data.readByteArray(bytes);
+    const chars: number[] = []; data.readCharArray(chars);
+    const bools: boolean[] = []; data.readBooleanArray(bools);
+    const floats: number[] = []; data.readFloatArray(floats);
+    const doubles: number[] = []; data.readDoubleArray(doubles);
+    const strs: string[] = []; data.readStringArray(strs);
+    const remote = data.readRemoteObject();
+    const remotes: rpc.IRemoteObject[] = []; data.readRemoteObjectArray(remotes);
+    const ashBack = data.readAshmem();
+    const payloadBack = new DemoPayload();
+    data.readSequenceable(payloadBack);
+    const seqArr: rpc.Sequenceable[] = [new DemoPayload()];
+    data.readSequenceableArray(seqArr);
+    const fd = data.readFileDescriptor();
+    const raw = data.readRawData(4);
+
+    const readPos = data.getReadPosition();
+    const readable = data.getReadableBytes();
+    data.readException();
+
+    data.rewindWrite(0);
+    data.setCapacity(512);
+    data.setSize(256);
+    const hasFd = data.containFileDescriptors();
+
+    const dup = rpc.MessageParcel.dupFileDescriptor(1);
+    rpc.MessageParcel.closeFileDescriptor(dup);
+    data.reclaim();
+  } catch (e) {
+    console.error('message parcel exercise failed', e);
+    data.reclaim();
+  }
+}
+
+// Drives the deprecated Sequenceable marshalling/unmarshalling contract.
+async function exerciseSequenceable(): Promise<void> {
+  const parcel = rpc.MessageParcel.create();
+  try {
+    const out: rpc.Sequenceable = new DemoPayload();
+    out.marshalling(parcel);
+    parcel.rewindRead(0);
+    const inn: rpc.Sequenceable = new DemoPayload();
+    inn.unmarshalling(parcel);
+  } catch (e) {
+    console.error('sequenceable exercise failed', e);
+  }
+  parcel.reclaim();
+}
+
+// MessageSequence (the non-deprecated type) still has deprecated raw-data helpers.
+async function exerciseMessageSequenceRawData(): Promise<void> {  const seq = rpc.MessageSequence.create();
+  try {
+    seq.writeRawData([0x10, 0x20, 0x30], 3);
+    const raw = seq.readRawData(3);
+  } catch (e) {
+    console.error('message sequence raw data failed', e);
+  }
+}
+
+// Walks the RemoteObject / IRemoteObject / RemoteProxy lifecycle and IPC skeleton helpers.
+async function exerciseRemoteObjects(): Promise<void> {
+  try {
+    const ro = new DemoService();
+
+    // RemoteObject-specific deprecated members.
+    const broker: rpc.IRemoteBroker = {
+      asObject(): rpc.IRemoteObject {
+        return ro;
+      }
+    };
+    ro.attachLocalInterface(broker, 'ohos.rpc.IDemoService');
+    const descriptor = ro.getInterfaceDescriptor();
+    const local = ro.queryLocalInterface('ohos.rpc.IDemoService');
+    const opts = new rpc.MessageOption(rpc.MessageOption.TF_SYNC);
+    const req = rpc.MessageParcel.create();
+    const rep = rpc.MessageParcel.create();
+    ro.sendRequest(1, req, rep, opts);
+    ro.onRemoteRequest(1, req, rep, opts);
+
+    // IRemoteObject-typed view (exercises the base interface members).
+    const iro: rpc.IRemoteObject = ro;
+    iro.addDeathRecipient(deathRecipient, 0);
+    iro.removeDeathRecipient(deathRecipient, 0);
+    const iface = iro.getInterfaceDescriptor();
+    const localIface = iro.queryLocalInterface('ohos.rpc.IDemoService');
+    const sent = iro.sendRequest(1, req, rep, opts);
+
+    // RemoteProxy (client side): same surface plus the async sendRequest result.
+    const proxy = new DemoProxy(iro);
+    proxy.addDeathRecipient(deathRecipient, 0);
+    proxy.removeDeathRecipient(deathRecipient, 0);
+    const proxyDesc = proxy.getInterfaceDescriptor();
+    const proxyLocal = proxy.queryLocalInterface('ohos.rpc.IDemoService');
+    proxy.sendRequest(1, req, rep, opts, (err: Error, result: rpc.SendRequestResult) => {
+      const rc = result.code;
+      const rd = result.data;
+      const rp = result.reply;
+      const ec = result.errCode;
+    });
+
+    // IPCSkeleton helpers.
+    rpc.IPCSkeleton.flushCommands(iro);
+    rpc.IPCSkeleton.setCallingIdentity('caller-identity');
+  } catch (e) {
+    console.error('remote object exercise failed', e);
+  }
+}
+
+async function run(): Promise<void> {
+  await exerciseAshmem();
+  const ro: rpc.IRemoteObject = new DemoService();
+  const ash = rpc.Ashmem.createAshmem('parcel-buf', 128);
+  await exerciseMessageParcel(ro, ash);
+  await exerciseSequenceable();
+  await exerciseMessageSequenceRawData();
+  await exerciseRemoteObjects();
+}
+
+run();

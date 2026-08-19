@@ -1,4 +1,5 @@
 import formProvider from '@ohos.application.formProvider';
+import formBindingData from '@ohos.application.formBindingData';
 
 const WEATHER_FORM_ID = '1001';
 const TODO_FORM_ID = '1002';
@@ -22,7 +23,9 @@ async function refreshWeatherWidgetNext(): Promise<void> {
 
 async function publishTodoWidgetUpdate(): Promise<void> {
   try {
-    const data = { data: { title: 'Buy groceries', done: false, due: '2026-08-17T18:00:00' } };
+    const data: formBindingData.FormBindingData = {
+      data: 'Buy groceries;due:2026-08-17T18:00:00;done:false'
+    };
     await new Promise<void>((resolve, reject) => {
       formProvider.updateForm(TODO_FORM_ID, data, (err) => {
         if (err) {

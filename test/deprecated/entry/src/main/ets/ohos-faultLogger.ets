@@ -1,19 +1,72 @@
 import FaultLogger from '@ohos.faultLogger';
 
-// @ohos.faultLogger.FaultLogger: module-move (kit-level); covered by the import line
-let _v0: FaultLogger.FaultLogInfo;
-declare let _v1: FaultLogger.FaultLogInfo; _v1.fullLog;
-declare let _v2: FaultLogger.FaultLogInfo; _v2.module;
-declare let _v3: FaultLogger.FaultLogInfo; _v3.pid;
-declare let _v4: FaultLogger.FaultLogInfo; _v4.reason;
-declare let _v5: FaultLogger.FaultLogInfo; _v5.summary;
-declare let _v6: FaultLogger.FaultLogInfo; _v6.timestamp;
-declare let _v7: FaultLogger.FaultLogInfo; _v7.type;
-declare let _v8: FaultLogger.FaultLogInfo; _v8.uid;
-FaultLogger.FaultType;
-FaultLogger.FaultType.APP_FREEZE;
-FaultLogger.FaultType.CPP_CRASH;
-FaultLogger.FaultType.JS_CRASH;
-FaultLogger.FaultType.NO_SPECIFIC;
-FaultLogger.query(FaultLogger.FaultType.NO_SPECIFIC);
-FaultLogger.querySelfFaultLog(FaultLogger.FaultType.NO_SPECIFIC);
+// Scenario: enumerate every FaultType, then query & querySelfFaultLog to fetch
+// fault log entries and render the contents of a FaultLogInfo record.
+
+const FAULT_TYPES: FaultLogger.FaultType[] = [
+  FaultLogger.FaultType.NO_SPECIFIC,
+  FaultLogger.FaultType.JS_CRASH,
+  FaultLogger.FaultType.CPP_CRASH,
+  FaultLogger.FaultType.APP_FREEZE,
+];
+
+function formatFault(info: FaultLogger.FaultLogInfo): string {
+  return [
+    `pid=${info.pid}`,
+    `uid=${info.uid}`,
+    `type=${info.type}`,
+    `timestamp=${info.timestamp}`,
+    `reason=${info.reason}`,
+    `module=${info.module}`,
+    `summary=${info.summary}`,
+  ].join(' | ') + `\n--- fullLog ---\n${info.fullLog}`;
+}
+
+async function queryFaultsByType(faultType: FaultLogger.FaultType): Promise<FaultLogger.FaultLogInfo[]> {
+  return new Promise((resolve, reject) => {
+    FaultLogger.query(faultType, (err: Error, infos: Array<FaultLogger.FaultLogInfo>) => {
+      if (err) {
+        console.error(`query failed for faultType=${faultType}`, err);
+        reject(err);
+        return;
+      }
+      resolve(infos);
+    });
+  });
+}
+
+async function querySelfFaults(faultType: FaultLogger.FaultType): Promise<FaultLogger.FaultLogInfo[]> {
+  return new Promise((resolve, reject) => {
+    FaultLogger.querySelfFaultLog(faultType, (err: Error, infos: Array<FaultLogger.FaultLogInfo>) => {
+      if (err) {
+        console.error(`querySelfFaultLog failed for faultType=${faultType}`, err);
+        reject(err);
+        return;
+      }
+      resolve(infos);
+    });
+  });
+}
+
+async function dumpRecentFaults(): Promise<void> {
+  try {
+    for (const ft of FAULT_TYPES) {
+      const selfInfos = await querySelfFaults(ft);
+      for (const info of selfInfos) {
+        console.log(`[self ${ft}] ${formatFault(info)}`);
+      }
+      const allInfos = await queryFaultsByType(ft);
+      for (const info of allInfos) {
+        console.log(`[all ${ft}] ${formatFault(info)}`);
+      }
+    }
+  } catch (e) {
+    console.error('dumpRecentFaults failed', e);
+  }
+}
+
+async function run(): Promise<void> {
+  await dumpRecentFaults();
+}
+
+run();

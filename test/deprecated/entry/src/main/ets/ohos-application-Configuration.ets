@@ -4,7 +4,7 @@ import { Configuration } from '@ohos.application.Configuration';
 // locale + color-mode based theming decisions at startup.
 async function resolveStartupConfig(): Promise<void> {
   try {
-    const config: Configuration = new Configuration();
+    const config: Configuration = { language: 'en-US' };
     const language: string | undefined = config.language;
     const colorMode = config.colorMode;
 

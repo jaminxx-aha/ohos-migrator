@@ -1,4 +1,5 @@
 import bundle from '@ohos.bundle';
+import Want from '@ohos.app.ability.Want';
 
 // --- Enum classifiers (bundle module enums, all @deprecated since 9) ---
 
@@ -131,8 +132,9 @@ async function fetchAbilityMetadata(bundleName: string, abilityName: string): Pr
     const icon = await bundle.getAbilityIcon(bundleName, abilityName);
     const appEnabled = await bundle.isApplicationEnabled(bundleName);
     const abilityEnabled = await bundle.isAbilityEnabled(info);
+    const queryWant: Want = { action: 'ohos.want.action.home' };
     const matches = await bundle.queryAbilityByWant(
-      { action: 'ohos.want.action.home' } as Record<string, string>,
+      queryWant,
       bundle.BundleFlag.GET_ABILITY_INFO_WITH_METADATA,
       100,
     );
@@ -158,4 +160,4 @@ async function run(): Promise<void> {
   await fetchAbilityMetadata('com.example.demo', 'EntryAbility');
 }
 
-run().catch((e) => console.error('bundle probe run failed', e));
+run().catch((e: Error) => console.error('bundle probe run failed', e));

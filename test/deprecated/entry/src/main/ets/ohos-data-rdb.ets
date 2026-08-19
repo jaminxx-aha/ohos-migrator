@@ -9,7 +9,7 @@ const STORE_CONFIG: rdb.StoreConfig = {
 STORE_CONFIG.name; // StoreConfig.name (deprecated accessor)
 
 async function openStore(context: Context): Promise<rdb.RdbStore> {
-  return await rdb.getRdbStore(context, STORE_CONFIG); // getRdbStore (deprecated)
+  return await rdb.getRdbStore(context, STORE_CONFIG, 1); // getRdbStore (deprecated)
 }
 
 async function createSchema(store: rdb.RdbStore): Promise<void> {
@@ -24,7 +24,7 @@ async function createSchema(store: rdb.RdbStore): Promise<void> {
 
 // Build a rich predicates chain covering the deprecated query-builder API.
 function buildAdultPredicates(): rdb.RdbPredicates {
-  rdb.RdbPredicates; // RdbPredicates (class ref)
+  // RdbPredicates (class ref) is covered by `new rdb.RdbPredicates(...)` below.
   const p = new rdb.RdbPredicates('USER');
   p.and(); // and
   p.beginWrap(); // beginWrap
@@ -60,7 +60,6 @@ function buildAdultPredicates(): rdb.RdbPredicates {
 }
 
 async function insertUsers(store: rdb.RdbStore): Promise<void> {
-  rdb.ValuesBucket; // ValuesBucket (type ref)
   const alice: rdb.ValuesBucket = { id: 1, name: 'Alice', age: 30, profile: new Uint8Array([1, 2]) };
   const anna: rdb.ValuesBucket = { id: 2, name: 'Anna', age: 25, profile: new Uint8Array([3]) };
   try {
@@ -90,7 +89,6 @@ async function updateAndDelete(store: rdb.RdbStore): Promise<void> {
 }
 
 async function queryUsers(store: rdb.RdbStore): Promise<void> {
-  rdb.ResultSet; // ResultSet (type ref)
   const predicates = buildAdultPredicates();
   try {
     const rs: rdb.ResultSet = await store.query(predicates); // RdbStore.query
@@ -132,10 +130,9 @@ async function consumeResultSet(rs: rdb.ResultSet): Promise<void> {
 }
 
 async function distributedSync(store: rdb.RdbStore): Promise<void> {
-  rdb.SyncMode; // SyncMode (enum ref)
+  // SyncMode / SubscribeType (enum refs) are covered by the member accesses below.
   rdb.SyncMode.SYNC_MODE_PULL; // SyncMode.SYNC_MODE_PULL
   rdb.SyncMode.SYNC_MODE_PUSH; // SyncMode.SYNC_MODE_PUSH
-  rdb.SubscribeType; // SubscribeType (enum ref)
   rdb.SubscribeType.SUBSCRIBE_TYPE_REMOTE; // SubscribeType.SUBSCRIBE_TYPE_REMOTE
   try {
     await store.setDistributedTables(['USER']); // RdbStore.setDistributedTables
@@ -153,7 +150,7 @@ async function distributedSync(store: rdb.RdbStore): Promise<void> {
 async function teardown(context: Context): Promise<void> {
   rdb.deleteRdbStore; // deleteRdbStore (function ref)
   try {
-    await rdb.deleteRdbStore(context, STORE_CONFIG); // deleteRdbStore (deprecated)
+    await rdb.deleteRdbStore(context, STORE_CONFIG.name); // deleteRdbStore (deprecated)
   } catch (e) {
     console.error('teardown failed', e);
   }
@@ -161,7 +158,6 @@ async function teardown(context: Context): Promise<void> {
 
 async function run(context: Context): Promise<void> {
   const store: rdb.RdbStore = await openStore(context); // RdbStore (type ref)
-  rdb.RdbStore; // RdbStore (class ref)
   await createSchema(store);
   await insertUsers(store);
   await updateAndDelete(store);
@@ -170,4 +166,4 @@ async function run(context: Context): Promise<void> {
   await teardown(context);
 }
 
-run(undefined as unknown as Context);
+run(getContext() as Context);

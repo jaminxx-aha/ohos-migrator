@@ -1,36 +1,112 @@
 import window from '@ohos.window';
 
-declare let _v0: window.Window; _v0.destroy();
-declare let _v1: window.Window; _v1.getAvoidArea(window.AvoidAreaType.TYPE_SYSTEM);
-declare let _v2: window.Window; _v2.getColorSpace();
-declare let _v3: window.Window; _v3.getProperties();
-declare let _v4: window.Window; _v4.isShowing();
-declare let _v5: window.Window; _v5.isSupportWideGamut();
-declare let _v6: window.Window; _v6.loadContent('');
-declare let _v7: window.Window; _v7.moveTo(0, 0);
-declare let _v8: window.Window; _v8.off('systemAvoidAreaChange');
-declare let _v9: window.Window; _v9.on('systemAvoidAreaChange', () => {});
-declare let _v10: window.Window; _v10.resetSize(0, 0);
-declare let _v11: window.Window; _v11.setBackgroundColor('');
-declare let _v12: window.Window; _v12.setBrightness(0);
-declare let _v13: window.Window; _v13.setColorSpace(window.ColorSpace.DEFAULT);
-declare let _v14: window.Window; _v14.setDimBehind(0);
-declare let _v15: window.Window; _v15.setFocusable(false);
-declare let _v16: window.Window; _v16.setFullScreen(false);
-declare let _v17: window.Window; _v17.setKeepScreenOn(false);
-declare let _v18: window.Window; _v18.setLayoutFullScreen(false);
-declare let _v19: window.Window; _v19.setOutsideTouchable(false);
-declare let _v20: window.Window; _v20.setPrivacyMode(false);
-declare let _v21: window.Window; _v21.setSystemBarEnable([]);
-declare let _v22: window.Window; _v22.setSystemBarProperties;
-declare let _v23: window.Window; _v23.setTouchable(false);
-declare let _v24: window.Window; _v24.setWindowLayoutFullScreen(false, () => {});
-declare let _v25: window.Window; _v25.setWindowSystemBarEnable([], () => {});
-declare let _v26: window.Window; _v26.setWindowSystemBarProperties;
-declare let _v27: window.Window; _v27.show();
-declare let _v28: window.WindowProperties; _v28.dimBehindValue;
-declare let _v29: window.WindowProperties; _v29.isRoundCorner;
-window.WindowType.TYPE_SYSTEM_ALERT;
-// @ohos.window.window.create: FA-model-only; not referenceable in stageMode (omitted)
-window.find('');
-// @ohos.window.window.getTopWindow: FA-model-only; not referenceable in stageMode (omitted)
+// Window lifecycle scenario: create a system-alert overlay window, configure its
+// appearance/layout, query its state, listen for avoid-area changes, and tear it down.
+
+async function createOverlayWindow(name: string): Promise<window.Window> {
+  const config: window.Configuration = {
+    name: name,
+    windowType: window.WindowType.TYPE_SYSTEM_ALERT,
+  };
+  return await window.createWindow(config);
+}
+
+async function showAndLoad(win: window.Window): Promise<void> {
+  try {
+    await win.show();
+    await win.loadContent('pages/OverlayPage');
+  } catch (e) {
+    console.error('showAndLoad failed', e);
+  }
+}
+
+async function configureAppearance(win: window.Window): Promise<void> {
+  try {
+    await win.setColorSpace(window.ColorSpace.DEFAULT);
+    await win.setBrightness(0.8);
+    await win.setBackgroundColor('#FF000000');
+    await win.setKeepScreenOn(true);
+    await win.setPrivacyMode(true);
+    await win.setFocusable(true);
+    await win.setTouchable(true);
+    await win.setOutsideTouchable(false);
+    win.setDimBehind(0.5, (err) => {
+      if (err) {
+        console.error('setDimBehind callback error', err);
+      }
+    });
+  } catch (e) {
+    console.error('configureAppearance failed', e);
+  }
+}
+
+async function configureLayout(win: window.Window): Promise<void> {
+  try {
+    await win.moveTo(0, 0);
+    await win.resetSize(720, 1280);
+    await win.setFullScreen(false);
+    await win.setLayoutFullScreen(false);
+    await win.setWindowLayoutFullScreen(false);
+    await win.setSystemBarEnable(['status', 'navigation']);
+    await win.setWindowSystemBarEnable(['status']);
+    const barProps: window.SystemBarProperties = {
+      statusBarColor: '#FFF0F0F0',
+      isStatusBarLightIcon: true,
+    };
+    await win.setSystemBarProperties(barProps);
+    await win.setWindowSystemBarProperties(barProps);
+  } catch (e) {
+    console.error('configureLayout failed', e);
+  }
+}
+
+async function queryWindowState(win: window.Window): Promise<void> {
+  try {
+    const colorSpace = await win.getColorSpace();
+    const wideGamut = await win.isSupportWideGamut();
+    const showing = await win.isShowing();
+    const props = await win.getProperties();
+    console.info(
+      'window state: colorSpace=' + colorSpace + ' wideGamut=' + wideGamut +
+      ' showing=' + showing + ' dimBehind=' + props.dimBehindValue +
+      ' roundCorner=' + props.isRoundCorner
+    );
+    const avoidArea = await win.getAvoidArea(window.AvoidAreaType.TYPE_SYSTEM);
+    console.info('avoidArea height=' + avoidArea.bottomRect.height);
+  } catch (e) {
+    console.error('queryWindowState failed', e);
+  }
+}
+
+function registerAvoidAreaListener(win: window.Window): void {
+  win.on('systemAvoidAreaChange', (area) => {
+    console.info('systemAvoidAreaChange height=' + area.bottomRect.height);
+  });
+}
+
+function unregisterAvoidAreaListener(win: window.Window): void {
+  win.off('systemAvoidAreaChange');
+}
+
+async function findAndDestroy(name: string): Promise<void> {
+  try {
+    const found = await window.find(name);
+    await found.destroy();
+  } catch (e) {
+    console.error('findAndDestroy failed', e);
+  }
+}
+
+async function run(): Promise<void> {
+  const overlayName = 'overlayWindow';
+  const win = await createOverlayWindow(overlayName);
+  await showAndLoad(win);
+  await configureAppearance(win);
+  await configureLayout(win);
+  await queryWindowState(win);
+  registerAvoidAreaListener(win);
+  unregisterAvoidAreaListener(win);
+  await findAndDestroy(overlayName);
+}
+
+run();

@@ -1,27 +1,113 @@
 import Cipher from '@system.cipher';
 import { CipherAesOptions, CipherResponse, CipherRsaOptions } from '@system.cipher';
 
-let _v0: CipherResponse;
-let _v1: CipherRsaOptions;
-let _v2: CipherAesOptions;
-let _v3: Cipher;
-declare let _v4: CipherRsaOptions; _v4.action;
-declare let _v5: CipherAesOptions; _v5.action;
-Cipher.aes({ action: '', text: '', key: '', success: () => {}, fail: () => {}, complete: () => {} });
-declare let _v6: CipherRsaOptions; _v6.complete;
-declare let _v7: CipherAesOptions; _v7.complete;
-declare let _v8: CipherRsaOptions; _v8.fail;
-declare let _v9: CipherAesOptions; _v9.fail;
-declare let _v10: CipherAesOptions; _v10.iv;
-declare let _v11: CipherAesOptions; _v11.ivLen;
-declare let _v12: CipherAesOptions; _v12.ivOffset;
-declare let _v13: CipherRsaOptions; _v13.key;
-declare let _v14: CipherAesOptions; _v14.key;
-Cipher.rsa({ action: '', text: '', key: '', success: () => {}, fail: () => {}, complete: () => {} });
-declare let _v15: CipherRsaOptions; _v15.success;
-declare let _v16: CipherAesOptions; _v16.success;
-declare let _v17: CipherResponse; _v17.text;
-declare let _v18: CipherRsaOptions; _v18.text;
-declare let _v19: CipherAesOptions; _v19.text;
-declare let _v20: CipherRsaOptions; _v20.transformation;
-declare let _v21: CipherAesOptions; _v21.transformation;
+// AES-CBC encryption of a sensitive payload using a Base64 key + IV.
+async function aesEncrypt(plaintext: string, base64Key: string, base64Iv: string): Promise<string> {
+  let resolveFn: (value: string) => void = (value: string): void => { void value; };
+  let rejectFn: (reason: Error) => void = (reason: Error): void => { void reason; };
+  const pending = new Promise<string>((resolve, reject) => {
+    resolveFn = resolve;
+    rejectFn = reject;
+  });
+
+  const options: CipherAesOptions = {
+    action: 'encrypt',
+    text: plaintext,
+    key: base64Key,
+    iv: base64Iv,
+    ivOffset: '0',
+    ivLen: '16',
+    transformation: 'AES/CBC/PKCS5Padding',
+    success: (data: CipherResponse) => {
+      const resultText: string = data.text;
+      resolveFn(resultText);
+    },
+    fail: (data: string, code: number) => {
+      rejectFn(new Error(`aes encrypt failed code=${code} data=${data}`));
+    },
+    complete: () => {
+      console.info('aes encrypt complete');
+    },
+  };
+
+  // Validate the resolved option fields before invoking the cipher.
+  console.info(
+    'aes cfg',
+    options.action,
+    options.text.length,
+    options.key.length,
+    options.iv,
+    options.ivOffset,
+    options.ivLen,
+    options.transformation,
+    typeof options.success,
+    typeof options.fail,
+    typeof options.complete,
+  );
+
+  Cipher.aes(options);
+  return pending;
+}
+
+// RSA-OAEP encryption of a short secret using a public key in PEM form.
+async function rsaEncrypt(secret: string, publicKeyPem: string): Promise<string> {
+  let resolveFn: (value: string) => void = (value: string): void => { void value; };
+  let rejectFn: (reason: Error) => void = (reason: Error): void => { void reason; };
+  const pending = new Promise<string>((resolve, reject) => {
+    resolveFn = resolve;
+    rejectFn = reject;
+  });
+
+  const options: CipherRsaOptions = {
+    action: 'encrypt',
+    text: secret,
+    key: publicKeyPem,
+    transformation: 'RSA/None/OAEPWithSHA256AndMGF1Padding',
+    success: (data: CipherResponse) => {
+      const resultText: string = data.text;
+      resolveFn(resultText);
+    },
+    fail: (data: string, code: number) => {
+      rejectFn(new Error(`rsa encrypt failed code=${code} data=${data}`));
+    },
+    complete: () => {
+      console.info('rsa encrypt complete');
+    },
+  };
+
+  console.info(
+    'rsa cfg',
+    options.action,
+    options.text.length,
+    options.key.length,
+    options.transformation,
+    typeof options.success,
+    typeof options.fail,
+    typeof options.complete,
+  );
+
+  Cipher.rsa(options);
+  return pending;
+}
+
+// Round-trip scenario: encrypt a payload with AES, then encrypt a short
+// secret with RSA, using the @system.cipher legacy API surface.
+async function run(): Promise<void> {
+  try {
+    const aesKey = 'AAECAwQFBgcICQoLDA0ODx=='; // 16-byte key, Base64
+    const aesIv = 'AAECAwQFBgcICQoLDA0ODw=='; // 16-byte IV, Base64
+    const encrypted = await aesEncrypt('account=12345&token=ab12', aesKey, aesIv);
+    console.info('aes ciphertext length', encrypted.length);
+
+    const rsaPub =
+      '-----BEGIN PUBLIC KEY-----\n' +
+      'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAu1SUj5xGq3h3I0lF\n' +
+      '-----END PUBLIC KEY-----';
+    const rsaCipher = await rsaEncrypt('session-key', rsaPub);
+    console.info('rsa ciphertext length', rsaCipher.length);
+  } catch (e) {
+    console.error('cipher scenario failed', e);
+  }
+}
+
+run();

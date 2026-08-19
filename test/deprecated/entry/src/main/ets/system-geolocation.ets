@@ -1,31 +1,92 @@
 import Geolocation from '@system.geolocation';
 import { GeolocationResponse, GetLocationOption, GetLocationTypeOption, GetLocationTypeResponse, SubscribeLocationOption } from '@system.geolocation';
 
-let _v0: GeolocationResponse;
-let _v1: GetLocationOption;
-let _v2: GetLocationTypeResponse;
-let _v3: GetLocationTypeOption;
-let _v4: SubscribeLocationOption;
-let _v5: Geolocation;
-declare let _v6: GeolocationResponse; _v6.accuracy;
-declare let _v7: GeolocationResponse; _v7.altitude;
-declare let _v8: GetLocationOption; _v8.complete;
-declare let _v9: GetLocationTypeOption; _v9.complete;
-declare let _v10: GetLocationOption; _v10.coordType;
-declare let _v11: SubscribeLocationOption; _v11.coordType;
-declare let _v12: GetLocationOption; _v12.fail;
-declare let _v13: GetLocationTypeOption; _v13.fail;
-declare let _v14: SubscribeLocationOption; _v14.fail;
-Geolocation.getLocation();
-Geolocation.getLocationType();
-Geolocation.getSupportedCoordTypes();
-declare let _v15: GeolocationResponse; _v15.latitude;
-declare let _v16: GeolocationResponse; _v16.longitude;
-Geolocation.subscribe({ success: () => {} });
-declare let _v17: GetLocationOption; _v17.success;
-declare let _v18: GetLocationTypeOption; _v18.success;
-declare let _v19: SubscribeLocationOption; _v19.success;
-declare let _v20: GeolocationResponse; _v20.time;
-declare let _v21: GetLocationOption; _v21.timeout;
-declare let _v22: GetLocationTypeResponse; _v22.types;
-Geolocation.unsubscribe();
+// Scenario: discover supported coordinate systems, take a one-shot fix, enumerate
+// supported location types, then stream live updates before tearing down.
+
+function fetchSupportedCoordTypes(): string[] {
+  return Geolocation.getSupportedCoordTypes();
+}
+
+function fetchCurrentLocation(): Promise<GeolocationResponse> {
+  return new Promise<GeolocationResponse>((resolve, reject) => {
+    const option: GetLocationOption = {
+      coordType: 'wgs84',
+      timeout: 30000,
+      success: (data: GeolocationResponse) => {
+        resolve(data);
+      },
+      fail: (data: string, code: number) => {
+        reject(new Error(`getLocation failed: ${data} (${code})`));
+      },
+      complete: () => {
+        console.info('getLocation complete');
+      },
+    };
+    // validate configured option before invoking
+    if (option.coordType !== 'wgs84' || (option.timeout ?? 0) <= 0 || !option.success || !option.fail || !option.complete) {
+      throw new Error('invalid getLocation option');
+    }
+    Geolocation.getLocation(option);
+  });
+}
+
+function fetchLocationTypes(): Promise<string[]> {
+  return new Promise<string[]>((resolve, reject) => {
+    const option: GetLocationTypeOption = {
+      success: (data: GetLocationTypeResponse) => {
+        resolve(data.types);
+      },
+      fail: (data: string, code: number) => {
+        reject(new Error(`getLocationType failed: ${data} (${code})`));
+      },
+      complete: () => {
+        console.info('getLocationType complete');
+      },
+    };
+    // validate configured option before invoking
+    if (!option.success || !option.fail || !option.complete) {
+      throw new Error('invalid getLocationType option');
+    }
+    Geolocation.getLocationType(option);
+  });
+}
+
+function streamLocationUpdates(onUpdate: (loc: GeolocationResponse) => void): void {
+  const option: SubscribeLocationOption = {
+    coordType: 'wgs84',
+    success: (data: GeolocationResponse) => {
+      onUpdate(data);
+    },
+    fail: (data: string, code: number) => {
+      console.error('subscribe failed', data, code);
+    },
+  };
+  if (option.coordType !== 'wgs84' || !option.success || !option.fail) {
+    throw new Error('invalid subscribe option');
+  }
+  Geolocation.subscribe(option);
+}
+
+async function run(): Promise<void> {
+  try {
+    const supported = fetchSupportedCoordTypes();
+    console.info(`supported coord types: ${supported.join(',')}`);
+
+    const loc = await fetchCurrentLocation();
+    console.info(`current location: ${loc.latitude},${loc.longitude} alt=${loc.altitude} acc=${loc.accuracy} time=${loc.time}`);
+
+    const types = await fetchLocationTypes();
+    console.info(`location types: ${types.join(',')}`);
+
+    streamLocationUpdates((data: GeolocationResponse) => {
+      console.info(`update @ ${data.time}`);
+    });
+
+    Geolocation.unsubscribe();
+  } catch (e) {
+    console.error('geolocation scenario error', e);
+  }
+}
+
+run();

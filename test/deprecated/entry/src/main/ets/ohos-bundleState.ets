@@ -68,6 +68,7 @@ async function summarizeBundleStateInfo(): Promise<void> {
     fgAbilityPrevAccessTime: Date.now() - 300000,
     infosBeginTime: Date.now() - 3600000,
     infosEndTime: Date.now(),
+    merge(toMerge: bundleState.BundleStateInfo): void { void toMerge; },
   };
   const extra: bundleState.BundleStateInfo = {
     id: 1001,
@@ -80,6 +81,7 @@ async function summarizeBundleStateInfo(): Promise<void> {
     fgAbilityPrevAccessTime: Date.now() - 90000,
     infosBeginTime: Date.now() - 1800000,
     infosEndTime: Date.now() - 600000,
+    merge(toMerge: bundleState.BundleStateInfo): void { void toMerge; },
   };
   base.merge(extra);
   console.log(

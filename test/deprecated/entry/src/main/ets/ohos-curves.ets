@@ -1,5 +1,4 @@
 import curves from '@ohos.curves';
-import { Curve } from '@ohos.curves';
 
 // Scenario: build a set of legacy animation curves for a page-transition effect.
 // These deprecated curve APIs (each returns a string curve description) are
@@ -10,7 +9,7 @@ function buildPageTransitionCurves(): string[] {
   const enterCurve = curves.cubicBezier(0.33, 1, 0.68, 1);
 
   // Initialize a fallback linear interpolator curve used when a custom curve is missing.
-  const fallbackCurve = curves.init(Curve.Linear);
+  const fallbackCurve = curves.init(curves.Curve.Linear);
 
   // Spring curve for the subtle bounce when the page settles.
   const settleSpring = curves.spring(0, 1, 200, 22);

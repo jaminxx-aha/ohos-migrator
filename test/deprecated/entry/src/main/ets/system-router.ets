@@ -1,33 +1,85 @@
 import Router from '@system.router';
 import { BackRouterOptions, DisableAlertBeforeBackPageOptions, EnableAlertBeforeBackPageOptions, ParamsInterface, RouterOptions, RouterState } from '@system.router';
 
-let _v0: RouterOptions;
-let _v1: BackRouterOptions;
-let _v2: RouterState;
-let _v3: EnableAlertBeforeBackPageOptions;
-let _v4: DisableAlertBeforeBackPageOptions;
-let _v5: ParamsInterface;
-let _v6: Router;
-Router.back();
-declare let _v7: EnableAlertBeforeBackPageOptions; _v7.cancel;
-declare let _v8: DisableAlertBeforeBackPageOptions; _v8.cancel;
-Router.clear();
-declare let _v9: EnableAlertBeforeBackPageOptions; _v9.complete;
-declare let _v10: DisableAlertBeforeBackPageOptions; _v10.complete;
-Router.disableAlertBeforeBackPage();
-Router.enableAlertBeforeBackPage({ message: '' });
-Router.getLength();
-Router.getParams();
-Router.getState();
-declare let _v11: RouterState; _v11.index;
-declare let _v12: EnableAlertBeforeBackPageOptions; _v12.message;
-declare let _v13: RouterState; _v13.name;
-declare let _v14: RouterOptions; _v14.params;
-declare let _v15: BackRouterOptions; _v15.params;
-declare let _v16: RouterState; _v16.path;
-Router.push({ uri: '' });
-Router.replace({ uri: '' });
-declare let _v17: EnableAlertBeforeBackPageOptions; _v17.success;
-declare let _v18: DisableAlertBeforeBackPageOptions; _v18.success;
-declare let _v19: RouterOptions; _v19.uri;
-declare let _v20: BackRouterOptions; _v20.uri;
+// Inspect the current page-stack state and the params handed to the current page.
+function inspectStack(): void {
+  const state: RouterState = Router.getState();
+  const index: number = state.index;
+  const name: string = state.name;
+  const path: string = state.path;
+  const length: string = Router.getLength();
+  const params: ParamsInterface = Router.getParams();
+  console.info(`stack length=${length}, top index=${index}, name=${name}, path=${path}, params=${JSON.stringify(params)}`);
+}
+
+// Navigate to a detail page, passing a record id as params.
+function navigateToDetail(recordId: string): void {
+  const opts: RouterOptions = { uri: 'pages/detail/detail', params: { id: recordId } };
+  const uri: string = opts.uri;
+  const params: Object | undefined = opts.params;
+  console.info(`pushing to ${uri} with params=${JSON.stringify(params)}`);
+  Router.push(opts);
+}
+
+// Replace the current page with the login page (current page is destroyed).
+function replaceWithLogin(): void {
+  const opts: RouterOptions = { uri: 'pages/login/login', params: { redirect: true } };
+  Router.replace(opts);
+}
+
+// Return to a specific page in the stack, forwarding a result payload.
+function goBackToHome(result: string): void {
+  const opts: BackRouterOptions = { uri: 'pages/index/index', params: { result } };
+  const uri: string | undefined = opts.uri;
+  const params: Object | undefined = opts.params;
+  console.info(`backing to ${uri} with params=${JSON.stringify(params)}`);
+  Router.back(opts);
+}
+
+// Show a confirm dialog before navigating back.
+function enableBackConfirm(): void {
+  const opts: EnableAlertBeforeBackPageOptions = {
+    message: 'Are you sure you want to leave? Unsaved changes will be lost.',
+    success: (errMsg: string) => { console.info('alert shown: ' + errMsg); },
+    cancel: (errMsg: string) => { console.warn('alert cancelled: ' + errMsg); },
+    complete: () => { console.info('alert dialog closed'); },
+  };
+  const message: string = opts.message;
+  const success: ((errMsg: string) => void) | undefined = opts.success;
+  const cancel: ((errMsg: string) => void) | undefined = opts.cancel;
+  const complete: (() => void) | undefined = opts.complete;
+  console.info(`enabling back confirm: ${message}, hasSuccess=${success != null}, hasCancel=${cancel != null}, hasComplete=${complete != null}`);
+  Router.enableAlertBeforeBackPage(opts);
+}
+
+// Dismiss the confirm dialog previously enabled.
+function disableBackConfirm(): void {
+  const opts: DisableAlertBeforeBackPageOptions = {
+    success: (errMsg: string) => { console.info('alert hidden: ' + errMsg); },
+    cancel: (errMsg: string) => { console.warn('hide cancelled: ' + errMsg); },
+    complete: () => { console.info('hide dialog closed'); },
+  };
+  const success: ((errMsg: string) => void) | undefined = opts.success;
+  const cancel: ((errMsg: string) => void) | undefined = opts.cancel;
+  const complete: (() => void) | undefined = opts.complete;
+  console.info(`disabling back confirm: hasSuccess=${success != null}, hasCancel=${cancel != null}, hasComplete=${complete != null}`);
+  Router.disableAlertBeforeBackPage(opts);
+}
+
+// Clear history, keeping only the top page.
+function clearHistory(): void {
+  Router.clear();
+}
+
+// Entry: a small navigation session.
+function run(): void {
+  inspectStack();
+  navigateToDetail('order-1024');
+  enableBackConfirm();
+  disableBackConfirm();
+  replaceWithLogin();
+  goBackToHome('ok');
+  clearHistory();
+}
+
+run();

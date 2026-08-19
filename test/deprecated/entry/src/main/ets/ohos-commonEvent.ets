@@ -7,39 +7,46 @@ import commonEvent from '@ohos.commonEvent';
 
 const OBSERVE_MS = 60_000;
 
+// Local shape for the deprecated commonEvent.createSubscriber subscribe-info arg.
+// (commonEvent.CommonEventSubscribeInfo is not re-exported by the namespace.)
+interface CommonEventSubscribeInfoLike {
+  events: string[];
+  publisherPermission?: string;
+  priority?: number;
+}
+
 async function monitor(events: string[], label: string): Promise<void> {
-  const info = {
+  const info: CommonEventSubscribeInfoLike = {
     events: events,
     publisherPermission: 'ohos.permission.RUNNING_LOCK',
     priority: 50,
   };
-  let subscriber;
   try {
-    subscriber = await commonEvent.createSubscriber(info);
+    // subscriber is inferred as CommonEventSubscriber from createSubscriber's return type.
+    const subscriber = await commonEvent.createSubscriber(info);
+    try {
+      commonEvent.subscribe(subscriber, (err, data) => {
+        if (err) {
+          console.error(`[${label}] receive error`, err);
+          return;
+        }
+        console.info(`[${label}] event=${data.event} data=${data.data}`);
+      });
+    } catch (e) {
+      console.error(`[${label}] subscribe failed`, e);
+      commonEvent.unsubscribe(subscriber);
+      return;
+    }
+    setTimeout(() => {
+      commonEvent.unsubscribe(subscriber, (err) => {
+        if (err) {
+          console.error(`[${label}] unsubscribe failed`, err);
+        }
+      });
+    }, OBSERVE_MS);
   } catch (e) {
     console.error(`[${label}] createSubscriber failed`, e);
-    return;
   }
-  try {
-    commonEvent.subscribe(subscriber, (err, data) => {
-      if (err) {
-        console.error(`[${label}] receive error`, err);
-        return;
-      }
-      console.info(`[${label}] event=${data.event} data=${data.data}`);
-    });
-  } catch (e) {
-    console.error(`[${label}] subscribe failed`, e);
-    commonEvent.unsubscribe(subscriber);
-    return;
-  }
-  setTimeout(() => {
-    commonEvent.unsubscribe(subscriber, (err) => {
-      if (err) {
-        console.error(`[${label}] unsubscribe failed`, err);
-      }
-    });
-  }, OBSERVE_MS);
 }
 
 // Power, battery, screen and thermal level changes.

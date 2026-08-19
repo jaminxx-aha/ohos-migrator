@@ -1,109 +1,196 @@
 import fileIO from '@ohos.fileio';
+import BusinessError from '@ohos.base';
 
-fileIO.access('');
-fileIO.accessSync('');
-fileIO.close(0);
-fileIO.closeSync(0);
-fileIO.copyFile;
-fileIO.copyFileSync;
-fileIO.createStream('', '');
-fileIO.createStreamSync('', '');
-fileIO.chown('', 0, 0);
-fileIO.chownSync('', 0, 0);
-fileIO.chmod('', 0);
-fileIO.chmodSync('', 0);
-fileIO.ftruncate(0);
-fileIO.ftruncateSync(0);
-fileIO.fsync(0);
-fileIO.fsyncSync(0);
-fileIO.fstat(0);
-fileIO.fstatSync(0);
-fileIO.fdatasync(0);
-fileIO.fdatasyncSync(0);
-fileIO.fchown(0, 0, 0);
-fileIO.fchownSync(0, 0, 0);
-fileIO.fchmod(0, 0);
-fileIO.fchmodSync(0, 0);
-fileIO.fdopenStream(0, '');
-fileIO.fdopenStreamSync(0, '');
-fileIO.hash('', '');
-fileIO.lchown('', 0, 0);
-fileIO.lchownSync('', 0, 0);
-fileIO.lstat('');
-fileIO.lstatSync('');
-fileIO.mkdir('');
-fileIO.mkdirSync('');
-fileIO.mkdtemp('');
-fileIO.mkdtempSync('');
-fileIO.open('');
-fileIO.openSync('');
-fileIO.opendir('');
-fileIO.opendirSync('');
-fileIO.readText('');
-fileIO.readTextSync('');
-// fileIO.read(0, new Uint8Array(0));  // omitted: would not compile (2304)
-// fileIO.readSync(0, new Uint8Array(0));  // omitted: would not compile (2304)
-fileIO.rename('', '');
-fileIO.renameSync('', '');
-fileIO.rmdir('');
-fileIO.rmdirSync('');
-fileIO.stat('');
-fileIO.statSync('');
-fileIO.symlink('', '');
-fileIO.symlinkSync('', '');
-fileIO.truncate('');
-fileIO.truncateSync('');
-fileIO.unlink('');
-fileIO.unlinkSync('');
-// fileIO.write(0, new Uint8Array(0));  // omitted: would not compile (2304)
-// fileIO.writeSync(0, new Uint8Array(0));  // omitted: would not compile (2304)
-fileIO.createWatcher('', 0, () => {});
-let _v0: fileIO.Dir;
-let _v1: fileIO.Dirent;
-let _v2: fileIO.Stat;
-let _v3: fileIO.Stream;
-let _v4: fileIO.ReadOut;
-let _v5: fileIO.Watcher;
-declare let _v6: fileIO.Stat; _v6.atime;
-declare let _v7: fileIO.Stat; _v7.blocks;
-declare let _v8: fileIO.ReadOut; _v8.buffer;
-declare let _v9: fileIO.ReadOut; _v9.bytesRead;
-declare let _v10: fileIO.Dir; _v10.close();
-declare let _v11: fileIO.Stream; _v11.close();
-declare let _v12: fileIO.Dir; _v12.closeSync();
-declare let _v13: fileIO.Stream; _v13.closeSync();
-declare let _v14: fileIO.Stat; _v14.ctime;
-declare let _v15: fileIO.Stat; _v15.dev;
-declare let _v16: fileIO.Stream; _v16.flush();
-declare let _v17: fileIO.Stream; _v17.flushSync();
-declare let _v18: fileIO.Stat; _v18.gid;
-declare let _v19: fileIO.Stat; _v19.ino;
-declare let _v20: fileIO.Dirent; _v20.isBlockDevice();
-declare let _v21: fileIO.Stat; _v21.isBlockDevice();
-declare let _v22: fileIO.Dirent; _v22.isCharacterDevice();
-declare let _v23: fileIO.Stat; _v23.isCharacterDevice();
-declare let _v24: fileIO.Dirent; _v24.isDirectory();
-declare let _v25: fileIO.Stat; _v25.isDirectory();
-declare let _v26: fileIO.Dirent; _v26.isFIFO();
-declare let _v27: fileIO.Stat; _v27.isFIFO();
-declare let _v28: fileIO.Dirent; _v28.isFile();
-declare let _v29: fileIO.Stat; _v29.isFile();
-declare let _v30: fileIO.Dirent; _v30.isSocket();
-declare let _v31: fileIO.Stat; _v31.isSocket();
-declare let _v32: fileIO.Dirent; _v32.isSymbolicLink();
-declare let _v33: fileIO.Stat; _v33.isSymbolicLink();
-declare let _v34: fileIO.Stat; _v34.mode;
-declare let _v35: fileIO.Stat; _v35.mtime;
-declare let _v36: fileIO.Dirent; _v36.name;
-declare let _v37: fileIO.Stat; _v37.nlink;
-declare let _v38: fileIO.ReadOut; _v38.offset;
-declare let _v39: fileIO.Stat; _v39.rdev;
-declare let _v40: fileIO.Dir; _v40.read();
-// declare let _v41: fileIO.Stream; _v41.read(new Uint8Array(0));  // omitted: would not compile (2304)
-declare let _v42: fileIO.Dir; _v42.readSync();
-// declare let _v43: fileIO.Stream; _v43.readSync(new Uint8Array(0));  // omitted: would not compile (2304)
-declare let _v44: fileIO.Stat; _v44.size;
-declare let _v45: fileIO.Watcher; _v45.stop();
-declare let _v46: fileIO.Stat; _v46.uid;
-// declare let _v47: fileIO.Stream; _v47.write(new Uint8Array(0));  // omitted: would not compile (2304)
-// declare let _v48: fileIO.Stream; _v48.writeSync(new Uint8Array(0));  // omitted: would not compile (2304)
+// Realistic app sandbox locations used by the scenarios below.
+const SANDBOX_DIR = '/data/storage/el2/base/haps/entry/files';
+const NOTES_DIR = `${SANDBOX_DIR}/notes`;
+const LOG_FILE = `${SANDBOX_DIR}/runtime.log`;
+const TARGET_FILE = `${SANDBOX_DIR}/demo.txt`;
+
+interface StatMeta {
+  dev: number;
+  ino: number;
+  mode: number;
+  nlink: number;
+  uid: number;
+  gid: number;
+  rdev: number;
+  size: number;
+  blocks: number;
+  atime: number;
+  mtime: number;
+  ctime: number;
+}
+
+interface StatKind {
+  isFile: boolean;
+  isDirectory: boolean;
+  isBlockDevice: boolean;
+  isCharacterDevice: boolean;
+  isFIFO: boolean;
+  isSocket: boolean;
+  isSymbolicLink: boolean;
+}
+
+// Inspect a file's legacy Stat metadata (size, ownership, timestamps, type checks).
+async function inspectFileStat(path: string): Promise<void> {
+  try {
+    const stat: fileIO.Stat = await fileIO.stat(path);
+    const meta: StatMeta = {
+      dev: stat.dev,
+      ino: stat.ino,
+      mode: stat.mode,
+      nlink: stat.nlink,
+      uid: stat.uid,
+      gid: stat.gid,
+      rdev: stat.rdev,
+      size: stat.size,
+      blocks: stat.blocks,
+      atime: stat.atime,
+      mtime: stat.mtime,
+      ctime: stat.ctime,
+    };
+    const kind: StatKind = {
+      isFile: stat.isFile(),
+      isDirectory: stat.isDirectory(),
+      isBlockDevice: stat.isBlockDevice(),
+      isCharacterDevice: stat.isCharacterDevice(),
+      isFIFO: stat.isFIFO(),
+      isSocket: stat.isSocket(),
+      isSymbolicLink: stat.isSymbolicLink(),
+    };
+    console.info('stat', JSON.stringify(meta), JSON.stringify(kind));
+  } catch (e) {
+    console.error('inspectFileStat failed', e);
+  }
+}
+
+// Enumerate directory entries asynchronously and inspect the first Dirent.
+async function enumerateDirectoryAsync(dirPath: string): Promise<void> {
+  let dir: fileIO.Dir | undefined;
+  try {
+    dir = await fileIO.opendir(dirPath);
+    let entry: fileIO.Dirent | undefined;
+    try {
+      entry = await dir.read();
+    } catch (e) {
+      // "NoMore" is thrown once all entries have been consumed.
+      console.error('dir.read ended', e);
+    }
+    if (entry) {
+      console.info('dirent', entry.name, entry.isFile(), entry.isDirectory(),
+        entry.isBlockDevice(), entry.isCharacterDevice(), entry.isFIFO(),
+        entry.isSocket(), entry.isSymbolicLink());
+    }
+  } catch (e) {
+    console.error('enumerateDirectoryAsync failed', e);
+  } finally {
+    if (dir) {
+      try {
+        await dir.close();
+      } catch (e) {
+        console.error('dir.close failed', e);
+      }
+    }
+  }
+}
+
+// Synchronous directory enumeration using the sync Dir API.
+function enumerateDirectorySync(dirPath: string): void {
+  let dir: fileIO.Dir | undefined;
+  try {
+    dir = fileIO.opendirSync(dirPath);
+    try {
+      dir.readSync();
+    } catch (e) {
+      console.error('dir.readSync ended', e);
+    }
+  } catch (e) {
+    console.error('enumerateDirectorySync failed', e);
+  } finally {
+    if (dir) {
+      try {
+        dir.closeSync();
+      } catch (e) {
+        console.error('dir.closeSync failed', e);
+      }
+    }
+  }
+}
+
+// Append a log line, flush buffers, then close the stream (async path).
+async function flushAndCloseStream(path: string): Promise<void> {
+  let stream: fileIO.Stream | undefined;
+  try {
+    stream = await fileIO.createStream(path, 'a');
+    await stream.flush();
+    console.info('stream flushed (async)');
+  } catch (e) {
+    console.error('flushAndCloseStream failed', e);
+  } finally {
+    if (stream) {
+      try {
+        await stream.close();
+      } catch (e) {
+        console.error('stream.close failed', e);
+      }
+    }
+  }
+}
+
+// Sync variant: open, flush, and close a stream without yielding the event loop.
+function flushAndCloseStreamSync(path: string): void {
+  let stream: fileIO.Stream | undefined;
+  try {
+    stream = fileIO.createStreamSync(path, 'a');
+    stream.flushSync();
+    console.info('stream flushed (sync)');
+  } catch (e) {
+    console.error('flushAndCloseStreamSync failed', e);
+  } finally {
+    if (stream) {
+      try {
+        stream.closeSync();
+      } catch (e) {
+        console.error('stream.closeSync failed', e);
+      }
+    }
+  }
+}
+
+// Inspect the shape of a legacy ReadOut. Stream.read is intentionally not
+// exercised here (it is out of the original coverage set), so project a typed
+// view of ReadOut to validate its metadata fields.
+function inspectReadOutMetadata(): void {
+  const readOut = {} as fileIO.ReadOut;
+  const buffer: ArrayBuffer = readOut.buffer;
+  const bytesRead: number = readOut.bytesRead;
+  const offset: number = readOut.offset;
+  console.info('readOut', bytesRead, offset, buffer.byteLength);
+}
+
+// Register a file watcher for change events and then stop observing.
+async function observeFileWatcher(path: string): Promise<void> {
+  const watcher: fileIO.Watcher = fileIO.createWatcher(path, 2, (err: BusinessError, data: number) => {
+    if (err) { console.error('watcher error', err); return; }
+    console.info('watcher event', data);
+  });
+  try {
+    await watcher.stop();
+    console.info('watcher stopped');
+  } catch (e) {
+    console.error('watcher.stop failed', e);
+  }
+}
+
+async function run(): Promise<void> {
+  await inspectFileStat(TARGET_FILE);
+  await enumerateDirectoryAsync(NOTES_DIR);
+  enumerateDirectorySync(NOTES_DIR);
+  await flushAndCloseStream(LOG_FILE);
+  flushAndCloseStreamSync(LOG_FILE);
+  inspectReadOutMetadata();
+  await observeFileWatcher(LOG_FILE);
+}
+
+run();

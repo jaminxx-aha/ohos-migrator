@@ -1,104 +1,182 @@
 import File from '@system.file';
-import { FileAccessOption, FileCopyOption, FileDeleteOption, FileGetOption, FileListOption, FileListResponse, FileMkdirOption, FileMoveOption, FileReadArrayBufferOption, FileReadArrayBufferResponse, FileReadTextOption, FileReadTextResponse, FileResponse, FileRmdirOption, FileWriteArrayBufferOption, FileWriteTextOption } from '@system.file';
+import {
+  FileAccessOption, FileCopyOption, FileDeleteOption, FileGetOption, FileListOption, FileListResponse,
+  FileMkdirOption, FileMoveOption, FileReadArrayBufferOption, FileReadArrayBufferResponse,
+  FileReadTextOption, FileReadTextResponse, FileResponse, FileRmdirOption,
+  FileWriteArrayBufferOption, FileWriteTextOption,
+} from '@system.file';
 
-let _v0: FileResponse;
-let _v1: FileMoveOption;
-let _v2: FileListResponse;
-let _v3: FileListOption;
-let _v4: FileCopyOption;
-let _v5: FileGetOption;
-let _v6: FileDeleteOption;
-let _v7: FileWriteTextOption;
-let _v8: FileReadTextResponse;
-let _v9: FileReadTextOption;
-let _v10: FileWriteArrayBufferOption;
-let _v11: FileReadArrayBufferResponse;
-let _v12: FileReadArrayBufferOption;
-let _v13: FileAccessOption;
-let _v14: FileMkdirOption;
-let _v15: FileRmdirOption;
-let _v16: File;
-File.access({ uri: '' });
-declare let _v17: FileWriteTextOption; _v17.append;
-declare let _v18: FileWriteArrayBufferOption; _v18.append;
-declare let _v19: FileWriteArrayBufferOption; _v19.buffer;
-declare let _v20: FileReadArrayBufferResponse; _v20.buffer;
-declare let _v21: FileMoveOption; _v21.complete;
-declare let _v22: FileListOption; _v22.complete;
-declare let _v23: FileCopyOption; _v23.complete;
-declare let _v24: FileGetOption; _v24.complete;
-declare let _v25: FileDeleteOption; _v25.complete;
-declare let _v26: FileWriteTextOption; _v26.complete;
-declare let _v27: FileReadTextOption; _v27.complete;
-declare let _v28: FileWriteArrayBufferOption; _v28.complete;
-declare let _v29: FileReadArrayBufferOption; _v29.complete;
-declare let _v30: FileAccessOption; _v30.complete;
-declare let _v31: FileMkdirOption; _v31.complete;
-declare let _v32: FileRmdirOption; _v32.complete;
-File.copy({ srcUri: '', dstUri: '' });
-File.delete({ uri: '' });
-declare let _v33: FileMoveOption; _v33.dstUri;
-declare let _v34: FileCopyOption; _v34.dstUri;
-declare let _v35: FileWriteTextOption; _v35.encoding;
-declare let _v36: FileReadTextOption; _v36.encoding;
-declare let _v37: FileMoveOption; _v37.fail;
-declare let _v38: FileListOption; _v38.fail;
-declare let _v39: FileCopyOption; _v39.fail;
-declare let _v40: FileGetOption; _v40.fail;
-declare let _v41: FileDeleteOption; _v41.fail;
-declare let _v42: FileWriteTextOption; _v42.fail;
-declare let _v43: FileReadTextOption; _v43.fail;
-declare let _v44: FileWriteArrayBufferOption; _v44.fail;
-declare let _v45: FileReadArrayBufferOption; _v45.fail;
-declare let _v46: FileAccessOption; _v46.fail;
-declare let _v47: FileMkdirOption; _v47.fail;
-declare let _v48: FileRmdirOption; _v48.fail;
-declare let _v49: FileListResponse; _v49.fileList;
-File.get({ uri: '' });
-declare let _v50: FileResponse; _v50.lastModifiedTime;
-declare let _v51: FileResponse; _v51.length;
-declare let _v52: FileReadTextOption; _v52.length;
-declare let _v53: FileReadArrayBufferOption; _v53.length;
-File.list({ uri: '' });
-File.mkdir({ uri: '' });
-File.move({ srcUri: '', dstUri: '' });
-declare let _v54: FileReadTextOption; _v54.position;
-declare let _v55: FileWriteArrayBufferOption; _v55.position;
-declare let _v56: FileReadArrayBufferOption; _v56.position;
-File.readArrayBuffer({ uri: '' });
-File.readText({ uri: '' });
-declare let _v57: FileGetOption; _v57.recursive;
-declare let _v58: FileMkdirOption; _v58.recursive;
-declare let _v59: FileRmdirOption; _v59.recursive;
-File.rmdir({ uri: '' });
-declare let _v60: FileMoveOption; _v60.srcUri;
-declare let _v61: FileCopyOption; _v61.srcUri;
-declare let _v62: FileResponse; _v62.subFiles;
-declare let _v63: FileMoveOption; _v63.success;
-declare let _v64: FileListOption; _v64.success;
-declare let _v65: FileCopyOption; _v65.success;
-declare let _v66: FileGetOption; _v66.success;
-declare let _v67: FileDeleteOption; _v67.success;
-declare let _v68: FileWriteTextOption; _v68.success;
-declare let _v69: FileReadTextOption; _v69.success;
-declare let _v70: FileWriteArrayBufferOption; _v70.success;
-declare let _v71: FileReadArrayBufferOption; _v71.success;
-declare let _v72: FileAccessOption; _v72.success;
-declare let _v73: FileMkdirOption; _v73.success;
-declare let _v74: FileRmdirOption; _v74.success;
-declare let _v75: FileWriteTextOption; _v75.text;
-declare let _v76: FileReadTextResponse; _v76.text;
-declare let _v77: FileResponse; _v77.type;
-declare let _v78: FileResponse; _v78.uri;
-declare let _v79: FileListOption; _v79.uri;
-declare let _v80: FileGetOption; _v80.uri;
-declare let _v81: FileDeleteOption; _v81.uri;
-declare let _v82: FileWriteTextOption; _v82.uri;
-declare let _v83: FileReadTextOption; _v83.uri;
-declare let _v84: FileWriteArrayBufferOption; _v84.uri;
-declare let _v85: FileReadArrayBufferOption; _v85.uri;
-declare let _v86: FileAccessOption; _v86.uri;
-declare let _v87: FileMkdirOption; _v87.uri;
-declare let _v88: FileRmdirOption; _v88.uri;
-// File.writeArrayBuffer({ uri: '', buffer: new Uint8Array(0) });  // omitted: would not compile (2304)
-File.writeText({ uri: '', text: '' });
+// Base URI for the lite-runtime notes workspace (internal sandbox path).
+const BASE_URI = 'internal://cache/notes/';
+const NOTES_FILE = BASE_URI + 'readme.txt';
+const BACKUP_FILE = BASE_URI + 'readme.bak.txt';
+
+// Inspect each option before dispatch so every deprecated option/response field is
+// resolved by the compiler against the SDK type (one touch per field).
+function inspectAccess(o: FileAccessOption): void {
+  console.info('access', o.uri, !!o.success, !!o.fail, !!o.complete);
+}
+function inspectMkdir(o: FileMkdirOption): void {
+  console.info('mkdir', o.uri, o.recursive, !!o.success, !!o.fail, !!o.complete);
+}
+function inspectList(o: FileListOption): void {
+  console.info('list', o.uri, !!o.success, !!o.fail, !!o.complete);
+}
+function inspectGet(o: FileGetOption): void {
+  console.info('get', o.uri, o.recursive, !!o.success, !!o.fail, !!o.complete);
+}
+function inspectCopy(o: FileCopyOption): void {
+  console.info('copy', o.srcUri, o.dstUri, !!o.success, !!o.fail, !!o.complete);
+}
+function inspectMove(o: FileMoveOption): void {
+  console.info('move', o.srcUri, o.dstUri, !!o.success, !!o.fail, !!o.complete);
+}
+function inspectDelete(o: FileDeleteOption): void {
+  console.info('delete', o.uri, !!o.success, !!o.fail, !!o.complete);
+}
+function inspectRmdir(o: FileRmdirOption): void {
+  console.info('rmdir', o.uri, o.recursive, !!o.success, !!o.fail, !!o.complete);
+}
+function inspectWriteText(o: FileWriteTextOption): void {
+  console.info('writeText', o.uri, o.text.length, o.encoding, o.append, !!o.success, !!o.fail, !!o.complete);
+}
+function inspectReadText(o: FileReadTextOption): void {
+  console.info('readText', o.uri, o.encoding, o.position, o.length, !!o.success, !!o.fail, !!o.complete);
+}
+function inspectReadArrayBuffer(o: FileReadArrayBufferOption): void {
+  console.info('readArrayBuffer', o.uri, o.position, o.length, !!o.success, !!o.fail, !!o.complete);
+}
+function inspectWriteArrayBuffer(o: FileWriteArrayBufferOption): void {
+  console.info('writeArrayBuffer', o.uri, o.buffer.byteLength, o.position, o.append, !!o.success, !!o.fail, !!o.complete);
+}
+
+// Scenario 1: provision the notes directory, verify it is reachable, list its contents.
+function provisionWorkspace(): void {
+  const mkdirOpt: FileMkdirOption = {
+    uri: BASE_URI, recursive: true,
+    success: () => console.info('mkdir ok', BASE_URI),
+    fail: (data: string, code: number) => console.error('mkdir fail', data, code),
+    complete: () => console.info('mkdir done'),
+  };
+  inspectMkdir(mkdirOpt);
+  File.mkdir(mkdirOpt);
+
+  const accessOpt: FileAccessOption = {
+    uri: BASE_URI,
+    success: () => console.info('access ok', BASE_URI),
+    fail: (data: string, code: number) => console.error('access fail', data, code),
+    complete: () => console.info('access done'),
+  };
+  inspectAccess(accessOpt);
+  File.access(accessOpt);
+
+  const listOpt: FileListOption = {
+    uri: BASE_URI,
+    success: (data: FileListResponse) => {
+      const entries: Array<FileResponse> = data.fileList;
+      for (const f of entries) {
+        console.info('entry', f.uri, f.length, f.lastModifiedTime, f.type, (f.subFiles ?? []).length);
+      }
+    },
+    fail: (data: string, code: number) => console.error('list fail', data, code),
+    complete: () => console.info('list done'),
+  };
+  inspectList(listOpt);
+  File.list(listOpt);
+}
+
+// Scenario 2: write a text note (append, utf-8) then read it back as text and as a buffer.
+function writeAndReadNote(): void {
+  const writeOpt: FileWriteTextOption = {
+    uri: NOTES_FILE, text: 'hello notes\n', encoding: 'UTF-8', append: true,
+    success: () => console.info('writeText ok', NOTES_FILE),
+    fail: (data: string, code: number) => console.error('writeText fail', data, code),
+    complete: () => console.info('writeText done'),
+  };
+  inspectWriteText(writeOpt);
+  File.writeText(writeOpt);
+
+  const readTextOpt: FileReadTextOption = {
+    uri: NOTES_FILE, encoding: 'UTF-8', position: 0, length: 64,
+    success: (data: FileReadTextResponse) => console.info('readText ok', data.text),
+    fail: (data: string, code: number) => console.error('readText fail', data, code),
+    complete: () => console.info('readText done'),
+  };
+  inspectReadText(readTextOpt);
+  File.readText(readTextOpt);
+
+  const readBufOpt: FileReadArrayBufferOption = {
+    uri: NOTES_FILE, position: 0, length: 64,
+    success: (data: FileReadArrayBufferResponse) => console.info('readArrayBuffer ok', data.buffer.byteLength),
+    fail: (data: string, code: number) => console.error('readArrayBuffer fail', data, code),
+    complete: () => console.info('readArrayBuffer done'),
+  };
+  inspectReadArrayBuffer(readBufOpt);
+  File.readArrayBuffer(readBufOpt);
+
+  // Prepare (dry-run) a binary write config — exercise the array-buffer option schema
+  // without dispatching File.writeArrayBuffer (kept out of this file's coverage set).
+  const writeBufOpt: FileWriteArrayBufferOption = {
+    uri: NOTES_FILE + '.bin', buffer: new Uint8Array([0x48, 0x49]), position: 0, append: false,
+    success: () => console.info('writeArrayBuffer ok'),
+    fail: (data: string, code: number) => console.error('writeArrayBuffer fail', data, code),
+    complete: () => console.info('writeArrayBuffer done'),
+  };
+  inspectWriteArrayBuffer(writeBufOpt);
+}
+
+// Scenario 3: copy the note to a backup, move the backup into the workspace, stat it, then clean up.
+function organizeBackups(): void {
+  const copyOpt: FileCopyOption = {
+    srcUri: NOTES_FILE, dstUri: BACKUP_FILE,
+    success: (dstUri: string) => console.info('copy ok', dstUri),
+    fail: (data: string, code: number) => console.error('copy fail', data, code),
+    complete: () => console.info('copy done'),
+  };
+  inspectCopy(copyOpt);
+  File.copy(copyOpt);
+
+  const moveOpt: FileMoveOption = {
+    srcUri: BACKUP_FILE, dstUri: BASE_URI + 'restored.txt',
+    success: (dstUri: string) => console.info('move ok', dstUri),
+    fail: (data: string, code: number) => console.error('move fail', data, code),
+    complete: () => console.info('move done'),
+  };
+  inspectMove(moveOpt);
+  File.move(moveOpt);
+
+  const getOpt: FileGetOption = {
+    uri: BASE_URI + 'restored.txt', recursive: false,
+    success: (file: FileResponse) => console.info('get ok', file.uri, file.length, file.type),
+    fail: (data: string, code: number) => console.error('get fail', data, code),
+    complete: () => console.info('get done'),
+  };
+  inspectGet(getOpt);
+  File.get(getOpt);
+
+  const deleteOpt: FileDeleteOption = {
+    uri: BASE_URI + 'restored.txt',
+    success: () => console.info('delete ok'),
+    fail: (data: string, code: number) => console.error('delete fail', data, code),
+    complete: () => console.info('delete done'),
+  };
+  inspectDelete(deleteOpt);
+  File.delete(deleteOpt);
+
+  const rmdirOpt: FileRmdirOption = {
+    uri: BASE_URI, recursive: true,
+    success: () => console.info('rmdir ok'),
+    fail: (data: string, code: number) => console.error('rmdir fail', data, code),
+    complete: () => console.info('rmdir done'),
+  };
+  inspectRmdir(rmdirOpt);
+  File.rmdir(rmdirOpt);
+}
+
+function run(): void {
+  provisionWorkspace();
+  writeAndReadNote();
+  organizeBackups();
+}
+
+run();

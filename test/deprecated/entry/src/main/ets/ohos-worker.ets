@@ -1,29 +1,86 @@
 import worker from '@ohos.worker';
-import { DedicatedWorkerGlobalScope, EventListener, EventTarget } from '@ohos.worker';
+import { DedicatedWorkerGlobalScope, ErrorEvent, Event, EventListener, EventTarget, MessageEvent } from '@ohos.worker';
 
-let _v0: EventListener;
-let _v1: EventTarget;
-// let _v2: WorkerGlobalScope;  // omitted: would not compile (2304)
-let _v3: DedicatedWorkerGlobalScope;
-worker.Worker;
-declare let _v4: worker.Worker; _v4.off('');
-declare let _v5: worker.Worker; _v5.on;
-declare let _v6: worker.Worker; _v6.once;
-declare let _v7: worker.Worker; _v7.onerror;
-declare let _v8: worker.Worker; _v8.onexit;
-declare let _v9: worker.Worker; _v9.onmessage;
-declare let _v10: worker.Worker; _v10.onmessageerror;
-declare let _v11: worker.Worker; _v11.postMessage;
-declare let _v12: worker.Worker; _v12.terminate();
-declare let _v13: EventTarget; _v13.addEventListener;
-declare let _v14: DedicatedWorkerGlobalScope; _v14.close();
-declare let _v15: EventTarget; _v15.dispatchEvent({ type: '', timeStamp: 0 });
-// declare let _v16: WorkerGlobalScope; _v16.name;  // omitted: would not compile (2304)
-// declare let _v17: WorkerGlobalScope; _v17.onerror;  // omitted: would not compile (2304)
-declare let _v18: DedicatedWorkerGlobalScope; _v18.onmessage;
-declare let _v19: DedicatedWorkerGlobalScope; _v19.onmessageerror;
-worker.parentPort;
-declare let _v20: DedicatedWorkerGlobalScope; _v20.postMessage;
-declare let _v21: EventTarget; _v21.removeAllListener();
-declare let _v22: EventTarget; _v22.removeEventListener('');
-// declare let _v23: WorkerGlobalScope; _v23.self;  // omitted: would not compile (2304)
+const WORKER_SCRIPT = 'entry/ets/workers/task-worker.js';
+
+// Host-thread side: spawn a deprecated Worker to offload a chunk of work,
+// wire up lifecycle handlers, exchange a message, then tear it down.
+async function runHostWorker(): Promise<void> {
+  const w = new worker.Worker(WORKER_SCRIPT);
+
+  w.onmessage = (event: MessageEvent<Object>) => {
+    console.info('host received result:', event.data);
+  };
+  w.onerror = (err: ErrorEvent) => {
+    console.error('worker raised an error:', err.message);
+  };
+  w.onexit = (code: number) => {
+    console.info('worker exited with code', code);
+  };
+  w.onmessageerror = (event: MessageEvent<Object>) => {
+    console.error('host received an unserializable message:', event.data);
+  };
+
+  const onMessage: EventListener = () => { /* handle message */ };
+  // The deprecated Worker class nominally `implements EventTarget` but its
+  // .d.ts body does not redeclare the EventTarget members, so `w` is not
+  // structurally assignable to EventTarget. Use an EventTarget-typed stub
+  // so the deprecated EventTarget.* methods are still exercised for coverage.
+  const eventTarget: EventTarget = {
+    addEventListener(_type: string, _listener: EventListener): void {},
+    dispatchEvent(_event: Event): boolean { return false; },
+    removeEventListener(_type: string, _callback?: EventListener): void {},
+    removeAllListener(): void {},
+  };
+  eventTarget.addEventListener('message', onMessage);
+  eventTarget.dispatchEvent({ type: 'message', timeStamp: 0 });
+
+  w.on('message', onMessage);
+  w.once('message', onMessage);
+
+  try {
+    w.postMessage({ cmd: 'start', payload: { rows: 1000 } });
+  } catch (e) {
+    console.error('postMessage to worker failed', e);
+  }
+
+  w.off('message', onMessage);
+  eventTarget.removeEventListener('message', onMessage);
+  eventTarget.removeAllListener();
+
+  try {
+    w.terminate();
+  } catch (e) {
+    console.error('terminate failed', e);
+  }
+}
+
+// Worker-thread side: the body of the spawned worker script. Uses the
+// deprecated DedicatedWorkerGlobalScope (exposed as worker.parentPort) to
+// receive a task, post a result back, and shut itself down.
+async function runWorkerSide(): Promise<void> {
+  const scope: DedicatedWorkerGlobalScope = worker.parentPort;
+
+  scope.onmessage = (event: MessageEvent<Object>) => {
+    console.info('worker received task:', event.data);
+    scope.postMessage({ result: 'done', input: event.data });
+  };
+  scope.onmessageerror = (event: MessageEvent<Object>) => {
+    console.error('worker could not deserialize message:', event.data);
+  };
+
+  try {
+    scope.postMessage({ status: 'ready' });
+  } catch (e) {
+    console.error('worker postMessage failed', e);
+  }
+
+  scope.close();
+}
+
+async function run(): Promise<void> {
+  await runHostWorker();
+  await runWorkerSide();
+}
+
+run();

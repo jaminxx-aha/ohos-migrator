@@ -1,333 +1,572 @@
 import bluetoothManager from '@ohos.bluetoothManager';
+import BusinessError from '@ohos.base';
 
-// @ohos.bluetoothManager.bluetoothManager: namespace; detected via the import line; usage omitted
-// @ohos.bluetoothManager.BLE: namespace; detected via the import line; usage omitted
-let _v0: bluetoothManager.A2dpSourceProfile;
-declare let _v1: bluetoothManager.A2dpSourceProfile; _v1.connect('');
-declare let _v2: bluetoothManager.A2dpSourceProfile; _v2.disconnect('');
-declare let _v3: bluetoothManager.A2dpSourceProfile; _v3.getPlayingState('');
-declare let _v4: bluetoothManager.A2dpSourceProfile; _v4.off('connectionStateChange');
-declare let _v5: bluetoothManager.A2dpSourceProfile; _v5.on('connectionStateChange', () => {});
-let _v6: bluetoothManager.AdvertiseData;
-declare let _v7: bluetoothManager.AdvertiseData; _v7.manufactureData;
-declare let _v8: bluetoothManager.AdvertiseData; _v8.serviceData;
-declare let _v9: bluetoothManager.AdvertiseData; _v9.serviceUuids;
-let _v10: bluetoothManager.AdvertiseSetting;
-declare let _v11: bluetoothManager.AdvertiseSetting; _v11.connectable;
-declare let _v12: bluetoothManager.AdvertiseSetting; _v12.interval;
-declare let _v13: bluetoothManager.AdvertiseSetting; _v13.txPower;
-bluetoothManager.BLE.createGattClientDevice('');
-bluetoothManager.BLE.createGattServer();
-bluetoothManager.BLE.getConnectedBLEDevices();
-bluetoothManager.BLE.off('BLEDeviceFind');
-bluetoothManager.BLE.on('BLEDeviceFind', () => {});
-bluetoothManager.BLE.startBLEScan([]);
-bluetoothManager.BLE.stopBLEScan();
-let _v14: bluetoothManager.BLECharacteristic;
-declare let _v15: bluetoothManager.BLECharacteristic; _v15.characteristicUuid;
-declare let _v16: bluetoothManager.BLECharacteristic; _v16.characteristicValue;
-declare let _v17: bluetoothManager.BLECharacteristic; _v17.descriptors;
-declare let _v18: bluetoothManager.BLECharacteristic; _v18.serviceUuid;
-let _v19: bluetoothManager.BLEConnectChangedState;
-declare let _v20: bluetoothManager.BLEConnectChangedState; _v20.deviceId;
-declare let _v21: bluetoothManager.BLEConnectChangedState; _v21.state;
-let _v22: bluetoothManager.BLEDescriptor;
-declare let _v23: bluetoothManager.BLEDescriptor; _v23.characteristicUuid;
-declare let _v24: bluetoothManager.BLEDescriptor; _v24.descriptorUuid;
-declare let _v25: bluetoothManager.BLEDescriptor; _v25.descriptorValue;
-declare let _v26: bluetoothManager.BLEDescriptor; _v26.serviceUuid;
-let _v27: bluetoothManager.BaseProfile;
-declare let _v28: bluetoothManager.BaseProfile; _v28.getConnectionDevices();
-declare let _v29: bluetoothManager.BaseProfile; _v29.getDeviceState('');
-bluetoothManager.BluetoothState;
-bluetoothManager.BluetoothState.STATE_BLE_ON;
-bluetoothManager.BluetoothState.STATE_BLE_TURNING_OFF;
-bluetoothManager.BluetoothState.STATE_BLE_TURNING_ON;
-bluetoothManager.BluetoothState.STATE_OFF;
-bluetoothManager.BluetoothState.STATE_ON;
-bluetoothManager.BluetoothState.STATE_TURNING_OFF;
-bluetoothManager.BluetoothState.STATE_TURNING_ON;
-bluetoothManager.BondState;
-bluetoothManager.BondState.BOND_STATE_BONDED;
-bluetoothManager.BondState.BOND_STATE_BONDING;
-bluetoothManager.BondState.BOND_STATE_INVALID;
-let _v30: bluetoothManager.BondStateParam;
-declare let _v31: bluetoothManager.BondStateParam; _v31.deviceId;
-declare let _v32: bluetoothManager.BondStateParam; _v32.state;
-let _v33: bluetoothManager.CharacteristicReadRequest;
-declare let _v34: bluetoothManager.CharacteristicReadRequest; _v34.characteristicUuid;
-declare let _v35: bluetoothManager.CharacteristicReadRequest; _v35.deviceId;
-declare let _v36: bluetoothManager.CharacteristicReadRequest; _v36.offset;
-declare let _v37: bluetoothManager.CharacteristicReadRequest; _v37.serviceUuid;
-declare let _v38: bluetoothManager.CharacteristicReadRequest; _v38.transId;
-let _v39: bluetoothManager.CharacteristicWriteRequest;
-declare let _v40: bluetoothManager.CharacteristicWriteRequest; _v40.characteristicUuid;
-declare let _v41: bluetoothManager.CharacteristicWriteRequest; _v41.deviceId;
-declare let _v42: bluetoothManager.CharacteristicWriteRequest; _v42.isPrep;
-declare let _v43: bluetoothManager.CharacteristicWriteRequest; _v43.needRsp;
-declare let _v44: bluetoothManager.CharacteristicWriteRequest; _v44.offset;
-declare let _v45: bluetoothManager.CharacteristicWriteRequest; _v45.serviceUuid;
-declare let _v46: bluetoothManager.CharacteristicWriteRequest; _v46.transId;
-declare let _v47: bluetoothManager.CharacteristicWriteRequest; _v47.value;
-let _v48: bluetoothManager.DescriptorReadRequest;
-declare let _v49: bluetoothManager.DescriptorReadRequest; _v49.characteristicUuid;
-declare let _v50: bluetoothManager.DescriptorReadRequest; _v50.descriptorUuid;
-declare let _v51: bluetoothManager.DescriptorReadRequest; _v51.deviceId;
-declare let _v52: bluetoothManager.DescriptorReadRequest; _v52.offset;
-declare let _v53: bluetoothManager.DescriptorReadRequest; _v53.serviceUuid;
-declare let _v54: bluetoothManager.DescriptorReadRequest; _v54.transId;
-let _v55: bluetoothManager.DescriptorWriteRequest;
-declare let _v56: bluetoothManager.DescriptorWriteRequest; _v56.characteristicUuid;
-declare let _v57: bluetoothManager.DescriptorWriteRequest; _v57.descriptorUuid;
-declare let _v58: bluetoothManager.DescriptorWriteRequest; _v58.deviceId;
-declare let _v59: bluetoothManager.DescriptorWriteRequest; _v59.isPrep;
-declare let _v60: bluetoothManager.DescriptorWriteRequest; _v60.needRsp;
-declare let _v61: bluetoothManager.DescriptorWriteRequest; _v61.offset;
-declare let _v62: bluetoothManager.DescriptorWriteRequest; _v62.serviceUuid;
-declare let _v63: bluetoothManager.DescriptorWriteRequest; _v63.transId;
-declare let _v64: bluetoothManager.DescriptorWriteRequest; _v64.value;
-let _v65: bluetoothManager.DeviceClass;
-declare let _v66: bluetoothManager.DeviceClass; _v66.classOfDevice;
-declare let _v67: bluetoothManager.DeviceClass; _v67.majorClass;
-declare let _v68: bluetoothManager.DeviceClass; _v68.majorMinorClass;
-let _v69: bluetoothManager.GattClientDevice;
-declare let _v70: bluetoothManager.GattClientDevice; _v70.close();
-declare let _v71: bluetoothManager.GattClientDevice; _v71.connect();
-declare let _v72: bluetoothManager.GattClientDevice; _v72.disconnect();
-declare let _v73: bluetoothManager.GattClientDevice; _v73.getDeviceName();
-declare let _v74: bluetoothManager.GattClientDevice; _v74.getRssiValue();
-declare let _v75: bluetoothManager.GattClientDevice; _v75.getServices();
-declare let _v76: bluetoothManager.GattClientDevice; _v76.off('BLECharacteristicChange');
-declare let _v77: bluetoothManager.GattClientDevice; _v77.on('BLECharacteristicChange', () => {});
-// declare let _v78: bluetoothManager.GattClientDevice; _v78.readCharacteristicValue({ serviceUuid: '', characteristicUuid: '', characteristicValue: new Uint8Array(0), descriptors: [] });  // omitted: would not compile (2304)
-// declare let _v79: bluetoothManager.GattClientDevice; _v79.readDescriptorValue({ serviceUuid: '', characteristicUuid: '', descriptorUuid: '', descriptorValue: new Uint8Array(0) });  // omitted: would not compile (2304)
-declare let _v80: bluetoothManager.GattClientDevice; _v80.setBLEMtuSize(0);
-// declare let _v81: bluetoothManager.GattClientDevice; _v81.setNotifyCharacteristicChanged({ serviceUuid: '', characteristicUuid: '', characteristicValue: new Uint8Array(0), descriptors: [] }, false);  // omitted: would not compile (2304)
-// declare let _v82: bluetoothManager.GattClientDevice; _v82.writeCharacteristicValue({ serviceUuid: '', characteristicUuid: '', characteristicValue: new Uint8Array(0), descriptors: [] });  // omitted: would not compile (2304)
-// declare let _v83: bluetoothManager.GattClientDevice; _v83.writeDescriptorValue({ serviceUuid: '', characteristicUuid: '', descriptorUuid: '', descriptorValue: new Uint8Array(0) });  // omitted: would not compile (2304)
-let _v84: bluetoothManager.GattServer;
-declare let _v85: bluetoothManager.GattServer; _v85.addService({ serviceUuid: '', isPrimary: false, characteristics: [] });
-declare let _v86: bluetoothManager.GattServer; _v86.close();
-// declare let _v87: bluetoothManager.GattServer; _v87.notifyCharacteristicChanged('', { serviceUuid: '', characteristicUuid: '', characteristicValue: new Uint8Array(0), confirm: false });  // omitted: would not compile (2304)
-declare let _v88: bluetoothManager.GattServer; _v88.off('characteristicRead');
-declare let _v89: bluetoothManager.GattServer; _v89.on('characteristicRead', () => {});
-declare let _v90: bluetoothManager.GattServer; _v90.removeService('');
-// declare let _v91: bluetoothManager.GattServer; _v91.sendResponse({ deviceId: '', transId: 0, status: 0, offset: 0, value: new Uint8Array(0) });  // omitted: would not compile (2304)
-declare let _v92: bluetoothManager.GattServer; _v92.startAdvertising;
-declare let _v93: bluetoothManager.GattServer; _v93.stopAdvertising();
-let _v94: bluetoothManager.GattService;
-declare let _v95: bluetoothManager.GattService; _v95.characteristics;
-declare let _v96: bluetoothManager.GattService; _v96.includeServices;
-declare let _v97: bluetoothManager.GattService; _v97.isPrimary;
-declare let _v98: bluetoothManager.GattService; _v98.serviceUuid;
-let _v99: bluetoothManager.HandsFreeAudioGatewayProfile;
-declare let _v100: bluetoothManager.HandsFreeAudioGatewayProfile; _v100.connect('');
-declare let _v101: bluetoothManager.HandsFreeAudioGatewayProfile; _v101.disconnect('');
-declare let _v102: bluetoothManager.HandsFreeAudioGatewayProfile; _v102.off('connectionStateChange');
-declare let _v103: bluetoothManager.HandsFreeAudioGatewayProfile; _v103.on('connectionStateChange', () => {});
-let _v104: bluetoothManager.HidHostProfile;
-declare let _v105: bluetoothManager.HidHostProfile; _v105.off('connectionStateChange');
-declare let _v106: bluetoothManager.HidHostProfile; _v106.on('connectionStateChange', () => {});
-bluetoothManager.MajorClass;
-bluetoothManager.MajorClass.MAJOR_AUDIO_VIDEO;
-bluetoothManager.MajorClass.MAJOR_COMPUTER;
-bluetoothManager.MajorClass.MAJOR_HEALTH;
-bluetoothManager.MajorClass.MAJOR_IMAGING;
-bluetoothManager.MajorClass.MAJOR_MISC;
-bluetoothManager.MajorClass.MAJOR_NETWORKING;
-bluetoothManager.MajorClass.MAJOR_PERIPHERAL;
-bluetoothManager.MajorClass.MAJOR_PHONE;
-bluetoothManager.MajorClass.MAJOR_TOY;
-bluetoothManager.MajorClass.MAJOR_UNCATEGORIZED;
-bluetoothManager.MajorClass.MAJOR_WEARABLE;
-bluetoothManager.MajorMinorClass;
-bluetoothManager.MajorMinorClass.AUDIO_VIDEO_CAMCORDER;
-bluetoothManager.MajorMinorClass.AUDIO_VIDEO_CAR_AUDIO;
-bluetoothManager.MajorMinorClass.AUDIO_VIDEO_HANDSFREE;
-bluetoothManager.MajorMinorClass.AUDIO_VIDEO_HEADPHONES;
-bluetoothManager.MajorMinorClass.AUDIO_VIDEO_HIFI_AUDIO;
-bluetoothManager.MajorMinorClass.AUDIO_VIDEO_LOUDSPEAKER;
-bluetoothManager.MajorMinorClass.AUDIO_VIDEO_MICROPHONE;
-bluetoothManager.MajorMinorClass.AUDIO_VIDEO_PORTABLE_AUDIO;
-bluetoothManager.MajorMinorClass.AUDIO_VIDEO_SET_TOP_BOX;
-bluetoothManager.MajorMinorClass.AUDIO_VIDEO_UNCATEGORIZED;
-bluetoothManager.MajorMinorClass.AUDIO_VIDEO_VCR;
-bluetoothManager.MajorMinorClass.AUDIO_VIDEO_VIDEO_CAMERA;
-bluetoothManager.MajorMinorClass.AUDIO_VIDEO_VIDEO_CONFERENCING;
-bluetoothManager.MajorMinorClass.AUDIO_VIDEO_VIDEO_DISPLAY_AND_LOUDSPEAKER;
-bluetoothManager.MajorMinorClass.AUDIO_VIDEO_VIDEO_GAMING_TOY;
-bluetoothManager.MajorMinorClass.AUDIO_VIDEO_VIDEO_MONITOR;
-bluetoothManager.MajorMinorClass.AUDIO_VIDEO_WEARABLE_HEADSET;
-bluetoothManager.MajorMinorClass.COMPUTER_DESKTOP;
-bluetoothManager.MajorMinorClass.COMPUTER_HANDHELD_PC_PDA;
-bluetoothManager.MajorMinorClass.COMPUTER_LAPTOP;
-bluetoothManager.MajorMinorClass.COMPUTER_PALM_SIZE_PC_PDA;
-bluetoothManager.MajorMinorClass.COMPUTER_SERVER;
-bluetoothManager.MajorMinorClass.COMPUTER_TABLET;
-bluetoothManager.MajorMinorClass.COMPUTER_UNCATEGORIZED;
-bluetoothManager.MajorMinorClass.COMPUTER_WEARABLE;
-bluetoothManager.MajorMinorClass.HEALTH_ANKLE_PROSTHESIS;
-bluetoothManager.MajorMinorClass.HEALTH_BLOOD_PRESSURE;
-bluetoothManager.MajorMinorClass.HEALTH_BODY_COMPOSITION_ANALYZER;
-bluetoothManager.MajorMinorClass.HEALTH_DATA_DISPLAY;
-bluetoothManager.MajorMinorClass.HEALTH_GENERIC_HEALTH_MANAGER;
-bluetoothManager.MajorMinorClass.HEALTH_GLUCOSE;
-bluetoothManager.MajorMinorClass.HEALTH_KNEE_PROSTHESIS;
-bluetoothManager.MajorMinorClass.HEALTH_MEDICATION_MONITOR;
-bluetoothManager.MajorMinorClass.HEALTH_PEAK_FLOW_MONITOR;
-bluetoothManager.MajorMinorClass.HEALTH_PERSONAL_MOBILITY_DEVICE;
-bluetoothManager.MajorMinorClass.HEALTH_PULSE_OXIMETER;
-bluetoothManager.MajorMinorClass.HEALTH_PULSE_RATE;
-bluetoothManager.MajorMinorClass.HEALTH_STEP_COUNTER;
-bluetoothManager.MajorMinorClass.HEALTH_THERMOMETER;
-bluetoothManager.MajorMinorClass.HEALTH_UNCATEGORIZED;
-bluetoothManager.MajorMinorClass.HEALTH_WEIGHING;
-bluetoothManager.MajorMinorClass.IMAGING_CAMERA;
-bluetoothManager.MajorMinorClass.IMAGING_DISPLAY;
-bluetoothManager.MajorMinorClass.IMAGING_PRINTER;
-bluetoothManager.MajorMinorClass.IMAGING_SCANNER;
-bluetoothManager.MajorMinorClass.IMAGING_UNCATEGORIZED;
-bluetoothManager.MajorMinorClass.NETWORK_17_TO_33_UTILIZED;
-bluetoothManager.MajorMinorClass.NETWORK_1_TO_17_UTILIZED;
-bluetoothManager.MajorMinorClass.NETWORK_33_TO_50_UTILIZED;
-bluetoothManager.MajorMinorClass.NETWORK_60_TO_67_UTILIZED;
-bluetoothManager.MajorMinorClass.NETWORK_67_TO_83_UTILIZED;
-bluetoothManager.MajorMinorClass.NETWORK_83_TO_99_UTILIZED;
-bluetoothManager.MajorMinorClass.NETWORK_FULLY_AVAILABLE;
-bluetoothManager.MajorMinorClass.NETWORK_NO_SERVICE;
-bluetoothManager.MajorMinorClass.PERIPHERAL_CARD_READER;
-bluetoothManager.MajorMinorClass.PERIPHERAL_DIGITAL_PEN;
-bluetoothManager.MajorMinorClass.PERIPHERAL_DIGITIZER_TABLET;
-bluetoothManager.MajorMinorClass.PERIPHERAL_GAMEPAD;
-bluetoothManager.MajorMinorClass.PERIPHERAL_GESTURAL_INPUT;
-bluetoothManager.MajorMinorClass.PERIPHERAL_JOYSTICK;
-bluetoothManager.MajorMinorClass.PERIPHERAL_KEYBOARD;
-bluetoothManager.MajorMinorClass.PERIPHERAL_KEYBOARD_POINTING;
-bluetoothManager.MajorMinorClass.PERIPHERAL_NON_KEYBOARD_NON_POINTING;
-bluetoothManager.MajorMinorClass.PERIPHERAL_POINTING_DEVICE;
-bluetoothManager.MajorMinorClass.PERIPHERAL_REMOTE_CONTROL;
-bluetoothManager.MajorMinorClass.PERIPHERAL_SCANNER_RFID;
-bluetoothManager.MajorMinorClass.PERIPHERAL_SENSING_DEVICE;
-bluetoothManager.MajorMinorClass.PERIPHERAL_UNCATEGORIZED;
-bluetoothManager.MajorMinorClass.PHONE_CELLULAR;
-bluetoothManager.MajorMinorClass.PHONE_CORDLESS;
-bluetoothManager.MajorMinorClass.PHONE_ISDN;
-bluetoothManager.MajorMinorClass.PHONE_MODEM_OR_GATEWAY;
-bluetoothManager.MajorMinorClass.PHONE_SMART;
-bluetoothManager.MajorMinorClass.PHONE_UNCATEGORIZED;
-bluetoothManager.MajorMinorClass.TOY_CONTROLLER;
-bluetoothManager.MajorMinorClass.TOY_DOLL_ACTION_FIGURE;
-bluetoothManager.MajorMinorClass.TOY_GAME;
-bluetoothManager.MajorMinorClass.TOY_ROBOT;
-bluetoothManager.MajorMinorClass.TOY_UNCATEGORIZED;
-bluetoothManager.MajorMinorClass.TOY_VEHICLE;
-bluetoothManager.MajorMinorClass.WEARABLE_GLASSES;
-bluetoothManager.MajorMinorClass.WEARABLE_HELMET;
-bluetoothManager.MajorMinorClass.WEARABLE_JACKET;
-bluetoothManager.MajorMinorClass.WEARABLE_PAGER;
-bluetoothManager.MajorMinorClass.WEARABLE_UNCATEGORIZED;
-bluetoothManager.MajorMinorClass.WEARABLE_WRIST_WATCH;
-let _v107: bluetoothManager.ManufactureData;
-declare let _v108: bluetoothManager.ManufactureData; _v108.manufactureId;
-declare let _v109: bluetoothManager.ManufactureData; _v109.manufactureValue;
-bluetoothManager.MatchMode;
-bluetoothManager.MatchMode.MATCH_MODE_AGGRESSIVE;
-bluetoothManager.MatchMode.MATCH_MODE_STICKY;
-let _v110: bluetoothManager.NotifyCharacteristic;
-declare let _v111: bluetoothManager.NotifyCharacteristic; _v111.characteristicUuid;
-declare let _v112: bluetoothManager.NotifyCharacteristic; _v112.characteristicValue;
-declare let _v113: bluetoothManager.NotifyCharacteristic; _v113.confirm;
-declare let _v114: bluetoothManager.NotifyCharacteristic; _v114.serviceUuid;
-let _v115: bluetoothManager.PanProfile;
-declare let _v116: bluetoothManager.PanProfile; _v116.off('connectionStateChange');
-declare let _v117: bluetoothManager.PanProfile; _v117.on('connectionStateChange', () => {});
-let _v118: bluetoothManager.PinRequiredParam;
-declare let _v119: bluetoothManager.PinRequiredParam; _v119.deviceId;
-declare let _v120: bluetoothManager.PinRequiredParam; _v120.pinCode;
-bluetoothManager.PlayingState;
-bluetoothManager.PlayingState.STATE_NOT_PLAYING;
-bluetoothManager.PlayingState.STATE_PLAYING;
-bluetoothManager.ProfileConnectionState;
-bluetoothManager.ProfileConnectionState.STATE_CONNECTED;
-bluetoothManager.ProfileConnectionState.STATE_CONNECTING;
-bluetoothManager.ProfileConnectionState.STATE_DISCONNECTED;
-bluetoothManager.ProfileConnectionState.STATE_DISCONNECTING;
-bluetoothManager.ProfileId;
-bluetoothManager.ProfileId.PROFILE_A2DP_SOURCE;
-bluetoothManager.ProfileId.PROFILE_HANDS_FREE_AUDIO_GATEWAY;
-bluetoothManager.ProfileId.PROFILE_HID_HOST;
-bluetoothManager.ProfileId.PROFILE_PAN_NETWORK;
-bluetoothManager.ScanDuty;
-bluetoothManager.ScanDuty.SCAN_MODE_BALANCED;
-bluetoothManager.ScanDuty.SCAN_MODE_LOW_LATENCY;
-bluetoothManager.ScanDuty.SCAN_MODE_LOW_POWER;
-let _v121: bluetoothManager.ScanFilter;
-declare let _v122: bluetoothManager.ScanFilter; _v122.deviceId;
-declare let _v123: bluetoothManager.ScanFilter; _v123.manufactureData;
-declare let _v124: bluetoothManager.ScanFilter; _v124.manufactureDataMask;
-declare let _v125: bluetoothManager.ScanFilter; _v125.manufactureId;
-declare let _v126: bluetoothManager.ScanFilter; _v126.name;
-declare let _v127: bluetoothManager.ScanFilter; _v127.serviceData;
-declare let _v128: bluetoothManager.ScanFilter; _v128.serviceDataMask;
-declare let _v129: bluetoothManager.ScanFilter; _v129.serviceSolicitationUuid;
-declare let _v130: bluetoothManager.ScanFilter; _v130.serviceSolicitationUuidMask;
-declare let _v131: bluetoothManager.ScanFilter; _v131.serviceUuid;
-declare let _v132: bluetoothManager.ScanFilter; _v132.serviceUuidMask;
-bluetoothManager.ScanMode;
-bluetoothManager.ScanMode.SCAN_MODE_CONNECTABLE;
-bluetoothManager.ScanMode.SCAN_MODE_CONNECTABLE_GENERAL_DISCOVERABLE;
-bluetoothManager.ScanMode.SCAN_MODE_CONNECTABLE_LIMITED_DISCOVERABLE;
-bluetoothManager.ScanMode.SCAN_MODE_GENERAL_DISCOVERABLE;
-bluetoothManager.ScanMode.SCAN_MODE_LIMITED_DISCOVERABLE;
-bluetoothManager.ScanMode.SCAN_MODE_NONE;
-let _v133: bluetoothManager.ScanOptions;
-declare let _v134: bluetoothManager.ScanOptions; _v134.dutyMode;
-declare let _v135: bluetoothManager.ScanOptions; _v135.interval;
-declare let _v136: bluetoothManager.ScanOptions; _v136.matchMode;
-let _v137: bluetoothManager.ScanResult;
-declare let _v138: bluetoothManager.ScanResult; _v138.data;
-declare let _v139: bluetoothManager.ScanResult; _v139.deviceId;
-declare let _v140: bluetoothManager.ScanResult; _v140.rssi;
-let _v141: bluetoothManager.ServerResponse;
-declare let _v142: bluetoothManager.ServerResponse; _v142.deviceId;
-declare let _v143: bluetoothManager.ServerResponse; _v143.offset;
-declare let _v144: bluetoothManager.ServerResponse; _v144.status;
-declare let _v145: bluetoothManager.ServerResponse; _v145.transId;
-declare let _v146: bluetoothManager.ServerResponse; _v146.value;
-let _v147: bluetoothManager.ServiceData;
-declare let _v148: bluetoothManager.ServiceData; _v148.serviceUuid;
-declare let _v149: bluetoothManager.ServiceData; _v149.serviceValue;
-let _v150: bluetoothManager.SppOption;
-declare let _v151: bluetoothManager.SppOption; _v151.secure;
-declare let _v152: bluetoothManager.SppOption; _v152.type;
-declare let _v153: bluetoothManager.SppOption; _v153.uuid;
-bluetoothManager.SppType;
-bluetoothManager.SppType.SPP_RFCOMM;
-let _v154: bluetoothManager.StateChangeParam;
-declare let _v155: bluetoothManager.StateChangeParam; _v155.deviceId;
-declare let _v156: bluetoothManager.StateChangeParam; _v156.state;
-bluetoothManager.disableBluetooth();
-bluetoothManager.enableBluetooth();
-bluetoothManager.getBluetoothScanMode();
-bluetoothManager.getBtConnectionState();
-bluetoothManager.getLocalName();
-bluetoothManager.getPairedDevices();
-bluetoothManager.getProfileConnectionState(bluetoothManager.ProfileId.PROFILE_A2DP_SOURCE);
-bluetoothManager.getProfileInstance(bluetoothManager.ProfileId.PROFILE_A2DP_SOURCE);
-bluetoothManager.getRemoteDeviceClass('');
-bluetoothManager.getRemoteDeviceName('');
-bluetoothManager.getState();
-bluetoothManager.off('bluetoothDeviceFind');
-bluetoothManager.on('bluetoothDeviceFind', () => {});
-bluetoothManager.pairDevice('');
-bluetoothManager.setBluetoothScanMode(bluetoothManager.ScanMode.SCAN_MODE_NONE, 0);
-bluetoothManager.setDevicePairingConfirmation('', false);
-bluetoothManager.setLocalName('');
-bluetoothManager.sppAccept(0, () => {});
-bluetoothManager.sppCloseClientSocket(0);
-bluetoothManager.sppCloseServerSocket(0);
-bluetoothManager.sppConnect('', { uuid: '', secure: false, type: bluetoothManager.SppType.SPP_RFCOMM }, () => {});
-bluetoothManager.sppListen('', { uuid: '', secure: false, type: bluetoothManager.SppType.SPP_RFCOMM }, () => {});
-// bluetoothManager.sppWrite(0, new Uint8Array(0));  // omitted: would not compile (2304)
-bluetoothManager.startBluetoothDiscovery();
-bluetoothManager.stopBluetoothDiscovery();
+// Realistic device/UUID constants used across the scenarios below.
+const HEADSET_ADDR = '11:22:33:44:55:66';
+const SPEAKER_ADDR = 'AA:BB:CC:DD:EE:FF';
+const HID_ADDR = '00:11:22:33:44:55';
+const PHONE_ADDR = '55:66:77:88:99:AA';
+const HRS_SERVICE_UUID = '0000180D-0000-1000-8000-00805F9B34FB';
+const HRS_MEASUREMENT_UUID = '00002A37-0000-1000-8000-00805F9B34FB';
+const CCC_DESCRIPTOR_UUID = '00002902-0000-1000-8000-00805F9B34FB';
+const SPP_UUID = '00001101-0000-1000-8000-00805F9B34FB';
+const MANUFACTURER_ID = 0x0001;
+const SERVER_SOCKET = 42;
+const CLIENT_SOCKET = 7;
+
+// ---------------------------------------------------------------------------
+// Scenario: enumerate every deprecated enum constant exported by the module.
+// Each constant is referenced in value position so the compiler resolves it.
+// ---------------------------------------------------------------------------
+function collectDeprecatedConstants(): void {
+  const btStates = [
+    bluetoothManager.BluetoothState.STATE_OFF,
+    bluetoothManager.BluetoothState.STATE_TURNING_ON,
+    bluetoothManager.BluetoothState.STATE_ON,
+    bluetoothManager.BluetoothState.STATE_TURNING_OFF,
+    bluetoothManager.BluetoothState.STATE_BLE_TURNING_ON,
+    bluetoothManager.BluetoothState.STATE_BLE_ON,
+    bluetoothManager.BluetoothState.STATE_BLE_TURNING_OFF,
+  ];
+  const bondStates = [
+    bluetoothManager.BondState.BOND_STATE_INVALID,
+    bluetoothManager.BondState.BOND_STATE_BONDING,
+    bluetoothManager.BondState.BOND_STATE_BONDED,
+  ];
+  const playingStates = [
+    bluetoothManager.PlayingState.STATE_NOT_PLAYING,
+    bluetoothManager.PlayingState.STATE_PLAYING,
+  ];
+  const profileConnStates = [
+    bluetoothManager.ProfileConnectionState.STATE_DISCONNECTED,
+    bluetoothManager.ProfileConnectionState.STATE_CONNECTING,
+    bluetoothManager.ProfileConnectionState.STATE_CONNECTED,
+    bluetoothManager.ProfileConnectionState.STATE_DISCONNECTING,
+  ];
+  const profileIds = [
+    bluetoothManager.ProfileId.PROFILE_A2DP_SOURCE,
+    bluetoothManager.ProfileId.PROFILE_HANDS_FREE_AUDIO_GATEWAY,
+    bluetoothManager.ProfileId.PROFILE_HID_HOST,
+    bluetoothManager.ProfileId.PROFILE_PAN_NETWORK,
+  ];
+  const scanModes = [
+    bluetoothManager.ScanMode.SCAN_MODE_NONE,
+    bluetoothManager.ScanMode.SCAN_MODE_CONNECTABLE,
+    bluetoothManager.ScanMode.SCAN_MODE_CONNECTABLE_GENERAL_DISCOVERABLE,
+    bluetoothManager.ScanMode.SCAN_MODE_CONNECTABLE_LIMITED_DISCOVERABLE,
+    bluetoothManager.ScanMode.SCAN_MODE_GENERAL_DISCOVERABLE,
+    bluetoothManager.ScanMode.SCAN_MODE_LIMITED_DISCOVERABLE,
+  ];
+  const scanDuties = [
+    bluetoothManager.ScanDuty.SCAN_MODE_LOW_POWER,
+    bluetoothManager.ScanDuty.SCAN_MODE_LOW_LATENCY,
+    bluetoothManager.ScanDuty.SCAN_MODE_BALANCED,
+  ];
+  const matchModes = [
+    bluetoothManager.MatchMode.MATCH_MODE_AGGRESSIVE,
+    bluetoothManager.MatchMode.MATCH_MODE_STICKY,
+  ];
+  const sppTypes = [bluetoothManager.SppType.SPP_RFCOMM];
+  const majorClasses = [
+    bluetoothManager.MajorClass.MAJOR_MISC,
+    bluetoothManager.MajorClass.MAJOR_COMPUTER,
+    bluetoothManager.MajorClass.MAJOR_PHONE,
+    bluetoothManager.MajorClass.MAJOR_NETWORKING,
+    bluetoothManager.MajorClass.MAJOR_AUDIO_VIDEO,
+    bluetoothManager.MajorClass.MAJOR_PERIPHERAL,
+    bluetoothManager.MajorClass.MAJOR_IMAGING,
+    bluetoothManager.MajorClass.MAJOR_WEARABLE,
+    bluetoothManager.MajorClass.MAJOR_TOY,
+    bluetoothManager.MajorClass.MAJOR_HEALTH,
+    bluetoothManager.MajorClass.MAJOR_UNCATEGORIZED,
+  ];
+  const majorMinorClasses = [
+    bluetoothManager.MajorMinorClass.COMPUTER_UNCATEGORIZED,
+    bluetoothManager.MajorMinorClass.COMPUTER_DESKTOP,
+    bluetoothManager.MajorMinorClass.COMPUTER_SERVER,
+    bluetoothManager.MajorMinorClass.COMPUTER_LAPTOP,
+    bluetoothManager.MajorMinorClass.COMPUTER_HANDHELD_PC_PDA,
+    bluetoothManager.MajorMinorClass.COMPUTER_PALM_SIZE_PC_PDA,
+    bluetoothManager.MajorMinorClass.COMPUTER_WEARABLE,
+    bluetoothManager.MajorMinorClass.COMPUTER_TABLET,
+    bluetoothManager.MajorMinorClass.PHONE_UNCATEGORIZED,
+    bluetoothManager.MajorMinorClass.PHONE_CELLULAR,
+    bluetoothManager.MajorMinorClass.PHONE_CORDLESS,
+    bluetoothManager.MajorMinorClass.PHONE_SMART,
+    bluetoothManager.MajorMinorClass.PHONE_MODEM_OR_GATEWAY,
+    bluetoothManager.MajorMinorClass.PHONE_ISDN,
+    bluetoothManager.MajorMinorClass.NETWORK_NO_SERVICE,
+    bluetoothManager.MajorMinorClass.NETWORK_1_TO_17_UTILIZED,
+    bluetoothManager.MajorMinorClass.NETWORK_17_TO_33_UTILIZED,
+    bluetoothManager.MajorMinorClass.NETWORK_33_TO_50_UTILIZED,
+    bluetoothManager.MajorMinorClass.NETWORK_60_TO_67_UTILIZED,
+    bluetoothManager.MajorMinorClass.NETWORK_67_TO_83_UTILIZED,
+    bluetoothManager.MajorMinorClass.NETWORK_83_TO_99_UTILIZED,
+    bluetoothManager.MajorMinorClass.NETWORK_FULLY_AVAILABLE,
+    bluetoothManager.MajorMinorClass.AUDIO_VIDEO_UNCATEGORIZED,
+    bluetoothManager.MajorMinorClass.AUDIO_VIDEO_WEARABLE_HEADSET,
+    bluetoothManager.MajorMinorClass.AUDIO_VIDEO_HANDSFREE,
+    bluetoothManager.MajorMinorClass.AUDIO_VIDEO_MICROPHONE,
+    bluetoothManager.MajorMinorClass.AUDIO_VIDEO_LOUDSPEAKER,
+    bluetoothManager.MajorMinorClass.AUDIO_VIDEO_HEADPHONES,
+    bluetoothManager.MajorMinorClass.AUDIO_VIDEO_PORTABLE_AUDIO,
+    bluetoothManager.MajorMinorClass.AUDIO_VIDEO_SET_TOP_BOX,
+    bluetoothManager.MajorMinorClass.AUDIO_VIDEO_CAR_AUDIO,
+    bluetoothManager.MajorMinorClass.AUDIO_VIDEO_HIFI_AUDIO,
+    bluetoothManager.MajorMinorClass.AUDIO_VIDEO_VCR,
+    bluetoothManager.MajorMinorClass.AUDIO_VIDEO_VIDEO_CAMERA,
+    bluetoothManager.MajorMinorClass.AUDIO_VIDEO_CAMCORDER,
+    bluetoothManager.MajorMinorClass.AUDIO_VIDEO_VIDEO_MONITOR,
+    bluetoothManager.MajorMinorClass.AUDIO_VIDEO_VIDEO_DISPLAY_AND_LOUDSPEAKER,
+    bluetoothManager.MajorMinorClass.AUDIO_VIDEO_VIDEO_CONFERENCING,
+    bluetoothManager.MajorMinorClass.AUDIO_VIDEO_VIDEO_GAMING_TOY,
+    bluetoothManager.MajorMinorClass.PERIPHERAL_UNCATEGORIZED,
+    bluetoothManager.MajorMinorClass.PERIPHERAL_KEYBOARD,
+    bluetoothManager.MajorMinorClass.PERIPHERAL_POINTING_DEVICE,
+    bluetoothManager.MajorMinorClass.PERIPHERAL_KEYBOARD_POINTING,
+    bluetoothManager.MajorMinorClass.PERIPHERAL_JOYSTICK,
+    bluetoothManager.MajorMinorClass.PERIPHERAL_GAMEPAD,
+    bluetoothManager.MajorMinorClass.PERIPHERAL_REMOTE_CONTROL,
+    bluetoothManager.MajorMinorClass.PERIPHERAL_SENSING_DEVICE,
+    bluetoothManager.MajorMinorClass.PERIPHERAL_DIGITIZER_TABLET,
+    bluetoothManager.MajorMinorClass.PERIPHERAL_CARD_READER,
+    bluetoothManager.MajorMinorClass.PERIPHERAL_DIGITAL_PEN,
+    bluetoothManager.MajorMinorClass.PERIPHERAL_SCANNER_RFID,
+    bluetoothManager.MajorMinorClass.PERIPHERAL_GESTURAL_INPUT,
+    bluetoothManager.MajorMinorClass.PERIPHERAL_NON_KEYBOARD_NON_POINTING,
+    bluetoothManager.MajorMinorClass.IMAGING_UNCATEGORIZED,
+    bluetoothManager.MajorMinorClass.IMAGING_DISPLAY,
+    bluetoothManager.MajorMinorClass.IMAGING_CAMERA,
+    bluetoothManager.MajorMinorClass.IMAGING_SCANNER,
+    bluetoothManager.MajorMinorClass.IMAGING_PRINTER,
+    bluetoothManager.MajorMinorClass.WEARABLE_UNCATEGORIZED,
+    bluetoothManager.MajorMinorClass.WEARABLE_WRIST_WATCH,
+    bluetoothManager.MajorMinorClass.WEARABLE_PAGER,
+    bluetoothManager.MajorMinorClass.WEARABLE_JACKET,
+    bluetoothManager.MajorMinorClass.WEARABLE_HELMET,
+    bluetoothManager.MajorMinorClass.WEARABLE_GLASSES,
+    bluetoothManager.MajorMinorClass.TOY_UNCATEGORIZED,
+    bluetoothManager.MajorMinorClass.TOY_ROBOT,
+    bluetoothManager.MajorMinorClass.TOY_VEHICLE,
+    bluetoothManager.MajorMinorClass.TOY_DOLL_ACTION_FIGURE,
+    bluetoothManager.MajorMinorClass.TOY_CONTROLLER,
+    bluetoothManager.MajorMinorClass.TOY_GAME,
+    bluetoothManager.MajorMinorClass.HEALTH_UNCATEGORIZED,
+    bluetoothManager.MajorMinorClass.HEALTH_BLOOD_PRESSURE,
+    bluetoothManager.MajorMinorClass.HEALTH_THERMOMETER,
+    bluetoothManager.MajorMinorClass.HEALTH_WEIGHING,
+    bluetoothManager.MajorMinorClass.HEALTH_GLUCOSE,
+    bluetoothManager.MajorMinorClass.HEALTH_PULSE_OXIMETER,
+    bluetoothManager.MajorMinorClass.HEALTH_PULSE_RATE,
+    bluetoothManager.MajorMinorClass.HEALTH_DATA_DISPLAY,
+    bluetoothManager.MajorMinorClass.HEALTH_STEP_COUNTER,
+    bluetoothManager.MajorMinorClass.HEALTH_BODY_COMPOSITION_ANALYZER,
+    bluetoothManager.MajorMinorClass.HEALTH_GENERIC_HEALTH_MANAGER,
+    bluetoothManager.MajorMinorClass.HEALTH_ANKLE_PROSTHESIS,
+    bluetoothManager.MajorMinorClass.HEALTH_KNEE_PROSTHESIS,
+    bluetoothManager.MajorMinorClass.HEALTH_PERSONAL_MOBILITY_DEVICE,
+    bluetoothManager.MajorMinorClass.HEALTH_MEDICATION_MONITOR,
+    bluetoothManager.MajorMinorClass.HEALTH_PEAK_FLOW_MONITOR,
+  ];
+  console.log('enum coverage sizes',
+    btStates.length, bondStates.length, playingStates.length, profileConnStates.length,
+    profileIds.length, scanModes.length, scanDuties.length, matchModes.length,
+    sppTypes.length, majorClasses.length, majorMinorClasses.length);
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: classic-Bluetooth adapter lifecycle, discovery and pairing.
+// ---------------------------------------------------------------------------
+async function manageClassicAdapter(): Promise<void> {
+  bluetoothManager.enableBluetooth();
+  const state = bluetoothManager.getState();
+  console.log('bt state', state);
+
+  bluetoothManager.setLocalName('HarmonyOS-Phone');
+  const localName = bluetoothManager.getLocalName();
+  const scanMode = bluetoothManager.getBluetoothScanMode();
+  bluetoothManager.setBluetoothScanMode(bluetoothManager.ScanMode.SCAN_MODE_CONNECTABLE_GENERAL_DISCOVERABLE, 0);
+  const overallConn = bluetoothManager.getBtConnectionState();
+  console.log('local name', localName, 'scan mode', scanMode, 'overall conn', overallConn);
+
+  bluetoothManager.startBluetoothDiscovery();
+  bluetoothManager.on('bluetoothDeviceFind', (devices: Array<string>) => {
+    console.log('discovered devices', devices);
+  });
+  bluetoothManager.off('bluetoothDeviceFind');
+  bluetoothManager.stopBluetoothDiscovery();
+
+  try {
+    bluetoothManager.pairDevice(HEADSET_ADDR);
+  } catch (e) {
+    console.error('pairDevice failed', e);
+  }
+  bluetoothManager.setDevicePairingConfirmation(HEADSET_ADDR, true);
+
+  const remoteName = bluetoothManager.getRemoteDeviceName(HEADSET_ADDR);
+  const remoteClass = bluetoothManager.getRemoteDeviceClass(HEADSET_ADDR);
+  inspectDeviceClass(remoteClass);
+  console.log('remote headset', remoteName);
+
+  const paired = bluetoothManager.getPairedDevices();
+  console.log('paired devices', paired.length);
+
+  bluetoothManager.disableBluetooth();
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: inspect a DeviceClass returned from getRemoteDeviceClass.
+// ---------------------------------------------------------------------------
+function inspectDeviceClass(dc: bluetoothManager.DeviceClass): void {
+  const cod = dc.classOfDevice;
+  const major = dc.majorClass;
+  const minor = dc.majorMinorClass;
+  console.log('device class', cod, major, minor);
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: classic profile connections (A2DP / HFP / HID / PAN) plus the
+// shared BaseProfile queries.
+// ---------------------------------------------------------------------------
+function manageClassicProfiles(): void {
+  const a2dp = bluetoothManager.getProfileInstance(bluetoothManager.ProfileId.PROFILE_A2DP_SOURCE) as bluetoothManager.A2dpSourceProfile;
+  a2dp.on('connectionStateChange', (state: bluetoothManager.StateChangeParam) => {
+    inspectStateChangeParam(state);
+    console.log('a2dp conn state', state.state);
+  });
+  try {
+    a2dp.connect(HEADSET_ADDR);
+  } catch (e) {
+    console.error('a2dp connect failed', e);
+  }
+  const playing = a2dp.getPlayingState(HEADSET_ADDR);
+  console.log('a2dp playing', playing);
+  const a2dpDevices = a2dp.getConnectionDevices();
+  const a2dpDevState = a2dp.getDeviceState(HEADSET_ADDR);
+  console.log('a2dp devices', a2dpDevices.length, a2dpDevState);
+  a2dp.disconnect(HEADSET_ADDR);
+  a2dp.off('connectionStateChange');
+
+  const hfp = bluetoothManager.getProfileInstance(bluetoothManager.ProfileId.PROFILE_HANDS_FREE_AUDIO_GATEWAY) as bluetoothManager.HandsFreeAudioGatewayProfile;
+  hfp.on('connectionStateChange', (s: bluetoothManager.StateChangeParam) => console.log('hfp state', s.deviceId));
+  hfp.connect(PHONE_ADDR);
+  hfp.disconnect(PHONE_ADDR);
+  hfp.off('connectionStateChange');
+
+  const hid = bluetoothManager.getProfileInstance(bluetoothManager.ProfileId.PROFILE_HID_HOST) as bluetoothManager.HidHostProfile;
+  hid.on('connectionStateChange', (s: bluetoothManager.StateChangeParam) => console.log('hid state', s.deviceId));
+  hid.off('connectionStateChange');
+
+  const pan = bluetoothManager.getProfileInstance(bluetoothManager.ProfileId.PROFILE_PAN_NETWORK) as bluetoothManager.PanProfile;
+  pan.on('connectionStateChange', (s: bluetoothManager.StateChangeParam) => console.log('pan state', s.deviceId));
+  pan.off('connectionStateChange');
+
+  // ProfileConnectionState for the requested profile id (deprecated module fn).
+  const a2dpConn = bluetoothManager.getProfileConnectionState(bluetoothManager.ProfileId.PROFILE_A2DP_SOURCE);
+  console.log('a2dp profile connection state', a2dpConn);
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: Serial Port Profile (SPP) server + client lifecycle.
+// ---------------------------------------------------------------------------
+function manageSpp(): void {
+  const sppOption: bluetoothManager.SppOption = {
+    uuid: SPP_UUID,
+    secure: true,
+    type: bluetoothManager.SppType.SPP_RFCOMM,
+  };
+  inspectSppOption(sppOption);
+
+  bluetoothManager.sppListen('HarmonySppServer', sppOption, (err: BusinessError, data: number) => {
+    if (err) { console.error('spp listen failed', err); return; }
+    console.log('spp listen server socket', data);
+  });
+  bluetoothManager.sppAccept(SERVER_SOCKET, (err: BusinessError, data: number) => {
+    if (err) { console.error('spp accept failed', err); return; }
+    console.log('spp accepted client', data);
+  });
+  bluetoothManager.sppConnect(HEADSET_ADDR, sppOption, (err: BusinessError, data: number) => {
+    if (err) { console.error('spp connect failed', err); return; }
+    console.log('spp connected client', data);
+  });
+  bluetoothManager.sppCloseClientSocket(CLIENT_SOCKET);
+  bluetoothManager.sppCloseServerSocket(SERVER_SOCKET);
+}
+
+function inspectSppOption(opt: bluetoothManager.SppOption): void {
+  const uuid = opt.uuid;
+  const secure = opt.secure;
+  const type = opt.type;
+  console.log('spp option', uuid, secure, type);
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: BLE peripheral advertising + GATT server hosting a Heart Rate svc.
+// ---------------------------------------------------------------------------
+function manageGattServer(): void {
+  const server = bluetoothManager.BLE.createGattServer();
+
+  const cccDescriptor: bluetoothManager.BLEDescriptor = {
+    serviceUuid: HRS_SERVICE_UUID,
+    characteristicUuid: HRS_MEASUREMENT_UUID,
+    descriptorUuid: CCC_DESCRIPTOR_UUID,
+    descriptorValue: new ArrayBuffer(2),
+  };
+  inspectBLEDescriptor(cccDescriptor);
+
+  const measurementChar: bluetoothManager.BLECharacteristic = {
+    serviceUuid: HRS_SERVICE_UUID,
+    characteristicUuid: HRS_MEASUREMENT_UUID,
+    characteristicValue: new ArrayBuffer(2),
+    descriptors: [cccDescriptor],
+  };
+  inspectBLECharacteristic(measurementChar);
+
+  const hrsService: bluetoothManager.GattService = {
+    serviceUuid: HRS_SERVICE_UUID,
+    isPrimary: true,
+    characteristics: [measurementChar],
+    includeServices: [],
+  };
+  inspectGattService(hrsService);
+
+  server.addService(hrsService);
+
+  const setting: bluetoothManager.AdvertiseSetting = {
+    interval: 1600,
+    txPower: -7,
+    connectable: true,
+  };
+  inspectAdvertiseSetting(setting);
+
+  const manufactureData: bluetoothManager.ManufactureData = {
+    manufactureId: MANUFACTURER_ID,
+    manufactureValue: new ArrayBuffer(2),
+  };
+  inspectManufactureData(manufactureData);
+
+  const serviceData: bluetoothManager.ServiceData = {
+    serviceUuid: HRS_SERVICE_UUID,
+    serviceValue: new ArrayBuffer(1),
+  };
+  inspectServiceData(serviceData);
+
+  const advData: bluetoothManager.AdvertiseData = {
+    serviceUuids: [HRS_SERVICE_UUID],
+    manufactureData: [manufactureData],
+    serviceData: [serviceData],
+  };
+  inspectAdvertiseData(advData);
+
+  server.startAdvertising(setting, advData);
+
+  server.on('characteristicRead', (req: bluetoothManager.CharacteristicReadRequest) => {
+    inspectCharacteristicReadRequest(req);
+    console.log('char read', req.characteristicUuid);
+  });
+  server.off('characteristicRead');
+
+  server.on('characteristicWrite', (req: bluetoothManager.CharacteristicWriteRequest) => {
+    inspectCharacteristicWriteRequest(req);
+  });
+  server.on('descriptorRead', (req: bluetoothManager.DescriptorReadRequest) => {
+    inspectDescriptorReadRequest(req);
+  });
+  server.on('descriptorWrite', (req: bluetoothManager.DescriptorWriteRequest) => {
+    inspectDescriptorWriteRequest(req);
+  });
+  server.off('characteristicWrite');
+  server.off('descriptorRead');
+  server.off('descriptorWrite');
+
+  server.stopAdvertising();
+  server.removeService(HRS_SERVICE_UUID);
+  server.close();
+}
+
+// ---------------------------------------------------------------------------
+// Scenario: BLE central scanning + GATT client interactions with a sensor.
+// ---------------------------------------------------------------------------
+async function manageGattClient(): Promise<void> {
+  const filters: Array<bluetoothManager.ScanFilter> = [buildHeartRateScanFilter()];
+  const options: bluetoothManager.ScanOptions = {
+    interval: 0,
+    dutyMode: bluetoothManager.ScanDuty.SCAN_MODE_BALANCED,
+    matchMode: bluetoothManager.MatchMode.MATCH_MODE_AGGRESSIVE,
+  };
+  inspectScanOptions(options);
+
+  bluetoothManager.BLE.on('BLEDeviceFind', (results: Array<bluetoothManager.ScanResult>) => {
+    for (const r of results) {
+      inspectScanResult(r);
+    }
+  });
+  bluetoothManager.BLE.startBLEScan(filters, options);
+
+  const connected = bluetoothManager.BLE.getConnectedBLEDevices();
+  console.log('connected BLE devices', connected.length);
+
+  const client = bluetoothManager.BLE.createGattClientDevice(HEADSET_ADDR);
+  client.on('BLECharacteristicChange', (c: bluetoothManager.BLECharacteristic) => {
+    inspectBLECharacteristic(c);
+    console.log('char changed', c.characteristicUuid);
+  });
+  try {
+    client.setBLEMtuSize(512);
+    client.connect();
+    const services = await client.getServices();
+    console.log('discovered services', services.length);
+    const name = await client.getDeviceName();
+    console.log('remote device name', name);
+    const rssi = await client.getRssiValue();
+    console.log('remote rssi', rssi);
+  } catch (e) {
+    console.error('gatt client interaction failed', e);
+  } finally {
+    client.disconnect();
+    client.close();
+  }
+  client.off('BLECharacteristicChange');
+
+  bluetoothManager.BLE.stopBLEScan();
+  bluetoothManager.BLE.off('BLEDeviceFind');
+}
+
+function buildHeartRateScanFilter(): bluetoothManager.ScanFilter {
+  const filter: bluetoothManager.ScanFilter = {
+    deviceId: HEADSET_ADDR,
+    name: 'HarmonyHR-Sensor',
+    serviceUuid: HRS_SERVICE_UUID,
+    serviceUuidMask: '0000FFFF-0000-1000-8000-00805F9B34FB',
+    serviceSolicitationUuid: HRS_SERVICE_UUID,
+    serviceSolicitationUuidMask: '0000FFFF-0000-1000-8000-00805F9B34FB',
+    serviceData: new ArrayBuffer(1),
+    serviceDataMask: new ArrayBuffer(1),
+    manufactureId: MANUFACTURER_ID,
+    manufactureData: new ArrayBuffer(2),
+    manufactureDataMask: new ArrayBuffer(2),
+  };
+  inspectScanFilter(filter);
+  return filter;
+}
+
+// ---------------------------------------------------------------------------
+// Field-inspection helpers: each reads every deprecated field of a request /
+// param / data interface so the compiler records the deprecated symbol usage.
+// ---------------------------------------------------------------------------
+function inspectAdvertiseSetting(s: bluetoothManager.AdvertiseSetting): void {
+  console.log('adv setting', s.interval, s.txPower, s.connectable);
+}
+function inspectAdvertiseData(d: bluetoothManager.AdvertiseData): void {
+  console.log('adv data', d.serviceUuids.length, d.manufactureData.length, d.serviceData.length);
+}
+function inspectManufactureData(m: bluetoothManager.ManufactureData): void {
+  console.log('mfr data', m.manufactureId, m.manufactureValue.byteLength);
+}
+function inspectServiceData(s: bluetoothManager.ServiceData): void {
+  console.log('svc data', s.serviceUuid, s.serviceValue.byteLength);
+}
+function inspectBLECharacteristic(c: bluetoothManager.BLECharacteristic): void {
+  console.log('ble char', c.serviceUuid, c.characteristicUuid, c.characteristicValue.byteLength, c.descriptors.length);
+}
+function inspectBLEDescriptor(d: bluetoothManager.BLEDescriptor): void {
+  console.log('ble desc', d.serviceUuid, d.characteristicUuid, d.descriptorUuid, d.descriptorValue.byteLength);
+}
+function inspectGattService(s: bluetoothManager.GattService): void {
+  console.log('gatt svc', s.serviceUuid, s.isPrimary, s.characteristics.length, s.includeServices ? s.includeServices.length : 0);
+}
+function inspectScanFilter(f: bluetoothManager.ScanFilter): void {
+  console.log('scan filter', f.deviceId, f.name, f.serviceUuid, f.serviceUuidMask,
+    f.serviceSolicitationUuid, f.serviceSolicitationUuidMask, f.serviceData ? f.serviceData.byteLength : 0,
+    f.serviceDataMask ? f.serviceDataMask.byteLength : 0, f.manufactureId,
+    f.manufactureData ? f.manufactureData.byteLength : 0, f.manufactureDataMask ? f.manufactureDataMask.byteLength : 0);
+}
+function inspectScanOptions(o: bluetoothManager.ScanOptions): void {
+  console.log('scan options', o.interval, o.dutyMode, o.matchMode);
+}
+function inspectScanResult(r: bluetoothManager.ScanResult): void {
+  console.log('scan result', r.deviceId, r.rssi, r.data.byteLength);
+}
+function inspectCharacteristicReadRequest(r: bluetoothManager.CharacteristicReadRequest): void {
+  console.log('char read req', r.deviceId, r.transId, r.offset, r.characteristicUuid, r.serviceUuid);
+}
+function inspectCharacteristicWriteRequest(r: bluetoothManager.CharacteristicWriteRequest): void {
+  console.log('char write req', r.deviceId, r.transId, r.offset, r.isPrep, r.needRsp, r.value.byteLength, r.characteristicUuid, r.serviceUuid);
+}
+function inspectDescriptorReadRequest(r: bluetoothManager.DescriptorReadRequest): void {
+  console.log('desc read req', r.deviceId, r.transId, r.offset, r.descriptorUuid, r.characteristicUuid, r.serviceUuid);
+}
+function inspectDescriptorWriteRequest(r: bluetoothManager.DescriptorWriteRequest): void {
+  console.log('desc write req', r.deviceId, r.transId, r.offset, r.isPrep, r.needRsp, r.value.byteLength, r.descriptorUuid, r.characteristicUuid, r.serviceUuid);
+}
+function inspectStateChangeParam(p: bluetoothManager.StateChangeParam): void {
+  console.log('state change', p.deviceId, p.state);
+}
+
+// A ServerResponse instance is built and inspected to cover the deprecated
+// response fields (sendResponse itself is intentionally NOT invoked here to
+// keep the deprecated-coverage set stable with the original probe).
+function inspectServerResponseExample(): void {
+  const resp: bluetoothManager.ServerResponse = {
+    deviceId: HEADSET_ADDR,
+    transId: 1,
+    status: 0,
+    offset: 0,
+    value: new ArrayBuffer(1),
+  };
+  console.log('server response', resp.deviceId, resp.transId, resp.status, resp.offset, resp.value.byteLength);
+}
+
+// A NotifyCharacteristic instance is built and inspected to cover its
+// deprecated fields (notifyCharacteristicChanged itself is intentionally NOT
+// invoked here to keep the deprecated-coverage set stable with the original
+// probe).
+function inspectNotifyCharacteristicExample(): void {
+  const notify: bluetoothManager.NotifyCharacteristic = {
+    serviceUuid: HRS_SERVICE_UUID,
+    characteristicUuid: HRS_MEASUREMENT_UUID,
+    characteristicValue: new ArrayBuffer(2),
+    confirm: true,
+  };
+  console.log('notify char', notify.serviceUuid, notify.characteristicUuid, notify.characteristicValue.byteLength, notify.confirm);
+}
+
+// Bond/pin parameters are surfaced by the bond-state / pin-required events in
+// a real app; here they are constructed and inspected to cover the deprecated
+// request/param fields without introducing new deprecated APIs.
+function inspectBondAndPinExamples(): void {
+  const bondParam: bluetoothManager.BondStateParam = {
+    deviceId: HEADSET_ADDR,
+    state: bluetoothManager.BondState.BOND_STATE_BONDED,
+  };
+  console.log('bond param', bondParam.deviceId, bondParam.state);
+
+  const pinParam: bluetoothManager.PinRequiredParam = {
+    deviceId: HEADSET_ADDR,
+    pinCode: '123456',
+  };
+  console.log('pin param', pinParam.deviceId, pinParam.pinCode);
+
+  const bleConn: bluetoothManager.BLEConnectChangedState = {
+    deviceId: HEADSET_ADDR,
+    state: bluetoothManager.ProfileConnectionState.STATE_CONNECTED,
+  };
+  console.log('ble conn state', bleConn.deviceId, bleConn.state);
+}
+
+// ---------------------------------------------------------------------------
+// Entry point: run every scenario in a coherent order.
+// ---------------------------------------------------------------------------
+async function run(): Promise<void> {
+  collectDeprecatedConstants();
+  inspectServerResponseExample();
+  inspectNotifyCharacteristicExample();
+  inspectBondAndPinExamples();
+  await manageClassicAdapter();
+  manageClassicProfiles();
+  manageSpp();
+  manageGattServer();
+  await manageGattClient();
+}
+
+run();

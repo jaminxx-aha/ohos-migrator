@@ -1,71 +1,204 @@
 import audio from '@ohos.multimedia.audio';
 
-audio.ActiveDeviceType;
-audio.ActiveDeviceType.BLUETOOTH_SCO;
-audio.ActiveDeviceType.SPEAKER;
-declare let _v0: audio.AudioCapturer; _v0.read(0, false);
-declare let _v1: audio.AudioCapturerOptions; _v1.playbackCaptureConfig;
-let _v2: audio.AudioInterrupt;
-declare let _v3: audio.AudioInterrupt; _v3.contentType;
-declare let _v4: audio.AudioInterrupt; _v4.pauseWhenDucked;
-declare let _v5: audio.AudioInterrupt; _v5.streamUsage;
-declare let _v6: audio.AudioManager; _v6.getAudioParameter('');
-declare let _v7: audio.AudioManager; _v7.getDevices(audio.DeviceFlag.OUTPUT_DEVICES_FLAG);
-declare let _v8: audio.AudioManager; _v8.getMaxVolume(audio.AudioVolumeType.VOICE_CALL);
-declare let _v9: audio.AudioManager; _v9.getMinVolume(audio.AudioVolumeType.VOICE_CALL);
-declare let _v10: audio.AudioManager; _v10.getRingerMode();
-declare let _v11: audio.AudioManager; _v11.getVolume(audio.AudioVolumeType.VOICE_CALL);
-declare let _v12: audio.AudioManager; _v12.isActive(audio.AudioVolumeType.VOICE_CALL);
-declare let _v13: audio.AudioManager; _v13.isDeviceActive(audio.ActiveDeviceType.SPEAKER);
-declare let _v14: audio.AudioManager; _v14.isMicrophoneMute();
-declare let _v15: audio.AudioManager; _v15.isMute(audio.AudioVolumeType.VOICE_CALL);
-declare let _v16: audio.AudioManager; _v16.mute(audio.AudioVolumeType.VOICE_CALL, false);
-declare let _v17: audio.AudioManager; _v17.off('deviceChange');
-declare let _v18: audio.AudioManager; _v18.on('deviceChange', () => {});
-declare let _v19: audio.AudioManager; _v19.setAudioParameter('', '');
-declare let _v20: audio.AudioManager; _v20.setDeviceActive(audio.ActiveDeviceType.SPEAKER, false);
-declare let _v21: audio.AudioManager; _v21.setMicrophoneMute(false);
-declare let _v22: audio.AudioManager; _v22.setRingerMode(audio.AudioRingMode.RINGER_MODE_SILENT);
-declare let _v23: audio.AudioManager; _v23.setVolume(audio.AudioVolumeType.VOICE_CALL, 0);
-let _v24: audio.AudioPlaybackCaptureConfig;
-declare let _v25: audio.AudioPlaybackCaptureConfig; _v25.filterOptions;
-declare let _v26: audio.AudioRenderer; _v26.getRenderRate();
-declare let _v27: audio.AudioRenderer; _v27.getRenderRateSync();
-declare let _v28: audio.AudioRenderer; _v28.setRenderRate(audio.AudioRendererRate.RENDER_RATE_NORMAL);
-// declare let _v29: audio.AudioRenderer; _v29.write(new Uint8Array(0));  // omitted: would not compile (2304)
-declare let _v30: audio.AudioRendererInfo; _v30.content;
-declare let _v31: audio.AudioStreamManager; _v31.isActive(audio.AudioVolumeType.VOICE_CALL);
-declare let _v32: audio.AudioStreamManager; _v32.isActiveSync(audio.AudioVolumeType.VOICE_CALL);
-declare let _v33: audio.AudioVolumeGroupManager; _v33.getMaxVolume(audio.AudioVolumeType.VOICE_CALL);
-declare let _v34: audio.AudioVolumeGroupManager; _v34.getMaxVolumeSync(audio.AudioVolumeType.VOICE_CALL);
-declare let _v35: audio.AudioVolumeGroupManager; _v35.getMinVolume(audio.AudioVolumeType.VOICE_CALL);
-declare let _v36: audio.AudioVolumeGroupManager; _v36.getMinVolumeSync(audio.AudioVolumeType.VOICE_CALL);
-declare let _v37: audio.AudioVolumeGroupManager; _v37.getSystemVolumeInDb(audio.AudioVolumeType.VOICE_CALL, 0, audio.DeviceType.INVALID);
-declare let _v38: audio.AudioVolumeGroupManager; _v38.getSystemVolumeInDbSync(audio.AudioVolumeType.VOICE_CALL, 0, audio.DeviceType.INVALID);
-declare let _v39: audio.AudioVolumeGroupManager; _v39.getVolume(audio.AudioVolumeType.VOICE_CALL);
-declare let _v40: audio.AudioVolumeGroupManager; _v40.getVolumeSync(audio.AudioVolumeType.VOICE_CALL);
-declare let _v41: audio.AudioVolumeGroupManager; _v41.isMute(audio.AudioVolumeType.VOICE_CALL);
-declare let _v42: audio.AudioVolumeGroupManager; _v42.isMuteSync(audio.AudioVolumeType.VOICE_CALL);
-declare let _v43: audio.AudioVolumeGroupManager; _v43.setMicrophoneMute(false);
-declare let _v44: audio.AudioVolumeManager; _v44.off('volumeChange');
-declare let _v45: audio.AudioVolumeManager; _v45.on('volumeChange', () => {});
-let _v46: audio.CaptureFilterOptions;
-declare let _v47: audio.CaptureFilterOptions; _v47.usages;
-audio.ContentType;
-audio.ContentType.CONTENT_TYPE_MOVIE;
-audio.ContentType.CONTENT_TYPE_MUSIC;
-audio.ContentType.CONTENT_TYPE_RINGTONE;
-audio.ContentType.CONTENT_TYPE_SONIFICATION;
-audio.ContentType.CONTENT_TYPE_SPEECH;
-audio.ContentType.CONTENT_TYPE_UNKNOWN;
-let _v48: audio.InterruptAction;
-declare let _v49: audio.InterruptAction; _v49.actionType;
-declare let _v50: audio.InterruptAction; _v50.activated;
-declare let _v51: audio.InterruptAction; _v51.hint;
-declare let _v52: audio.InterruptAction; _v52.type;
-audio.InterruptActionType;
-audio.InterruptActionType.TYPE_ACTIVATED;
-audio.InterruptActionType.TYPE_INTERRUPT;
-audio.SourceType.SOURCE_TYPE_PLAYBACK_CAPTURE;
-audio.StreamUsage.STREAM_USAGE_MEDIA;
-audio.StreamUsage.STREAM_USAGE_NOTIFICATION_RINGTONE;
+// Legacy enum namespaces (ActiveDeviceType / ContentType / InterruptActionType) are
+// exercised via their member accesses in the scenarios below — the deprecated symbols resolve.
+
+// Scenario 1: inspect the deprecated AudioInterrupt / InterruptAction field model
+// and the deprecated ContentType / InterruptActionType / ActiveDeviceType enums.
+function inspectLegacyInterruptModel(): void {
+  const interrupt: audio.AudioInterrupt = {
+    streamUsage: audio.StreamUsage.STREAM_USAGE_MEDIA,
+    contentType: audio.ContentType.CONTENT_TYPE_MUSIC,
+    pauseWhenDucked: true,
+  };
+  const action: audio.InterruptAction = {
+    actionType: audio.InterruptActionType.TYPE_INTERRUPT,
+  };
+  // Field reads below reference the deprecated AudioInterrupt / InterruptAction members.
+  const usage = interrupt.streamUsage;
+  const content = interrupt.contentType;
+  const duckable = interrupt.pauseWhenDucked;
+  const kind = action.actionType;
+  const evtType = action.type;
+  const evtHint = action.hint;
+  const activated = action.activated;
+  void usage; void content; void duckable; void kind; void evtType; void evtHint; void activated;
+
+  // Deprecated ContentType members, retained for legacy routing decisions.
+  const contentTypes: number[] = [
+    audio.ContentType.CONTENT_TYPE_UNKNOWN,
+    audio.ContentType.CONTENT_TYPE_SPEECH,
+    audio.ContentType.CONTENT_TYPE_MUSIC,
+    audio.ContentType.CONTENT_TYPE_MOVIE,
+    audio.ContentType.CONTENT_TYPE_SONIFICATION,
+    audio.ContentType.CONTENT_TYPE_RINGTONE,
+  ];
+  void contentTypes;
+
+  // Deprecated InterruptActionType members.
+  const actionTypeNormal = audio.InterruptActionType.TYPE_ACTIVATED;
+  const actionTypeInterrupt = audio.InterruptActionType.TYPE_INTERRUPT;
+  void actionTypeNormal; void actionTypeInterrupt;
+
+  // Deprecated ActiveDeviceType members used by AudioManager device APIs.
+  const speaker = audio.ActiveDeviceType.SPEAKER;
+  const btSco = audio.ActiveDeviceType.BLUETOOTH_SCO;
+  void speaker; void btSco;
+
+  // Deprecated StreamUsage members.
+  const mediaUsage = audio.StreamUsage.STREAM_USAGE_MEDIA;
+  const ringUsage = audio.StreamUsage.STREAM_USAGE_NOTIFICATION_RINGTONE;
+  void mediaUsage; void ringUsage;
+
+  // Deprecated playback-capture source type.
+  const playbackSource = audio.SourceType.SOURCE_TYPE_PLAYBACK_CAPTURE;
+  void playbackSource;
+}
+
+// Scenario 2: drive the deprecated AudioManager surface (device, ringer, volume, mic, params, events).
+async function manageAudioManagerDevices(): Promise<void> {
+  const manager: audio.AudioManager = audio.getAudioManager();
+
+  const onDeviceChange = (action: audio.DeviceChangeAction): void => { console.info('deviceChange', action); };
+  manager.on('deviceChange', onDeviceChange);
+  manager.off('deviceChange', onDeviceChange);
+
+  const descriptors = await manager.getDevices(audio.DeviceFlag.OUTPUT_DEVICES_FLAG);
+  void descriptors;
+  await manager.setDeviceActive(audio.ActiveDeviceType.SPEAKER, false);
+  const speakerActive = await manager.isDeviceActive(audio.ActiveDeviceType.SPEAKER);
+  void speakerActive;
+
+  const maxCall = await manager.getMaxVolume(audio.AudioVolumeType.VOICE_CALL);
+  const minCall = await manager.getMinVolume(audio.AudioVolumeType.VOICE_CALL);
+  let callVol = await manager.getVolume(audio.AudioVolumeType.VOICE_CALL);
+  const callActive = await manager.isActive(audio.AudioVolumeType.VOICE_CALL);
+  void maxCall; void minCall; void callActive;
+  try {
+    await manager.setVolume(audio.AudioVolumeType.VOICE_CALL, Math.min(maxCall, callVol + 1));
+    callVol = await manager.getVolume(audio.AudioVolumeType.VOICE_CALL);
+  } catch (e) { console.error('setVolume failed', e); }
+
+  await manager.mute(audio.AudioVolumeType.VOICE_CALL, false);
+  const muted = await manager.isMute(audio.AudioVolumeType.VOICE_CALL);
+  void muted;
+
+  await manager.setMicrophoneMute(false);
+  const micMuted = await manager.isMicrophoneMute();
+  void micMuted;
+
+  await manager.setRingerMode(audio.AudioRingMode.RINGER_MODE_SILENT);
+  const ringer = await manager.getRingerMode();
+  void ringer;
+
+  await manager.setAudioParameter('key_routing', 'speaker');
+  const param = await manager.getAudioParameter('key_routing');
+  void param;
+}
+
+// Scenario 3: exercise the deprecated AudioVolumeGroupManager / AudioVolumeManager / AudioStreamManager surface.
+async function manageVolumeAndStreamState(): Promise<void> {
+  const manager: audio.AudioManager = audio.getAudioManager();
+  const volumeManager: audio.AudioVolumeManager = manager.getVolumeManager();
+  const streamManager: audio.AudioStreamManager = manager.getStreamManager();
+
+  const onVolumeChange = (event: audio.VolumeEvent): void => { console.info('volumeChange', event); };
+  volumeManager.on('volumeChange', onVolumeChange);
+  volumeManager.off('volumeChange', onVolumeChange);
+
+  const group: audio.AudioVolumeGroupManager = await volumeManager.getVolumeGroupManager(0);
+  const gMax = await group.getMaxVolume(audio.AudioVolumeType.VOICE_CALL);
+  const gMaxSync = group.getMaxVolumeSync(audio.AudioVolumeType.VOICE_CALL);
+  const gMin = await group.getMinVolume(audio.AudioVolumeType.VOICE_CALL);
+  const gMinSync = group.getMinVolumeSync(audio.AudioVolumeType.VOICE_CALL);
+  const gVol = await group.getVolume(audio.AudioVolumeType.VOICE_CALL);
+  const gVolSync = group.getVolumeSync(audio.AudioVolumeType.VOICE_CALL);
+  void gMax; void gMaxSync; void gMin; void gMinSync; void gVol; void gVolSync;
+
+  const gMuted = await group.isMute(audio.AudioVolumeType.VOICE_CALL);
+  const gMutedSync = group.isMuteSync(audio.AudioVolumeType.VOICE_CALL);
+  void gMuted; void gMutedSync;
+  try {
+    await group.setMicrophoneMute(false);
+  } catch (e) { console.error('group.setMicrophoneMute failed', e); }
+
+  const db = await group.getSystemVolumeInDb(audio.AudioVolumeType.VOICE_CALL, 0, audio.DeviceType.INVALID);
+  const dbSync = group.getSystemVolumeInDbSync(audio.AudioVolumeType.VOICE_CALL, 0, audio.DeviceType.INVALID);
+  void db; void dbSync;
+
+  const streamActive = await streamManager.isActive(audio.AudioVolumeType.VOICE_CALL);
+  const streamActiveSync = streamManager.isActiveSync(audio.AudioVolumeType.VOICE_CALL);
+  void streamActive; void streamActiveSync;
+}
+
+// Scenario 4: play back audio with a deprecated-content AudioRenderer and adjust render rate.
+async function playbackAndTuneRenderRate(): Promise<void> {
+  const rendererInfo: audio.AudioRendererInfo = {
+    content: audio.ContentType.CONTENT_TYPE_MUSIC,
+    usage: audio.StreamUsage.STREAM_USAGE_MEDIA,
+    rendererFlags: 0,
+  };
+  const streamInfo: audio.AudioStreamInfo = {
+    samplingRate: audio.AudioSamplingRate.SAMPLE_RATE_44100,
+    channels: audio.AudioChannel.CHANNEL_2,
+    sampleFormat: audio.AudioSampleFormat.SAMPLE_FORMAT_S16LE,
+    encodingType: audio.AudioEncodingType.ENCODING_TYPE_RAW,
+  };
+  const rendererOptions: audio.AudioRendererOptions = { streamInfo, rendererInfo };
+  const renderer: audio.AudioRenderer = await audio.createAudioRenderer(rendererOptions);
+
+  // The deprecated `content` field on AudioRendererInfo, read for legacy logging.
+  const legacyContent = rendererInfo.content;
+  void legacyContent;
+
+  await renderer.setRenderRate(audio.AudioRendererRate.RENDER_RATE_NORMAL);
+  const rate = await renderer.getRenderRate();
+  const rateSync = renderer.getRenderRateSync();
+  void rate; void rateSync;
+}
+
+// Scenario 5: capture playback streams using the deprecated playback-capture configuration tree.
+async function capturePlaybackStream(): Promise<void> {
+  const filter: audio.CaptureFilterOptions = {
+    usages: [audio.StreamUsage.STREAM_USAGE_MEDIA, audio.StreamUsage.STREAM_USAGE_NOTIFICATION_RINGTONE],
+  };
+  const captureConfig: audio.AudioPlaybackCaptureConfig = { filterOptions: filter };
+  const capturerInfo: audio.AudioCapturerInfo = {
+    source: audio.SourceType.SOURCE_TYPE_PLAYBACK_CAPTURE,
+    capturerFlags: 0,
+  };
+  const streamInfo: audio.AudioStreamInfo = {
+    samplingRate: audio.AudioSamplingRate.SAMPLE_RATE_48000,
+    channels: audio.AudioChannel.CHANNEL_2,
+    sampleFormat: audio.AudioSampleFormat.SAMPLE_FORMAT_S16LE,
+    encodingType: audio.AudioEncodingType.ENCODING_TYPE_RAW,
+  };
+  const capturerOptions: audio.AudioCapturerOptions = {
+    streamInfo,
+    capturerInfo,
+    playbackCaptureConfig: captureConfig,
+  };
+  // Read the deprecated playback-capture config / filter-options fields for logging.
+  const cfg = capturerOptions.playbackCaptureConfig;
+  if (cfg === undefined) {
+    throw new Error('playbackCaptureConfig is required');
+  }
+  const usages = cfg.filterOptions.usages;
+  void usages;
+
+  const capturer: audio.AudioCapturer = await audio.createAudioCapturer(capturerOptions);
+  try {
+    const buf: ArrayBuffer = await capturer.read(2048, false);
+    void buf;
+  } catch (e) { console.error('capturer.read failed', e); }
+}
+
+async function run(): Promise<void> {
+  inspectLegacyInterruptModel();
+  try { await manageAudioManagerDevices(); } catch (e) { console.error('manageAudioManagerDevices failed', e); }
+  try { await manageVolumeAndStreamState(); } catch (e) { console.error('manageVolumeAndStreamState failed', e); }
+  try { await playbackAndTuneRenderRate(); } catch (e) { console.error('playbackAndTuneRenderRate failed', e); }
+  try { await capturePlaybackStream(); } catch (e) { console.error('capturePlaybackStream failed', e); }
+}
+
+run();
