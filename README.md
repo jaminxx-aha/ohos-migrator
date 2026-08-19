@@ -67,7 +67,7 @@ node ohos-migrator.js rewrite --project path/to/project --use-ai
 | `OHOS_MIGRATOR_AI_MODEL` | 是 | 模型名 |
 | `OHOS_MIGRATOR_AI_TIMEOUT_MS` | 否 | 流式 idle-gap 超时（首字节间隔），默认 `300000`。超大 prompt prefill 长勿误杀 |
 | `OHOS_MIGRATOR_AI_MAX_TOTAL_MS` | 否 | 总量超时上限，默认 `1200000` |
-| `OHOS_MIGRATOR_AI_LOG_FILE` | 否 | 日志路径，须 `.log` 结尾；留空走默认 `cwd/log/ai-conversation.log`，设 `off`/`none`/`/dev/null` 禁用 |
+| `OHOS_MIGRATOR_AI_LOG_FILE` | 否 | 日志路径，须 `.log` 结尾；留空走默认 `cwd/log/ohos-migrator.log`，设 `off`/`none`/`/dev/null` 禁用 |
 
 ## 工作原理
 
@@ -115,7 +115,7 @@ node ohos-migrator.js rewrite --project path/to/project --use-ai
 
 AI 模式日志分两层：
 
-- **主日志** `cwd/log/ai-conversation.log`：只留状态行（attempt/success/revert/hvigor/audit）+ 每文件的 `[conv] -> <对话文件>` 指针。API key 脱敏。
+- **主日志** `cwd/log/ohos-migrator.log`：只留状态行（attempt/success/revert/hvigor/audit）+ 每文件的 `[conv] -> <对话文件>` 指针。API key 脱敏。
 - **per-file 对话文件** `cwd/log/<源文件名>.log`：与 AI 的对话内容（system/user prompt、流式 delta、step/assistant/tool transcript），按被迁移的废弃文件名分文件，互不串混。
 
 所有日志路径强制 `.log` 结尾（防写 dotfile → RCE）。

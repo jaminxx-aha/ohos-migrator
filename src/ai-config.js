@@ -53,11 +53,11 @@ function envNum(name) {
 }
 
 /**
- * 默认日志路径：当前工程目录（运行 ohos-migrator 时的 cwd）下 log/ai-conversation.log。
+ * 默认日志路径：当前工程目录（运行 ohos-migrator 时的 cwd）下 log/ohos-migrator.log。
  * 与被扫描的 HarmonyOS 工程目录解耦——否则 --file 模式会把日志写到源文件所在目录。
  */
 function defaultLogFile() {
-  return path.join(process.cwd(), 'log', 'ai-conversation.log');
+  return path.join(process.cwd(), 'log', 'ohos-migrator.log');
 }
 function sanitizeLogFile(raw) {
   const lf = String(raw || '').trim().toLowerCase();

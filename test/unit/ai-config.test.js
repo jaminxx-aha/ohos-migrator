@@ -48,8 +48,8 @@ test('sanitizeLogFile: .log 结尾 → 原样放行', () => {
   assert.equal(sanitizeLogFile('AI.LOG'), 'AI.LOG');
 });
 
-test('defaultLogFile: 指向 cwd/log/ai-conversation.log', () => {
-  assert.equal(defaultLogFile(), path.join(process.cwd(), 'log', 'ai-conversation.log'));
+test('defaultLogFile: 指向 cwd/log/ohos-migrator.log', () => {
+  assert.equal(defaultLogFile(), path.join(process.cwd(), 'log', 'ohos-migrator.log'));
 });
 
 // ---- firstEnv / envNum（读 process.env，须 save/restore） ----
