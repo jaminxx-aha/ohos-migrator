@@ -13,7 +13,7 @@ const path = require('path');
 const { loadTs, resolveTargets, MAX_AI_ATTEMPTS, MAX_AGENT_STEPS } = require('./common');
 const { scanFile } = require('./scan');
 const { resolveAiConfig } = require('./ai-config');
-const { tsStamp, logAppend, logHeader, logDelta, termProgress, stepLog, convFileFor } = require('./ai-log');
+const { tsStamp, logAppend, logHeader, logDelta, logConv, convFileFor } = require('./ai-log');
 const hv = require('./verify/hvigor');
 
 // SIGINT/SIGTERM 恢复：runAgent 在 list_deprecated 时会把半改 content 落盘，中途被
@@ -185,11 +185,10 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors,
   const MAX_CONSECUTIVE_EMPTY = 2;
   let consecutiveTimeouts = 0, consecutiveEmpty = 0;
   for (step = 1; step <= MAX_AGENT_STEPS; step++) {
-    stepLog(cfg, `\n--- step ${step} ---\n`, `--- step ${step} ---`);
-    // 与 AI 的交互进度写对话日志（logConv/logDelta）+ 简短回显终端（stepLog/termProgress）。
+    logConv(cfg, `\n--- step ${step} ---\n`);
+    // 与 AI 的交互进度只写对话日志（logConv/logDelta），终端不打——避免刷屏。
+    // project 级进度（(i/N) + 累计 ok/fail）在 cmdRewriteAi 的逐文件头/完成行打到终端。
     let res;
-    let hbPrinted = false;
-    const hb = setInterval(() => { process.stdout.write('·'); hbPrinted = true; }, 10000);
     try {
       res = await streamChatWithTools(cfg, messages, AGENT_TOOLS, () => {});
     } catch (e) {
@@ -197,29 +196,26 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors,
       // 在同一会话里重试。连续达上限才放弃（防 API 挂死无限重试）。step-- 不消耗步数预算。
       consecutiveTimeouts++;
       if (consecutiveTimeouts > MAX_CONSECUTIVE_TIMEOUTS) {
-        stepLog(cfg, `[stream error] ${e.message} — giving up after ${consecutiveTimeouts} consecutive\n`);
+        logConv(cfg, `[stream error] ${e.message} — giving up after ${consecutiveTimeouts} consecutive\n`);
         break;
       }
-      stepLog(cfg, `[stream error] ${e.message} — resume (${consecutiveTimeouts}/${MAX_CONSECUTIVE_TIMEOUTS})\n`);
+      logConv(cfg, `[stream error] ${e.message} — resume (${consecutiveTimeouts}/${MAX_CONSECUTIVE_TIMEOUTS})\n`);
       messages.push({ role: 'user', content: '（上一轮流式调用超时/中断，你的回复未完整返回。请基于当前文件内容接着完成迁移，不要从头重写。）' });
       step--; // 抵消 for 的 step++，纯基础设施超时不消耗 agent 步数预算
       continue;
-    } finally {
-      clearInterval(hb);
-      if (hbPrinted) process.stdout.write('\n');
     }
     consecutiveTimeouts = 0;
     const asst = { role: 'assistant', content: res.content || null };
     if (res.toolCalls.length) asst.tool_calls = res.toolCalls;
     messages.push(asst);
-    stepLog(cfg, `[assistant] content=${(res.content || '').length}chars tools=${res.toolCalls.map((t) => t.function.name).join(',') || 'none'} finish=${res.finishReason}\n`);
+    logConv(cfg, `[assistant] content=${(res.content || '').length}chars tools=${res.toolCalls.map((t) => t.function.name).join(',') || 'none'} finish=${res.finishReason}\n`);
     if (!res.toolCalls.length) {
       consecutiveEmpty++;
       if (consecutiveEmpty > MAX_CONSECUTIVE_EMPTY) {
-        stepLog(cfg, `[agent] no tool_calls ${consecutiveEmpty}x — giving up\n`);
+        logConv(cfg, `[agent] no tool_calls ${consecutiveEmpty}x — giving up\n`);
         break;
       }
-      stepLog(cfg, `[agent] no tool_calls — nudge to continue (${consecutiveEmpty}/${MAX_CONSECUTIVE_EMPTY})\n`);
+      logConv(cfg, `[agent] no tool_calls — nudge to continue (${consecutiveEmpty}/${MAX_CONSECUTIVE_EMPTY})\n`);
       messages.push({ role: 'user', content: '请继续用工具（edit_file/replace_file/list_deprecated/done）完成迁移，不要只输出文字说明。' });
       step--;
       continue;
@@ -267,15 +263,14 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors,
         result = `error: unknown tool ${name}`;
       }
       const logTail = String(result).slice(0, 8000);
-      stepLog(cfg, `[tool] ${name} ${tc.function.arguments.slice(0, 200)} -> ${logTail}\n`,
-        `[tool] ${name} -> ${String(result).slice(0, 100)}`);
+      logConv(cfg, `[tool] ${name} ${tc.function.arguments.slice(0, 200)} -> ${logTail}\n`);
       messages.push({ role: 'tool', tool_call_id: tc.id, content: String(result) });
       if (shouldBreak) break;
     }
     if (shouldBreak) break;
   }
   const stepsRun = Math.min(step, MAX_AGENT_STEPS);
-  stepLog(cfg, `[agent] ended after ${stepsRun} steps, doneCalled=${doneCalled}\n`);
+  logConv(cfg, `[agent] ended after ${stepsRun} steps, doneCalled=${doneCalled}\n`);
   fs.writeFileSync(file, content, 'utf8'); // 落盘最终内容供校验
   // 步数用尽 / 无 tool_calls / 流式中断而未 done：跑一次最终门禁取当前状态供外层判断。
   // 若 done 曾被拒（finalGate 已是失败态），此处重跑取最新内容对应的状态。
@@ -309,10 +304,6 @@ async function rewriteFileWithAi(file, ts2, sdkPath, ohTsPath, cfg, hvCtx) {
       logAppend(cfg.logFile, `[${tsStamp()}] [${file}] no useinstead-bearing deprecated usage — success\n`);
       return { ok: true, attempts: attempt, changed: false };
     }
-    const label = lastFailKind === 'compile'
-      ? 'fix compile errors (targeted edit)'
-      : `${usable.length} deprecated to fix`;
-    termProgress(`  attempt ${attempt}: ${label}`);
     // AI 对话内容（system/user prompt、流式 delta、step/assistant/tool transcript）写到
     // per-file 对话文件 log/<源文件名>.log，主日志只留状态行 + 一条 [conv] 指针。
     cfg.convFile = convFileFor(cfg, file);
@@ -326,7 +317,6 @@ async function rewriteFileWithAi(file, ts2, sdkPath, ohTsPath, cfg, hvCtx) {
       // 记错，下一轮按 lastFailKind 处理（remain→回滚原文；compile→保留产出定点修）。
       lastError = e.message;
       logAppend(cfg.logFile, `[${file}] attempt ${attempt} agent error: ${e.message}\n`);
-      termProgress(`  attempt ${attempt} agent error: ${e.message}`);
       lastFailKind = 'remain';
       lastAgentContent = null;
       continue;
@@ -339,7 +329,6 @@ async function rewriteFileWithAi(file, ts2, sdkPath, ohTsPath, cfg, hvCtx) {
       lastError = `step cap (${MAX_AGENT_STEPS}) reached without done`;
       gaveUpStepCap = true;
       logAppend(cfg.logFile, `[${file}] attempt ${attempt}: hit step cap (${MAX_AGENT_STEPS}) unsolved — abort retries (no further attempts)\n`);
-      termProgress(`  attempt ${attempt}: hit step cap (${MAX_AGENT_STEPS}) unsolved — abort retries`);
       break;
     }
     // 校验：重新扫描废弃
@@ -348,7 +337,6 @@ async function rewriteFileWithAi(file, ts2, sdkPath, ohTsPath, cfg, hvCtx) {
     if (remain.length > 0) {
       lastError = remain.map((h) => `行${h.line} ${h.callee} -> ${h.useinstead} 仍未替换`).join('\n');
       logAppend(cfg.logFile, `[${file}] attempt ${attempt}: ${remain.length} still remain\n${lastError}\n`);
-      termProgress(`  attempt ${attempt}: ✗ ${remain.length} still remain (retry)`);
       lastFailKind = 'remain';   // 废弃未清零：下一轮回滚原文重做
       lastAgentContent = null;
       continue;
@@ -363,7 +351,6 @@ async function rewriteFileWithAi(file, ts2, sdkPath, ohTsPath, cfg, hvCtx) {
       lastError = gate ? gate.error : 'compile-verify error';
       const n = gate ? gate.newErrCount : '?';
       logAppend(cfg.logFile, `[${file}] attempt ${attempt}: ${n} compile errors\n${lastError}\n`);
-      termProgress(`  attempt ${attempt}: ${n} compile errors (retry, targeted edit)`);
       lastFailKind = 'compile'; // 下一轮保留 agent 产出做定点修
       continue;
     }
