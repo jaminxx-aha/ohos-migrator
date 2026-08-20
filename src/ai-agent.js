@@ -534,17 +534,20 @@ async function cmdRewriteAi(opts) {
   // 第二步：逐文件交给 AI
   installSignalRestore();
   let ok = 0, fail = 0;
+  const total = targets.length;
+  let idx = 0;
   for (const t of targets) {
-    console.log(`\n[ai] processing ${t.file}  (${t.count} deprecated)`);
-    logAppend(cfg.logFile, `\n${'#'.repeat(60)}\n[${tsStamp()}] >>>> FILE ${t.file}\n`);
+    idx++;
+    console.log(`\n[ai] (${idx}/${total}) ${path.basename(t.file)}  (${t.count} deprecated)  [done: ok=${ok} fail=${fail}]`);
+    logAppend(cfg.logFile, `\n${'#'.repeat(60)}\n[${tsStamp()}] >>>> FILE (${idx}/${total}) ${t.file}\n`);
     // 记录进入前原文供信号处理器恢复；await 返回后（成功保留改后/失败已 revert）清空。
     _restoreOnSignal = { file: t.file, content: fs.readFileSync(t.file, 'utf8') };
     try {
       const r = await rewriteFileWithAi(t.file, ts2, opts.sdkPath, opts.ohTsPath, cfg, hvCtx);
-      if (r.ok) { ok++; console.log(`  [ai] ✓ done (${r.attempts} attempt(s))`); }
+      if (r.ok) { ok++; console.log(`  [ai] ✓ done (${r.attempts} attempt(s))  [progress: ${idx}/${total}  ok=${ok} fail=${fail}]`); }
       else {
         fail++;
-        console.log(`  [ai] ✗ FAILED after ${r.attempts} attempt(s), reverted. reason: ${r.error}`);
+        console.log(`  [ai] ✗ FAILED after ${r.attempts} attempt(s), reverted. reason: ${r.error}  [progress: ${idx}/${total}  ok=${ok} fail=${fail}]`);
         console.log(`  [ai] ⚠ WARN: ${t.file} 未能完成迁移，已回退原文件，请人工处理。`);
       }
     } finally {
