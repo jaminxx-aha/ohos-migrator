@@ -63,5 +63,17 @@ function logDelta(cfg, text) {
 function logConv(cfg, text) {
   if (cfg.convFile) logAppend(cfg.convFile, text);
 }
+/** 终端进度行：截断 + 折行压缩防刷屏，与 per-file conv 日志互补。 */
+function termProgress(text) {
+  let line = String(text).replace(/\r?\n/g, ' ').trim();
+  if (line.length > 160) line = line.slice(0, 157) + '...';
+  process.stdout.write(line + '\n');
+}
+/** step 级转录：完整写 per-file conv 日志 + 简短回显终端。
+ *  convText 进对话文件（不截断，便于复盘）；termText 省略时取 convText 截断上终端。 */
+function stepLog(cfg, convText, termText) {
+  logConv(cfg, convText);
+  termProgress(termText == null ? convText : termText);
+}
 
-module.exports = { tsStamp, redactSecret, logAppend, logHeader, logDelta, logConv, convFileFor };
+module.exports = { tsStamp, redactSecret, logAppend, logHeader, logDelta, logConv, termProgress, stepLog, convFileFor };
