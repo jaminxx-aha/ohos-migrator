@@ -91,6 +91,10 @@ async function streamChatWithTools(cfg, messages, tools, onDelta) {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
+      // 任何字节到达 = 连接活着，重置 idle 看门狗。glm-5.2 等推理模型先吐
+      // reasoning_content 再吐 content/tool_calls——思考阶段没有 content，若只认
+      // content 会误判 idle-timeout（连接其实一直在流 reasoning chunk）。
+      armIdle();
       buf += decoder.decode(value, { stream: true });
       let idx;
       while ((idx = buf.indexOf('\n')) >= 0) {
