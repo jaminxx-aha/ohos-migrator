@@ -218,10 +218,19 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors,
   // 三段式描述（错误信息/接口声明/接口描述）直接取 scan 产出的 hit.desc，
   // 条目间用分隔线隔开，让 AI 拿到 SDK 声明的完整上下文而非仅 useinstead 串。
   const list = usable0.map((h) => h.desc).join('\n\n---\n\n');
-  // 目标模块真实声明（去重）：同一文件多处命中同一 useinstead 时只附一次。
-  // 让模型看到目标模块的真实导出形态（有什么/没什么），避免盲猜 import 形态——
-  // 如新 wantConstant 无 Action/Entity、Flags 只剩 6 常量，模型知情就不会空转试 import。
-  const targetDecls = [...new Set(usable0.map((h) => h.targetDecl).filter(Boolean))].join('\n\n');
+  // 目标模块真实声明（按模块去重）：同一文件多处命中可能映射到多条 useinstead——
+  // 如 Flags 枚举级 `#Flags` + 每个成员级 `#FLAG_X` 各一条，它们产出的 targetDecl 各
+  // 重复同一句「X 导出: ...」、成员块互为子集。Set 按全文相等去不了，按模块名合并、
+  // 留最长（信息最全）那一条即可。让模型看到目标模块真实导出形态（有什么/没什么），
+  // 避免盲猜 import 形态——如新 wantConstant 无 Action/Entity、Flags 只剩少量常量。
+  const _byMod = new Map();
+  for (const td of usable0.map((h) => h.targetDecl).filter(Boolean)) {
+    const km = td.match(/目标模块声明 \(([^)]+)\)/);
+    const key = km ? km[1] : td;
+    const prev = _byMod.get(key);
+    if (!prev || td.length > prev.length) _byMod.set(key, td);
+  }
+  const targetDecls = [..._byMod.values()].join('\n\n');
   const system =
     '你是鸿蒙 ArkTS 迁移 agent，拥有读写目标文件的工具。任务：根据每个废弃接口的 useinstead，' +
     '把废弃调用替换为推荐接口，必要时调整 import，其余代码与逻辑保持不变。' +

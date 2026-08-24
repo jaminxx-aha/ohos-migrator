@@ -231,7 +231,10 @@ function describeTarget(sdkPath, useinstead) {
         }
         if (member) {
           const mb = extractDeclBlock(text, member) || locateMemberDecl(text, member);
-          if (mb) parts.push(mb.length > 8000 ? mb.slice(0, 8000) + '\n... (已截断)' : mb);
+          if (mb) {
+            const s = stripJSDoc(mb);
+            parts.push(s.length > 8000 ? s.slice(0, 8000) + '\n... (已截断)' : s);
+          }
         }
         if (parts.length) {
           result = `\n--- 目标模块声明 (${modName}) ——判断真实导出形态用；成员不存在须改用其它写法或标人工：\n` + parts.join('\n\n');
@@ -256,16 +259,22 @@ function extractDeclBlock(text, name) {
   return text.slice(m.index, matchBrace(text, braceIdx) + 1);
 }
 
-// 从 openIdx 的 `{` 起做平衡匹配，返回配对 `}` 的索引；跳过字符串/模板字面量内的花括号。
+// 从 openIdx 的 `{` 起做平衡匹配，返回配对 `}` 的索引；跳过字符串/模板字面量与
+// 注释（// 和 /* */）内的花括号——JSDoc 里的 {@link} 等花括号否则会把匹配搞乱，
+// 退回 400 字符 fallback，导致 enum 体只取到残缺前缀。
 function matchBrace(text, openIdx) {
-  let depth = 0, inStr = false, q = null;
+  let depth = 0, inStr = false, q = null, inLine = false, inBlock = false;
   for (let i = openIdx; i < text.length; i++) {
-    const c = text[i];
+    const c = text[i], n = text[i + 1];
+    if (inLine) { if (c === '\n') inLine = false; continue; }
+    if (inBlock) { if (c === '*' && n === '/') { inBlock = false; i++; } continue; }
     if (inStr) {
       if (c === '\\') { i++; continue; }
       if (c === q) inStr = false;
       continue;
     }
+    if (c === '/' && n === '/') { inLine = true; i++; continue; }
+    if (c === '/' && n === '*') { inBlock = true; i++; continue; }
     if (c === '"' || c === "'" || c === '`') { inStr = true; q = c; continue; }
     if (c === '{') depth++;
     else if (c === '}') { depth--; if (depth === 0) return i; }
@@ -300,6 +309,18 @@ function locateMemberDecl(text, member) {
 }
 
 function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+// 剥块注释/行注释并压紧空行与缩进：d.ts enum/interface 体的 JSDoc（@syscap/@since/描述）
+// 对迁移无信息量却占大部分篇幅，去掉只留成员名+值，64 行 → ~12 行。
+function stripJSDoc(s) {
+  return s
+    .replace(/\/\*[\s\S]*?\*\//g, '')   // 完整块注释（含 JSDoc）
+    .replace(/\/\*[\s\S]*$/, '')         // 末尾被截断、未闭合的块注释残尾
+    .replace(/^\s*\/\/.*$/gm, '')        // 行注释
+    .replace(/[ \t]*\n[ \t]*/g, '\n')     // 去缩进、压紧
+    .replace(/\n{3,}/g, '\n\n')           // 多余空行合并
+    .trim();
+}
 
 // 解析 useinstead。返回 { module, member, hasSlash }
 //   ohos.accessibility#isOpenAccessibilitySync  -> @ohos.accessibility / isOpenAccessibilitySync / false
@@ -518,4 +539,4 @@ function cmdScan(opts) {
   console.log(`\n==== scan done: ${files.length} file(s), ${filesWithDeprecated} with deprecated, ${totalDeprecated} usage(s) ====`);
 }
 
-module.exports = { scanFile, parseUseinstead, normMod, declFileToModule, computeIdentity, jsDocMainComment, describeDeprecated, cmdScan };
+module.exports = { scanFile, parseUseinstead, normMod, declFileToModule, computeIdentity, jsDocMainComment, describeDeprecated, describeTarget, stripJSDoc, cmdScan };
