@@ -118,7 +118,7 @@ async function streamChatWithTools(cfg, messages, tools, onDelta) {
     const resp = await fetch(`${cfg.baseURL}/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.apiKey}` },
-      body: JSON.stringify({ model: cfg.model, messages, tools, stream: true, temperature: 0.2 }),
+      body: JSON.stringify({ model: cfg.model, messages, tools, stream: true, temperature: 0.2, max_tokens: cfg.maxTokens }),
       signal: controller.signal,
     });
     if (!resp.ok || !resp.body) {
