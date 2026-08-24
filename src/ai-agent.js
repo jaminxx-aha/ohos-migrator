@@ -132,10 +132,11 @@ async function streamChatWithTools(cfg, messages, tools, onDelta) {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      // 任何字节到达 = 连接活着，重置 idle 看门狗。glm-5.2 等推理模型先吐
-      // reasoning_content 再吐 content/tool_calls——思考阶段没有 content，若只认
-      // content 会误判 idle-timeout（连接其实一直在流 reasoning chunk）。
-      armIdle();
+      // 不在字节级 armIdle：只在收到实质 delta（content/reasoning_content/tool_calls，
+      // 见下方各分支）时续命。否则服务端只发 SSE 心跳/空帧吊着连接、零产出的情形（如
+      // ohos-animator.ets 心跳续命 12.9min 直到 token 触顶 finish=length）会被心跳一直
+      // 重置 idle、永不超时。reasoning 思考期靠 reasoning_content 分支 armIdle 续命，
+      // 不需要字节级兜底——早期 f449871 的字节级兜底是 reasoning 分支补上前的临时方案。
       buf += decoder.decode(value, { stream: true });
       let idx;
       while ((idx = buf.indexOf('\n')) >= 0) {
