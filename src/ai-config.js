@@ -86,10 +86,11 @@ function resolveAiConfig(root) {
     totalMs: envNum('OHOS_MIGRATOR_AI_MAX_TOTAL_MS') || 1200000,
     // 输出 token 上限（reasoning + content 合计）。glm-5.2 等推理模型可能把整个预算
     // 烧在思考上甚至陷入推理循环（如 wantConstant attempt2 step4 同句重复 31 次），
-    // 不设上限时一条失控流能跑十几分钟。默认 8192 把失控截在 ~2-3 分钟内触顶返回
-    // finish=length；如发现正常步骤被误截（finish=length 且已有部分 content/tools），
-    // 调大此值或设 OHOS_MIGRATOR_AI_MAX_TOKENS 覆盖。
-    maxTokens: envNum('OHOS_MIGRATOR_AI_MAX_TOKENS') || 8192,
+    // 不设上限时一条失控流能跑十几分钟。默认 32768——对齐 Codex o3 量级，给推理留够
+    // 不误截正常步骤，仍能截住十几分钟的失控流（动辄 40k+ token）触顶返回 finish=length。
+    // 如发现正常步骤被误截（finish=length 且已有部分 content/tools），调大或设
+    // OHOS_MIGRATOR_AI_MAX_TOKENS 覆盖。
+    maxTokens: envNum('OHOS_MIGRATOR_AI_MAX_TOKENS') || 32768,
     logFile, envPath,
   };
 }
