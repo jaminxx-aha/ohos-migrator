@@ -217,6 +217,10 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors,
   // 三段式描述（错误信息/接口声明/接口描述）直接取 scan 产出的 hit.desc，
   // 条目间用分隔线隔开，让 AI 拿到 SDK 声明的完整上下文而非仅 useinstead 串。
   const list = usable0.map((h) => h.desc).join('\n\n---\n\n');
+  // 目标模块真实声明（去重）：同一文件多处命中同一 useinstead 时只附一次。
+  // 让模型看到目标模块的真实导出形态（有什么/没什么），避免盲猜 import 形态——
+  // 如新 wantConstant 无 Action/Entity、Flags 只剩 6 常量，模型知情就不会空转试 import。
+  const targetDecls = [...new Set(usable0.map((h) => h.targetDecl).filter(Boolean))].join('\n\n');
   const system =
     '你是鸿蒙 ArkTS 迁移 agent，拥有读写目标文件的工具。任务：根据每个废弃接口的 useinstead，' +
     '把废弃调用替换为推荐接口，必要时调整 import，其余代码与逻辑保持不变。' +
@@ -229,7 +233,7 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors,
     '若不确定调用形态，按 useinstead 的类名找同 kit 导出的全大写同名 const。' +
     '当前文件完整内容已在下面 user 消息里给出——未做编辑前不要调 read_file 重复读（整份重灌会拖慢推理、撑爆上下文）。' +
     '只有做过编辑、想看最新状态时才用 read_file；它带行号前缀 L<n>: 便于定位，但 edit_file 的 oldText/newText 必须去掉该前缀、用纯文件文本。';
-  let user = `目标文件: ${file}\n\n废弃接口清单（每条含 SDK 声明的错误信息/接口声明/接口描述三段式上下文，须全部处理）：\n${list}\n\n当前文件内容：\n${content}`;
+  let user = `目标文件: ${file}\n\n废弃接口清单（每条含 SDK 声明的错误信息/接口声明/接口描述三段式上下文，须全部处理）：\n${list}${targetDecls ? '\n\n' + targetDecls : ''}\n\n当前文件内容：\n${content}`;
   if (retryErrors) user += `\n\n## 上一轮仍有问题：\n${retryErrors}\n请修复上述问题。`;
   const messages = [{ role: 'system', content: system }, { role: 'user', content: user }];
   logHeader(cfg, system, user, attempt);

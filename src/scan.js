@@ -189,6 +189,118 @@ function describeDeprecated(ts, decl, checker, hit) {
   }
 }
 
+// 目标模块声明缓存：同 useinstead 在一次扫描内多次命中（如 wantConstant.Flags 出现 16 次）
+// 只解析一次 .d.ts，避免重复读盘 + 重复把同一声明块灌进 prompt。
+const _targetDeclCache = new Map();
+
+/**
+ * 解析 useinstead 指向的目标模块 .d.ts，返回「容器导出清单 + 目标成员声明」片段，
+ * 供 AI 模型判断目标模块的真实导出形态。否则模型只拿到 useinstead 字符串、盲猜 import
+ * 形态——如新 @ohos.app.ability.wantConstant 的 wantConstant namespace 无 Action/Entity、
+ * Flags 只剩 6 个常量，模型不知情会反复试 import 到步数用尽仍编译失败。
+ *
+ * 解析：取 `#` 左侧按 `.`/`/` 拆段，从最长前缀起试 @ohos.<...>.d.ts 是否存在，命中即目标模块，
+ * 剩余首段为模块内容器（namespace/class/interface/enum）；member 取 `#` 右侧。
+ * 输出 = 容器导出清单（让模型看到「有什么 / 没什么」）+ 成员声明块（真实形态）。best-effort。
+ */
+function describeTarget(sdkPath, useinstead) {
+  if (!sdkPath || !useinstead) return '';
+  const cacheKey = sdkPath + '\0' + useinstead;
+  if (_targetDeclCache.has(cacheKey)) return _targetDeclCache.get(cacheKey);
+  let result = '';
+  try {
+    const hashIdx = useinstead.indexOf('#');
+    const left = (hashIdx < 0 ? useinstead : useinstead.slice(0, hashIdx)).trim();
+    const segs = left.replace(/^@/, '').split(/[/.]/);
+    if (segs.length && segs[0]) {
+      let modFile = null, usedSegs = 0, modName = '';
+      for (let i = segs.length; i >= 1; i--) {
+        const cand = '@' + segs.slice(0, i).join('.');
+        const f = path.join(sdkPath, cand + '.d.ts');
+        if (fs.existsSync(f)) { modFile = f; usedSegs = i; modName = cand; break; }
+      }
+      if (modFile) {
+        const text = fs.readFileSync(modFile, 'utf8');
+        const innerSegs = segs.slice(usedSegs);
+        const member = hashIdx >= 0 ? useinstead.slice(hashIdx + 1).trim().replace(/^event:/, '') : '';
+        const container = innerSegs.length ? innerSegs[0] : '';
+        const parts = [];
+        if (container) {
+          const exp = summarizeContainerExports(text, container);
+          if (exp) parts.push(exp);
+        }
+        if (member) {
+          const mb = extractDeclBlock(text, member) || locateMemberDecl(text, member);
+          if (mb) parts.push(mb.length > 8000 ? mb.slice(0, 8000) + '\n... (已截断)' : mb);
+        }
+        if (parts.length) {
+          result = `\n--- 目标模块声明 (${modName}) ——判断真实导出形态用；成员不存在须改用其它写法或标人工：\n` + parts.join('\n\n');
+        }
+      }
+    }
+  } catch (_) { /* best-effort：解析失败不丢 hit */ }
+  _targetDeclCache.set(cacheKey, result);
+  return result;
+}
+
+// 在 .d.ts 文本里找 `declare namespace NAME {` / `class NAME {` / `interface NAME {` /
+// `enum NAME {` 等，返回从关键字到匹配花括号闭合的源块。
+function extractDeclBlock(text, name) {
+  const re = new RegExp(
+    '(declare\\s+namespace|declare\\s+enum|export\\s+enum|export\\s+interface|interface|class|enum)' +
+    '\\s+' + escapeRe(name) + '\\s*(?:<[^>{}]*>)?\\s*(?:extends[^{]*)?\\{', '');
+  const m = re.exec(text);
+  if (!m) return '';
+  const braceIdx = text.indexOf('{', m.index);
+  if (braceIdx < 0) return text.slice(m.index, m.index + 400);
+  return text.slice(m.index, matchBrace(text, braceIdx) + 1);
+}
+
+// 从 openIdx 的 `{` 起做平衡匹配，返回配对 `}` 的索引；跳过字符串/模板字面量内的花括号。
+function matchBrace(text, openIdx) {
+  let depth = 0, inStr = false, q = null;
+  for (let i = openIdx; i < text.length; i++) {
+    const c = text[i];
+    if (inStr) {
+      if (c === '\\') { i++; continue; }
+      if (c === q) inStr = false;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') { inStr = true; q = c; continue; }
+    if (c === '{') depth++;
+    else if (c === '}') { depth--; if (depth === 0) return i; }
+  }
+  return Math.min(text.length - 1, openIdx + 400);
+}
+
+// 扫描容器块内的顶层 export 名（enum/interface/class/function/const/namespace），返回
+// "容器 导出: A, B, C" 清单——让模型一眼看到「有什么」，从而推断「没什么」（如 Action/Entity 缺席）。
+function summarizeContainerExports(text, container) {
+  const block = extractDeclBlock(text, container);
+  if (!block) return '';
+  const re = /(?:export|declare)\s+(?:declare\s+)?(?:enum|interface|class|function|const|let|namespace)\s+([A-Za-z_$][\w$]*)/g;
+  const names = [];
+  let m;
+  while ((m = re.exec(block)) !== null) { if (m[1] !== container && !names.includes(m[1])) names.push(m[1]); }
+  return names.length ? `${container} 导出: ${names.join(', ')}` : '';
+}
+
+// 定位 member 名在 .d.ts 里的声明行（函数/属性/常量），返回该行到 `;` 的片段。
+// 用于成员非 namespace/class/enum 块（extractDeclBlock 没命中）时的兜底。
+function locateMemberDecl(text, member) {
+  if (!member) return '';
+  const re = new RegExp(
+    '^\\s*(?:export\\s+)?(?:declare\\s+)?(?:[A-Za-z_$][\\w$]*)?\\s*' + escapeRe(member) + '\\s*[:(=]', 'gm');
+  const m = re.exec(text);
+  if (!m) return '';
+  const lineStart = text.lastIndexOf('\n', m.index) + 1;
+  let end = text.indexOf(';', m.index);
+  if (end < 0 || end - lineStart > 600) end = lineStart + 600;
+  return text.slice(lineStart, end + 1).trim();
+}
+
+function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
 // 解析 useinstead。返回 { module, member, hasSlash }
 //   ohos.accessibility#isOpenAccessibilitySync  -> @ohos.accessibility / isOpenAccessibilitySync / false
 //   ohos.app.ability.dataUriUtils/dataUriUtils#getId -> @ohos.app.ability.dataUriUtils / getId / true
@@ -346,6 +458,7 @@ function scanInner(file, ts, sdkPath, ohTsPath, rootName, srcText) {
       memberOffset,
     };
     hit.desc = describeDeprecated(ts, decl, checker, hit);
+    hit.targetDecl = describeTarget(sdkPath, hit.useinstead);
     hits.push(hit);
   }
 
