@@ -47,12 +47,18 @@ const AGENT_TOOLS = [
 /** 对 content 做一处精确替换：仅当 oldText 唯一出现时应用。 */
 function applyOneEdit(content, oldText, newText) {
   if (!oldText) return { ok: false, occurrences: 0, error: 'empty oldText' };
+  // 行尾对齐：源文件常是 CRLF（Windows 工程），模型 oldText/newText 用 LF（JSON \n）。
+  // 逐字节 indexOf 时 \n ≠ \r\n，多行 oldText 会整串 notFound——模型卡死重试到步数用尽。
+  // 把模型串归一到 content 的行尾后再精确匹配，替换块也沿用同种行尾，原文件行尾不变。
+  const le = content.includes('\r\n') ? '\r\n' : '\n';
+  const norm = (s) => (le === '\r\n') ? s.replace(/\r?\n/g, '\r\n') : s;
+  const ot = norm(oldText);
   let occurrences = 0, i = 0;
-  while ((i = content.indexOf(oldText, i)) !== -1) { occurrences++; i += oldText.length; }
+  while ((i = content.indexOf(ot, i)) !== -1) { occurrences++; i += ot.length; }
   if (occurrences === 0) return { ok: false, occurrences: 0, error: 'notFound' };
   if (occurrences > 1) return { ok: false, occurrences, error: 'ambiguous' };
-  const pos = content.indexOf(oldText);
-  return { ok: true, occurrences: 1, offset: pos, content: content.slice(0, pos) + newText + content.slice(pos + oldText.length) };
+  const pos = content.indexOf(ot);
+  return { ok: true, occurrences: 1, offset: pos, content: content.slice(0, pos) + norm(newText) + content.slice(pos + ot.length) };
 }
 
 /**
@@ -186,8 +192,10 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors,
   let consecutiveTimeouts = 0, consecutiveEmpty = 0;
   for (step = 1; step <= MAX_AGENT_STEPS; step++) {
     logConv(cfg, `\n--- step ${step} ---\n`);
-    // 与 AI 的交互进度只写对话日志（logConv/logDelta），终端不打——避免刷屏。
-    // project 级进度（(i/N) + 累计 ok/fail）在 cmdRewriteAi 的逐文件头/完成行打到终端。
+    const tStepStart = Date.now();
+    // 与 AI 的交互进度：对话全文（prompt/delta/transcript）写 per-file 对话日志（logConv/logDelta）；
+    // 每步的「时间 + 动作」摘要行另写主日志 ohos-migrator.log（logAppend cfg.logFile），便于跨文件回溯。
+    // 终端不打——避免刷屏；project 级进度在 cmdRewriteAi 的逐文件头/完成行打到终端。
     let res;
     try {
       res = await streamChatWithTools(cfg, messages, AGENT_TOOLS, () => {});
@@ -195,11 +203,14 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors,
       // 流式超时 / 网络中断：不结束本轮、不丢已做的 content，告诉 AI 超时、让它接着改，
       // 在同一会话里重试。连续达上限才放弃（防 API 挂死无限重试）。step-- 不消耗步数预算。
       consecutiveTimeouts++;
+      const elErr = ((Date.now() - tStepStart) / 1000).toFixed(1);
       if (consecutiveTimeouts > MAX_CONSECUTIVE_TIMEOUTS) {
         logConv(cfg, `[stream error] ${e.message} — giving up after ${consecutiveTimeouts} consecutive\n`);
+        logAppend(cfg.logFile, `[${tsStamp()}] [step ${step}] ${path.basename(file)} a=${attempt} stream-error: ${e.message} — giving up (${elErr}s)\n`);
         break;
       }
       logConv(cfg, `[stream error] ${e.message} — resume (${consecutiveTimeouts}/${MAX_CONSECUTIVE_TIMEOUTS})\n`);
+      logAppend(cfg.logFile, `[${tsStamp()}] [step ${step}] ${path.basename(file)} a=${attempt} stream-error: ${e.message} — resume ${consecutiveTimeouts}/${MAX_CONSECUTIVE_TIMEOUTS} (${elErr}s)\n`);
       messages.push({ role: 'user', content: '（上一轮流式调用超时/中断，你的回复未完整返回。请基于当前文件内容接着完成迁移，不要从头重写。）' });
       step--; // 抵消 for 的 step++，纯基础设施超时不消耗 agent 步数预算
       continue;
@@ -209,6 +220,10 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors,
     if (res.toolCalls.length) asst.tool_calls = res.toolCalls;
     messages.push(asst);
     logConv(cfg, `[assistant] content=${(res.content || '').length}chars tools=${res.toolCalls.map((t) => t.function.name).join(',') || 'none'} finish=${res.finishReason}\n`);
+    {
+      const elStep = ((Date.now() - tStepStart) / 1000).toFixed(1);
+      logAppend(cfg.logFile, `[${tsStamp()}] [step ${step}] ${path.basename(file)} a=${attempt} assistant: content=${(res.content || '').length}chars tools=[${res.toolCalls.map((t) => t.function.name).join(',') || '-'}] finish=${res.finishReason} ${elStep}s\n`);
+    }
     if (!res.toolCalls.length) {
       consecutiveEmpty++;
       if (consecutiveEmpty > MAX_CONSECUTIVE_EMPTY) {
@@ -236,7 +251,12 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors,
         else result = `error: ${r.error} (occurrences=${r.occurrences})`;
       } else if (name === 'replace_file') {
         if (typeof args.content !== 'string') result = 'error: content missing';
-        else { content = args.content; result = 'ok: file replaced'; }
+        else {
+          // 同 applyOneEdit：模型 content 用 LF，源文件是 CRLF 时归一以保留原行尾。
+          const le = content.includes('\r\n') ? '\r\n' : '\n';
+          content = (le === '\r\n') ? args.content.replace(/\r?\n/g, '\r\n') : args.content;
+          result = 'ok: file replaced';
+        }
       } else if (name === 'list_deprecated') {
         fs.writeFileSync(file, content, 'utf8');
         const s = scanFile(file, ts2, sdkPath, ohTsPath);
@@ -264,6 +284,7 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors,
       }
       const logTail = String(result).slice(0, 8000);
       logConv(cfg, `[tool] ${name} ${tc.function.arguments.slice(0, 200)} -> ${logTail}\n`);
+      logAppend(cfg.logFile, `[${tsStamp()}] [step ${step}]   tool ${name} args=${tc.function.arguments.slice(0, 200)} -> ${String(result).replace(/\n/g, ' ').slice(0, 120)}\n`);
       messages.push({ role: 'tool', tool_call_id: tc.id, content: String(result) });
       if (shouldBreak) break;
     }
@@ -271,6 +292,7 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors,
   }
   const stepsRun = Math.min(step, MAX_AGENT_STEPS);
   logConv(cfg, `[agent] ended after ${stepsRun} steps, doneCalled=${doneCalled}\n`);
+  logAppend(cfg.logFile, `[${tsStamp()}] [agent] ${path.basename(file)} a=${attempt} ended: steps=${stepsRun} done=${doneCalled}\n`);
   fs.writeFileSync(file, content, 'utf8'); // 落盘最终内容供校验
   // 步数用尽 / 无 tool_calls / 流式中断而未 done：跑一次最终门禁取当前状态供外层判断。
   // 若 done 曾被拒（finalGate 已是失败态），此处重跑取最新内容对应的状态。
