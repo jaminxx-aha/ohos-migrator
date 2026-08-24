@@ -37,7 +37,7 @@ function installSignalRestore() {
 
 // agent 可用的工具（OpenAI function-calling schema）。
 const AGENT_TOOLS = [
-  { type: 'function', function: { name: 'read_file', description: '读取目标文件的当前内容（含已做的编辑）。', parameters: { type: 'object', properties: {}, required: [] } } },
+  { type: 'function', function: { name: 'read_file', description: '读取目标文件的当前内容（含已做的编辑）。输出带行号前缀 L<n>: ，默认只返前 200 行（文件大时省后续，需看后段传 startLine/endLine）。注意：行号前缀不是文件真实内容，edit_file 的 oldText/newText 必须用去掉 L<n>: 前缀的纯文件文本。', parameters: { type: 'object', properties: { startLine: { type: 'integer', description: '起始行号（1-based，含）。不传则从 1 起。' }, endLine: { type: 'integer', description: '结束行号（1-based，含）。不传则默认到 startLine+199 行或文件末尾。' } }, required: [] } } },
   { type: 'function', function: { name: 'edit_file', description: '对目标文件做一处精确替换。oldText 必须是当前文件内容里唯一出现的连续子串；不唯一或不存在会失败。改多处就调用多次。', parameters: { type: 'object', properties: { oldText: { type: 'string', description: '要被替换的精确子串（须唯一出现）' }, newText: { type: 'string', description: '替换后的文本' }, reason: { type: 'string', description: '简短原因' } }, required: ['oldText', 'newText'] } } },
   { type: 'function', function: { name: 'replace_file', description: '整文件替换（仅当 edit_file 难以锚定时使用）。传入完整新文件内容。', parameters: { type: 'object', properties: { content: { type: 'string', description: '完整的新文件内容' } }, required: ['content'] } } },
   { type: 'function', function: { name: 'list_deprecated', description: '重新扫描当前文件内容，返回仍未处理的废弃接口（带 useinstead）。用于自检进度。', parameters: { type: 'object', properties: {}, required: [] } } },
@@ -52,13 +52,45 @@ function applyOneEdit(content, oldText, newText) {
   // 把模型串归一到 content 的行尾后再精确匹配，替换块也沿用同种行尾，原文件行尾不变。
   const le = content.includes('\r\n') ? '\r\n' : '\n';
   const norm = (s) => (le === '\r\n') ? s.replace(/\r?\n/g, '\r\n') : s;
-  const ot = norm(oldText);
-  let occurrences = 0, i = 0;
-  while ((i = content.indexOf(ot, i)) !== -1) { occurrences++; i += ot.length; }
-  if (occurrences === 0) return { ok: false, occurrences: 0, error: 'notFound' };
-  if (occurrences > 1) return { ok: false, occurrences, error: 'ambiguous' };
-  const pos = content.indexOf(ot);
-  return { ok: true, occurrences: 1, offset: pos, content: content.slice(0, pos) + norm(newText) + content.slice(pos + ot.length) };
+  // 模型若误把 read_file 的行号前缀 L<n>: 带进 oldText/newText，剥离后重试——
+  // 避免整段 notFound 死循环（与 CRLF 归一同属「让精确匹配对模型小错鲁棒」）。
+  // 只在精确匹配 notFound 时才试剥前缀的变体；正常编辑（无前缀）剥前缀是 no-op，行为不变。
+  const stripLinePrefix = (s) => s.split('\n').map((l) => l.replace(/^\s*L\d+:\s?/, '')).join('\n');
+  const variants = [oldText, stripLinePrefix(oldText)];
+  for (let k = 0; k < variants.length; k++) {
+    const ot = norm(variants[k]);
+    let occurrences = 0, i = 0;
+    while ((i = content.indexOf(ot, i)) !== -1) { occurrences++; i += ot.length; }
+    if (occurrences === 0) continue;
+    if (occurrences > 1) return { ok: false, occurrences, error: 'ambiguous' };
+    const pos = content.indexOf(ot);
+    const nt = norm(stripLinePrefix(newText));
+    return { ok: true, occurrences: 1, offset: pos, content: content.slice(0, pos) + nt + content.slice(pos + ot.length) };
+  }
+  return { ok: false, occurrences: 0, error: 'notFound' };
+}
+
+// read_file 默认最多回显的行数——避免整份大文件灌爆模型上下文（wantConstant 700 行全量重读
+// 曾令 glm-5.2 推理 329s）。需看后续行用 startLine/endLine 翻页。
+const READ_CAP_LINES = 200;
+
+/**
+ * 把 content 按行带行号返回（前缀 L<n>: ），默认截到 READ_CAP_LINES 行并附翻页提示。
+ * startLine/endLine 给定时只返该区间。行尾 \r 去除以利显示；edit_file 匹配以归一后的为准。
+ */
+function readWithLineNumbers(content, startLine, endLine) {
+  const lines = content.replace(/\r\n/g, '\n').split('\n');
+  const total = lines.length;
+  const s = (Number.isInteger(startLine) && startLine > 0) ? Math.min(startLine, total) : 1;
+  let e = (Number.isInteger(endLine) && endLine >= s) ? Math.min(endLine, total) : Math.min(total, s + READ_CAP_LINES - 1);
+  if (e < s) e = s;
+  const seg = [];
+  for (let n = s; n <= e; n++) seg.push(`L${n}: ${lines[n - 1]}`);
+  let out = seg.join('\n');
+  if (s > 1 || e < total) {
+    out += `\n... (共 ${total} 行，已显示 L${s}–L${e}；要看后续/前段请用 read_file(startLine=X, endLine=Y))`;
+  }
+  return out;
 }
 
 /**
@@ -194,7 +226,9 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors,
     'useinstead 格式 ohos.<模块>[/<命名空间>]#<成员>，其中 # 表示该成员是类/接口的**实例成员**（非静态）；' +
     '调用实例成员需先有该类的实例——ohos kit 常导出全大写单例 const 承载 builder 链（如 UiTest 的 ON.text(...)，' +
     '不是 On.text(...) 在类上静态调，否则编译报 typeof On 无该属性）。改 import 时把这个全大写单例一并导入。' +
-    '若不确定调用形态，按 useinstead 的类名找同 kit 导出的全大写同名 const。';
+    '若不确定调用形态，按 useinstead 的类名找同 kit 导出的全大写同名 const。' +
+    '当前文件完整内容已在下面 user 消息里给出——未做编辑前不要调 read_file 重复读（整份重灌会拖慢推理、撑爆上下文）。' +
+    '只有做过编辑、想看最新状态时才用 read_file；它带行号前缀 L<n>: 便于定位，但 edit_file 的 oldText/newText 必须去掉该前缀、用纯文件文本。';
   let user = `目标文件: ${file}\n\n废弃接口清单（每条含 SDK 声明的错误信息/接口声明/接口描述三段式上下文，须全部处理）：\n${list}\n\n当前文件内容：\n${content}`;
   if (retryErrors) user += `\n\n## 上一轮仍有问题：\n${retryErrors}\n请修复上述问题。`;
   const messages = [{ role: 'system', content: system }, { role: 'user', content: user }];
@@ -260,7 +294,7 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors,
       try { args = JSON.parse(tc.function.arguments || '{}'); } catch (_) {}
       let result;
       if (name === 'read_file') {
-        result = content;
+        result = readWithLineNumbers(content, args.startLine, args.endLine);
       } else if (name === 'edit_file') {
         const r = applyOneEdit(content, args.oldText, args.newText);
         if (r.ok) { content = r.content; result = `ok: replaced ${args.oldText.length} chars at offset ${r.offset}`; }
