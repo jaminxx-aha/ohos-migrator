@@ -78,6 +78,9 @@ async function streamChatWithTools(cfg, messages, tools, onDelta) {
   const toolAcc = []; // by index → {id,name,arguments}
   let content = '';
   let finishReason = null;
+  // glm-5.2 等推理模型先吐 reasoning_content（思考流）再吐 content/tool_calls。
+  // 用两个 flag 给对话日志加分段标记：思考期写 [reasoning]，进入正式回复写 [response]。
+  let reasoningStarted = false, responseStarted = false;
   try {
     armIdle();
     const resp = await fetch(`${cfg.baseURL}/chat/completions`, {
@@ -116,8 +119,21 @@ async function streamChatWithTools(cfg, messages, tools, onDelta) {
         if (!ch) continue;
         const d = ch.delta;
         if (d) {
-          if (d.content) { content += d.content; onDelta(d.content); logDelta(cfg, d.content); armIdle(); }
+          // 思考流写进 per-file 对话日志（[reasoning] 段）。否则思考期 conv 文件一字不增，
+          // 肉眼像「卡死」（如 wantConstant.ets step 14 静默 5.5min），且看不到模型在想什么。
+          // reasoning 不进 messages、不累进 content——只用于日志观察。
+          const reasoning = d.reasoning_content || d.reasoning;
+          if (reasoning) {
+            if (!reasoningStarted) { logAppend(cfg.convFile, '\n[reasoning] '); reasoningStarted = true; }
+            logDelta(cfg, reasoning);
+            armIdle();
+          }
+          if (d.content) {
+            if (reasoningStarted && !responseStarted) { logAppend(cfg.convFile, '\n[response] '); responseStarted = true; }
+            content += d.content; onDelta(d.content); logDelta(cfg, d.content); armIdle();
+          }
           if (Array.isArray(d.tool_calls)) {
+            if (reasoningStarted && !responseStarted) { logAppend(cfg.convFile, '\n[response] '); responseStarted = true; }
             for (const tc of d.tool_calls) {
               const i = (tc.index == null) ? 0 : tc.index;
               const slot = toolAcc[i] || (toolAcc[i] = { id: '', name: '', arguments: '' });
