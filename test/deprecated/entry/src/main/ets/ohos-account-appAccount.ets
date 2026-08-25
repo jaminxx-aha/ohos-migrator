@@ -1,8 +1,8 @@
 import appAccount from '@ohos.account.appAccount';
 
-// Authenticator options bag passed to the deprecated addAccountImplicitly /
-// authenticate APIs (whose SDK param is typed as an indexed signature). ArkTS
-// forbids indexed signatures in source, so declare the concrete shape here.
+// AuthCallback options bag passed to the auth / createAccountImplicitly APIs
+// (whose SDK param is typed as Record<string, Object> / CreateAccountImplicitlyOptions).
+// ArkTS forbids indexed signatures in source, so declare the concrete shape here.
 interface AuthOptions {
   scope: string;
 }
@@ -14,7 +14,7 @@ const AUTH_TYPE = 'OAuth2';
 const CREDENTIAL_TYPE = 'password';
 const SESSION_ID = 'session-1024';
 
-function createAuthenticatorCallback(): appAccount.AuthenticatorCallback {
+function createAuthenticatorCallback(): appAccount.AuthCallback {
   return {
     onResult: (code, result) => {
       console.info(`auth result code=${code}`, JSON.stringify(result));
@@ -29,18 +29,18 @@ function createAuthenticatorCallback(): appAccount.AuthenticatorCallback {
 async function provisionAppAccount(): Promise<void> {
   const manager = appAccount.createAppAccountManager();
   try {
-    await manager.addAccount(ACCOUNT_NAME);
-    await manager.setAccountExtraInfo(ACCOUNT_NAME, JSON.stringify({ plan: 'premium' }));
-    await manager.setAccountCredential(ACCOUNT_NAME, CREDENTIAL_TYPE, 'p@ssw0rd-hash');
-    await manager.setAppAccountSyncEnable(ACCOUNT_NAME, true);
-    await manager.setAssociatedData(ACCOUNT_NAME, 'email', 'alice@example.com');
-    await manager.enableAppAccess(ACCOUNT_NAME, BUNDLE);
-    await manager.disableAppAccess(ACCOUNT_NAME, BUNDLE);
+    await manager.createAccount(ACCOUNT_NAME);
+    await manager.setCustomData(ACCOUNT_NAME, 'extraInfo', JSON.stringify({ plan: 'premium' }));
+    await manager.setCredential(ACCOUNT_NAME, CREDENTIAL_TYPE, 'p@ssw0rd-hash');
+    await manager.setDataSyncEnabled(ACCOUNT_NAME, true);
+    await manager.setCustomData(ACCOUNT_NAME, 'email', 'alice@example.com');
+    await manager.setAppAccess(ACCOUNT_NAME, BUNDLE, true);
+    await manager.setAppAccess(ACCOUNT_NAME, BUNDLE, false);
   } catch (e) {
     console.error('provisionAppAccount failed', e);
   } finally {
     try {
-      await manager.deleteAccount(ACCOUNT_NAME);
+      await manager.removeAccount(ACCOUNT_NAME);
     } catch (e) {
       console.error('provisionAppAccount cleanup failed', e);
     }
@@ -51,17 +51,17 @@ async function provisionAppAccount(): Promise<void> {
 async function queryAppAccountInfo(): Promise<void> {
   const manager = appAccount.createAppAccountManager();
   try {
-    const owned = await manager.getAllAccounts(OWNER);
+    const owned = await manager.getAccountsByOwner(OWNER);
     console.info(`accounts owned by ${OWNER}: ${owned.length}`);
-    const accessible = await manager.getAllAccessibleAccounts();
+    const accessible = await manager.getAllAccounts();
     console.info(`accessible accounts: ${accessible.length}`);
-    const extra = await manager.getAccountExtraInfo(ACCOUNT_NAME);
+    const extra = await manager.getCustomData(ACCOUNT_NAME, 'extraInfo');
     console.info(`extra info: ${extra}`);
-    const credential = await manager.getAccountCredential(ACCOUNT_NAME, CREDENTIAL_TYPE);
+    const credential = await manager.getCredential(ACCOUNT_NAME, CREDENTIAL_TYPE);
     console.info(`credential: ${credential}`);
-    const email = await manager.getAssociatedData(ACCOUNT_NAME, 'email');
+    const email = await manager.getCustomData(ACCOUNT_NAME, 'email');
     console.info(`email: ${email}`);
-    const syncOn = await manager.checkAppAccountSyncEnable(ACCOUNT_NAME);
+    const syncOn = await manager.checkDataSyncEnabled(ACCOUNT_NAME);
     console.info(`sync enabled: ${syncOn}`);
   } catch (e) {
     console.error('queryAppAccountInfo failed', e);
@@ -72,19 +72,19 @@ async function queryAppAccountInfo(): Promise<void> {
 async function manageOAuthTokens(): Promise<void> {
   const manager = appAccount.createAppAccountManager();
   try {
-    await manager.setOAuthToken(ACCOUNT_NAME, AUTH_TYPE, 'token-abc-123');
-    const token = await manager.getOAuthToken(ACCOUNT_NAME, OWNER, AUTH_TYPE);
+    await manager.setAuthToken(ACCOUNT_NAME, AUTH_TYPE, 'token-abc-123');
+    const token = await manager.getAuthToken(ACCOUNT_NAME, OWNER, AUTH_TYPE);
     console.info(`oauth token: ${token}`);
-    await manager.setOAuthTokenVisibility(ACCOUNT_NAME, AUTH_TYPE, BUNDLE, true);
-    const visible = await manager.checkOAuthTokenVisibility(ACCOUNT_NAME, AUTH_TYPE, BUNDLE);
+    await manager.setAuthTokenVisibility(ACCOUNT_NAME, AUTH_TYPE, BUNDLE, true);
+    const visible = await manager.checkAuthTokenVisibility(ACCOUNT_NAME, AUTH_TYPE, BUNDLE);
     console.info(`token visible to ${BUNDLE}: ${visible}`);
-    const tokens = await manager.getAllOAuthTokens(ACCOUNT_NAME, OWNER);
-    tokens.forEach((info: appAccount.OAuthTokenInfo) => {
+    const tokens = await manager.getAllAuthTokens(ACCOUNT_NAME, OWNER);
+    tokens.forEach((info: appAccount.AuthTokenInfo) => {
       console.info(`token authType=${info.authType} value=${info.token}`);
     });
-    const list = await manager.getOAuthList(ACCOUNT_NAME, AUTH_TYPE);
+    const list = await manager.getAuthList(ACCOUNT_NAME, AUTH_TYPE);
     console.info(`oauth list size: ${list.length}`);
-    await manager.deleteOAuthToken(ACCOUNT_NAME, OWNER, AUTH_TYPE, 'token-abc-123');
+    await manager.deleteAuthToken(ACCOUNT_NAME, OWNER, AUTH_TYPE, 'token-abc-123');
   } catch (e) {
     console.error('manageOAuthTokens failed', e);
   }
@@ -97,14 +97,14 @@ async function driveAuthenticator(): Promise<void> {
   const callback = createAuthenticatorCallback();
   const options: AuthOptions = { scope: 'profile' };
   try {
-    authenticator.addAccountImplicitly(AUTH_TYPE, BUNDLE, options, callback);
-    authenticator.authenticate(ACCOUNT_NAME, AUTH_TYPE, BUNDLE, options, callback);
-    manager.addAccountImplicitly(OWNER, AUTH_TYPE, options, callback);
-    manager.authenticate(ACCOUNT_NAME, OWNER, AUTH_TYPE, options, callback);
-    const info = await manager.getAuthenticatorInfo(OWNER);
+    authenticator.createAccountImplicitly({ authType: AUTH_TYPE }, callback);
+    authenticator.auth(ACCOUNT_NAME, AUTH_TYPE, options, callback);
+    manager.createAccountImplicitly(OWNER, { authType: AUTH_TYPE }, callback);
+    manager.auth(ACCOUNT_NAME, OWNER, AUTH_TYPE, options, callback);
+    const info = await manager.queryAuthenticatorInfo(OWNER);
     console.info(`authenticator owner: ${info.owner}`);
-    const authCallback = await manager.getAuthenticatorCallback(SESSION_ID);
-    authCallback.onResult(appAccount.ResultCode.SUCCESS, { name: ACCOUNT_NAME });
+    const authCallback = await manager.getAuthCallback(SESSION_ID);
+    authCallback.onResult(appAccount.ResultCode.SUCCESS);
     authCallback.onRequestRedirected({});
   } catch (e) {
     console.error('driveAuthenticator failed', e);
@@ -113,14 +113,14 @@ async function driveAuthenticator(): Promise<void> {
   const onChange: (accounts: appAccount.AppAccountInfo[]) => void = (accounts) => {
     console.info(`change event: ${accounts.length} accounts`);
   };
-  manager.on('change', [OWNER], onChange);
-  manager.off('change', onChange);
+  manager.on('accountChange', [OWNER], onChange);
+  manager.off('accountChange', onChange);
 }
 
 // Scenario 5: enumerate legacy constants and the full ResultCode enum
 function logLegacyConstants(): void {
-  const implicitAction = appAccount.Constants.ACTION_ADD_ACCOUNT_IMPLICITLY;
-  const authAction = appAccount.Constants.ACTION_AUTHENTICATE;
+  const implicitAction = appAccount.Constants.ACTION_CREATE_ACCOUNT_IMPLICITLY;
+  const authAction = appAccount.Constants.ACTION_AUTH;
   console.info(`constants: ${implicitAction}, ${authAction}`);
   const codes: number[] = [
     appAccount.ResultCode.SUCCESS,
