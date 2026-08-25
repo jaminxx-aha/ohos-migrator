@@ -329,16 +329,25 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors,
       } else if (name === 'done') {
         fs.writeFileSync(file, content, 'utf8'); // 编译门禁读盘
         if (hvCtx) {
-          // 把编译门禁挪进 agent 循环：done 时当场跑 hvigor。
-          // 干净 → 接受 done，这一轮真正结束；有错 → 不接受 done，把错误喂回 agent，
-          // 让它在同一轮里继续 edit_file 修，修完再 done，直到编译通过。
-          // 否则 agent 唯一的自检（list_deprecated）只看废弃是否清零，看不到编译错误，
-          // 会一次 replace_file + done 就停，编译问题要等外层重开 attempt 才暴露。
-          const gate = compileGate(file, cfg, hvCtx, attempt);
-          finalGate = gate;
-          if (gate.ok) { doneCalled = true; result = 'ok: 废弃清零 + 编译干净，完成'; shouldBreak = true; }
-          else {
-            result = `尚未通过编译门禁：${gate.newErrCount} 个新增编译错误。请用 edit_file 逐个修复（不要重写整个文件），修完再调 done：\n${gate.error}`;
+          // done 接受条件：废弃清零 AND 编译干净，缺一不可。
+          // 先扫废弃（比 hvigor 快）：仍有 useinstead 命中 → 不接受 done，把清单喂回
+          // agent 让它在同一轮继续替换。否则 agent 可能编译过了就 done，遗留废弃要等
+          // 外层 post-audit 才发现、整个 attempt 白跑重开下一轮（如 appAccount attempt1
+          // 编译干净但 getAllAccounts/on/off 3 处未换，done 却谎报「废弃清零」）。
+          const sDone = scanFile(file, ts2, sdkPath, ohTsPath);
+          const remain = sDone.hits.filter((h) => h.useinstead);
+          if (remain.length > 0) {
+            result = `废弃未清零：仍有 ${remain.length} 处未替换，请先用 edit_file 替换再 done：\n${remain.map((h) => '行' + h.line + ' ' + h.callee + ' -> ' + h.useinstead).join('\n')}`;
+          } else {
+            // 把编译门禁挪进 agent 循环：done 时当场跑 hvigor。
+            // 干净 → 接受 done，这一轮真正结束；有错 → 不接受 done，把错误喂回 agent，
+            // 让它在同一轮里继续 edit_file 修，修完再 done，直到编译通过。
+            const gate = compileGate(file, cfg, hvCtx, attempt);
+            finalGate = gate;
+            if (gate.ok) { doneCalled = true; result = 'ok: 废弃清零 + 编译干净，完成'; shouldBreak = true; }
+            else {
+              result = `尚未通过编译门禁：${gate.newErrCount} 个新增编译错误。请用 edit_file 逐个修复（不要重写整个文件），修完再调 done：\n${gate.error}`;
+            }
           }
         } else {
           doneCalled = true; result = 'ok: completing'; shouldBreak = true;
