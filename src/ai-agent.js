@@ -249,6 +249,11 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors,
   logHeader(cfg, system, user, attempt);
 
   let step = 0, doneCalled = false, finalGate = null;
+  // 废弃遗漏重试计数：done 时编译已干净但废弃仍有残留 → 喂回让 agent 再修一次；
+  // 仅给 1 次重试机会，再清不掉就接受 done（gaveUpRemain），多为扫描器按方法名误报的
+  // 参数型/重载型迁移（如 manager.on('change')→('accountChange') 同名方法只换事件名，
+  // 扫描器仍 flag on，agent 无从清除）。
+  let depRemainRetries = 0, gaveUpRemain = false;
   // 失败不从头来：流式超时 / 无工具调用属可恢复，在同一会话里告诉 AI 并让其继续，
   // 保留已做的 content 与对话历史。连续上限防死循环；达上限才真正放弃本轮。
   const MAX_CONSECUTIVE_TIMEOUTS = 3;
@@ -329,24 +334,32 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors,
       } else if (name === 'done') {
         fs.writeFileSync(file, content, 'utf8'); // 编译门禁读盘
         if (hvCtx) {
-          // done 接受条件：废弃清零 AND 编译干净，缺一不可。
-          // 先扫废弃（比 hvigor 快）：仍有 useinstead 命中 → 不接受 done，把清单喂回
-          // agent 让它在同一轮继续替换。否则 agent 可能编译过了就 done，遗留废弃要等
-          // 外层 post-audit 才发现、整个 attempt 白跑重开下一轮（如 appAccount attempt1
-          // 编译干净但 getAllAccounts/on/off 3 处未换，done 却谎报「废弃清零」）。
-          const sDone = scanFile(file, ts2, sdkPath, ohTsPath);
-          const remain = sDone.hits.filter((h) => h.useinstead);
-          if (remain.length > 0) {
-            result = `废弃未清零：仍有 ${remain.length} 处未替换，请先用 edit_file 替换再 done：\n${remain.map((h) => '行' + h.line + ' ' + h.callee + ' -> ' + h.useinstead).join('\n')}`;
+          // 完成条件（按用户约定）：编译干净 → 再查废弃遗漏 → 有遗漏给 1 次重试 →
+          // 重试一次仍清不掉则接受 done、不再处理。先跑编译门禁：不干净 → 喂回错误，
+          // 同一轮继续修。否则 agent 可能编译过了就 done，遗留废弃要等外层 post-audit
+          // 才发现、整个 attempt 白跑重开下一轮（如 appAccount attempt1 编译干净但
+          // getAllAccounts/on/off 3 处未换，done 却谎报「废弃清零」）。
+          const gate = compileGate(file, cfg, hvCtx, attempt);
+          finalGate = gate;
+          if (!gate.ok) {
+            result = `尚未通过编译门禁：${gate.newErrCount} 个新增编译错误。请用 edit_file 逐个修复（不要重写整个文件），修完再调 done：\n${gate.error}`;
           } else {
-            // 把编译门禁挪进 agent 循环：done 时当场跑 hvigor。
-            // 干净 → 接受 done，这一轮真正结束；有错 → 不接受 done，把错误喂回 agent，
-            // 让它在同一轮里继续 edit_file 修，修完再 done，直到编译通过。
-            const gate = compileGate(file, cfg, hvCtx, attempt);
-            finalGate = gate;
-            if (gate.ok) { doneCalled = true; result = 'ok: 废弃清零 + 编译干净，完成'; shouldBreak = true; }
-            else {
-              result = `尚未通过编译门禁：${gate.newErrCount} 个新增编译错误。请用 edit_file 逐个修复（不要重写整个文件），修完再调 done：\n${gate.error}`;
+            // 编译干净：再查废弃是否有遗漏。
+            const sDone = scanFile(file, ts2, sdkPath, ohTsPath);
+            const remain = sDone.hits.filter((h) => h.useinstead);
+            if (remain.length === 0) {
+              doneCalled = true; result = 'ok: 废弃清零 + 编译干净，完成'; shouldBreak = true;
+            } else if (depRemainRetries < 1) {
+              // 第一次发现遗漏：喂回清单，让 agent 再尝试修一次。
+              depRemainRetries++;
+              result = `编译已干净，但废弃未清零：仍有 ${remain.length} 处未替换，请再用 edit_file 替换（清零前的最后一次尝试）：\n${remain.map((h) => '行' + h.line + ' ' + h.callee + ' -> ' + h.useinstead).join('\n')}`;
+            } else {
+              // 已重试一次仍清不掉：接受 done、不再处理（多为扫描器按方法名误报的
+              // 参数型/重载型迁移，如同名方法改事件名，扫描器仍 flag、agent 无从清除）。
+              gaveUpRemain = true;
+              doneCalled = true;
+              result = `ok: 编译干净；余 ${remain.length} 处废弃经一次重试仍无法消除（疑似参数型/重载型误报），停止处理：\n${remain.map((h) => '行' + h.line + ' ' + h.callee).join('\n')}`;
+              shouldBreak = true;
             }
           }
         } else {
@@ -372,7 +385,7 @@ async function runAgent(file, ts2, sdkPath, ohTsPath, cfg, attempt, retryErrors,
   if (!doneCalled && hvCtx) {
     finalGate = compileGate(file, cfg, hvCtx, attempt);
   }
-  return { content, steps: stepsRun, changed: content !== origContent, doneCalled, gate: finalGate };
+  return { content, steps: stepsRun, changed: content !== origContent, doneCalled, gate: finalGate, gaveUpRemain };
 }
 
 /**
@@ -430,6 +443,14 @@ async function rewriteFileWithAi(file, ts2, sdkPath, ohTsPath, cfg, hvCtx) {
     const scan2 = scanFile(file, ts2, sdkPath, ohTsPath);
     const remain = scan2.hits.filter((h) => h.useinstead);
     if (remain.length > 0) {
+      // agent 内已按「一次重试仍清不掉即接受」的规则给了 done（gaveUpRemain）：
+      // 多为扫描器按方法名误报的参数型/重载型迁移（如 manager.on('change')→
+      // ('accountChange') 同名方法只换事件名，扫描器仍 flag on、agent 无从清除）。
+      // 此时编译已干净、迁移已尽力，接受当前产出、不再回滚重做。
+      if (r.doneCalled && r.gaveUpRemain) {
+        logAppend(cfg.logFile, `[${tsStamp()}] [${file}] accepted: compile clean, ${remain.length} unfixable deprecated remain (scanner-flagged arg/overload false positives) — stop per one-retry rule\n`);
+        return { ok: true, attempts: attempt, changed: true };
+      }
       lastError = remain.map((h) => `行${h.line} ${h.callee} -> ${h.useinstead} 仍未替换`).join('\n');
       logAppend(cfg.logFile, `[${file}] attempt ${attempt}: ${remain.length} still remain\n${lastError}\n`);
       lastFailKind = 'remain';   // 废弃未清零：下一轮回滚原文重做
